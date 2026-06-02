@@ -122,6 +122,32 @@ func TestIntegrationBaseURLNormalizationAndValidation(t *testing.T) {
 	}
 }
 
+func TestNoobBoardEnvOverridesAndLegacyAliases(t *testing.T) {
+	t.Setenv("HSD_PORT", "8799")
+	t.Setenv("NOOBBOARD_PORT", "8800")
+	t.Setenv("HSD_INTEGRATION_MODE", "fixture")
+	t.Setenv("NOOBBOARD_INTEGRATION_MODE", "mixed")
+
+	cfg := Defaults()
+	applyEnv(&cfg)
+	if cfg.Server.Port != 8800 {
+		t.Fatalf("NOOBBOARD_PORT should override legacy alias, got %d", cfg.Server.Port)
+	}
+	if cfg.Integrations.Mode != "mixed" {
+		t.Fatalf("NOOBBOARD_INTEGRATION_MODE should override legacy alias, got %q", cfg.Integrations.Mode)
+	}
+}
+
+func TestLegacyEnvAliasStillWorks(t *testing.T) {
+	t.Setenv("HSD_COMPACT_PORT", "8899")
+
+	cfg := Defaults()
+	applyEnv(&cfg)
+	if cfg.Server.CompactPort != 8899 {
+		t.Fatalf("legacy HSD_COMPACT_PORT alias was not applied, got %d", cfg.Server.CompactPort)
+	}
+}
+
 func TestConfigValidationRequiresSSHDetailsWhenFallbackEnabled(t *testing.T) {
 	cfg := Defaults()
 	cfg.Integrations.UnraidSSHFallback = true

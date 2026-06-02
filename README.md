@@ -1,6 +1,6 @@
-# Server Status
+# NoobBoard
 
-Server Status is a local-first Go web app for monitoring an Unraid server, Docker apps, UniFi network state, and basic connectivity from a compact phone-friendly dashboard or a detailed admin panel.
+NoobBoard is a local-first Go web app for monitoring an Unraid server, Docker apps, UniFi network state, and basic connectivity from a compact phone-friendly dashboard or a detailed admin panel.
 
 It is designed for a LAN or private reverse-proxy deployment. Live collectors are used when credentials are configured; fixture data is only used when explicitly selected for development or visual QA.
 
@@ -26,8 +26,8 @@ Prerequisites:
 
 ```powershell
 & 'C:\Program Files\Go\bin\go.exe' test ./...
-& 'C:\Program Files\Go\bin\go.exe' build -o dist\server-status.exe .\cmd\dashboard
-.\dist\server-status.exe serve
+& 'C:\Program Files\Go\bin\go.exe' build -o dist\noobboard.exe .\cmd\dashboard
+.\dist\noobboard.exe serve
 ```
 
 Default URLs:
@@ -49,9 +49,9 @@ Change these before any real LAN or reverse-proxy use.
 Live mode is the default. Keep credentials in environment variables, a local config file, or local key files ignored by git.
 
 ```powershell
-$env:HSD_INTEGRATION_MODE = 'live'
-$env:HSD_PORT = '8787'
-$env:HSD_COMPACT_PORT = '8788'
+$env:NOOBBOARD_INTEGRATION_MODE = 'live'
+$env:NOOBBOARD_PORT = '8787'
+$env:NOOBBOARD_COMPACT_PORT = '8788'
 
 $env:UNRAID_BASE_URL = 'http://tower.local'
 $env:UNRAID_API_KEY_FILE = 'C:\path\to\unraid.key'
@@ -60,11 +60,13 @@ $env:UNIFI_BASE_URL = 'https://192.168.1.1'
 $env:UNIFI_API_KEY_FILE = 'C:\path\to\unifi.key'
 $env:UNIFI_SITE_ID = 'default'
 
-$env:HSD_LLM_PROVIDER = 'openai' # or 'anthropic'
+$env:NOOBBOARD_LLM_PROVIDER = 'openai' # or 'anthropic'
 $env:OPENAI_API_KEY = 'replace_me' # or ANTHROPIC_API_KEY
 
-.\dist\server-status.exe serve
+.\dist\noobboard.exe serve
 ```
+
+Legacy `HSD_*` environment variables are still accepted as fallback aliases, but new configuration should use `NOOBBOARD_*`.
 
 Bare local IPs are accepted for `UNRAID_BASE_URL` and `UNIFI_BASE_URL`. Unraid values normalize to `http://...`; UniFi values normalize to `https://...`.
 
@@ -86,9 +88,9 @@ The app prefers SSH only when SSH sees more containers than GraphQL, or when Gra
 Fixture mode is for deterministic demos and tests. It must be selected explicitly.
 
 ```powershell
-$env:HSD_INTEGRATION_MODE = 'fixture'
-$env:HSD_FIXTURE_SCENARIO = 'single_container_exited'
-.\dist\server-status.exe run-once
+$env:NOOBBOARD_INTEGRATION_MODE = 'fixture'
+$env:NOOBBOARD_FIXTURE_SCENARIO = 'single_container_exited'
+.\dist\noobboard.exe run-once
 ```
 
 Fixtures live under `fixtures/incidents`.
@@ -108,20 +110,20 @@ The check starts an isolated fixture-backed dashboard, signs in with the develop
 Build first, then install from an elevated PowerShell prompt:
 
 ```powershell
-.\dist\server-status.exe install-service
-.\dist\server-status.exe start-service
+.\dist\noobboard.exe install-service
+.\dist\noobboard.exe start-service
 ```
 
 Default Windows paths:
 
-- Config: `C:\ProgramData\ServerStatus\config.yaml`
-- Database: `C:\ProgramData\ServerStatus\data\dashboard.db.json`
-- Logs: `C:\ProgramData\ServerStatus\logs\`
+- Config: `C:\ProgramData\NoobBoard\config.yaml`
+- Database: `C:\ProgramData\NoobBoard\data\dashboard.db.json`
+- Logs: `C:\ProgramData\NoobBoard\logs\`
 
 Allow LAN access on a private network only:
 
 ```powershell
-New-NetFirewallRule -DisplayName "Server Status" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8787,8788 -Profile Private
+New-NetFirewallRule -DisplayName "NoobBoard" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8787,8788 -Profile Private
 ```
 
 ## Security Notes
@@ -137,9 +139,9 @@ New-NetFirewallRule -DisplayName "Server Status" -Direction Inbound -Action Allo
 ## Useful Commands
 
 ```powershell
-.\dist\server-status.exe check-config
-.\dist\server-status.exe run-once
-.\dist\server-status.exe version
+.\dist\noobboard.exe check-config
+.\dist\noobboard.exe run-once
+.\dist\noobboard.exe version
 ```
 
 ## Project Layout

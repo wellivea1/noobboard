@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wellivea1/server-status/internal/models"
+	"github.com/wellivea1/noobboard/internal/models"
 )
 
 func TestUnraidDockerNameAndStatusMapping(t *testing.T) {

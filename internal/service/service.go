@@ -9,9 +9,9 @@ type Options struct {
 
 func OptionsFromVersion(version string) Options {
 	return Options{
-		Name:        "ServerStatus",
-		DisplayName: "Server Status",
-		Description: "Local server-status and diagnostics dashboard.",
+		Name:        "NoobBoard",
+		DisplayName: "NoobBoard",
+		Description: "Local NoobBoard diagnostics dashboard.",
 		Version:     version,
 	}
 }

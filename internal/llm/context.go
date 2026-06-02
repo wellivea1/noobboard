@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wellivea1/server-status/internal/models"
-	"github.com/wellivea1/server-status/internal/privacy"
+	"github.com/wellivea1/noobboard/internal/models"
+	"github.com/wellivea1/noobboard/internal/privacy"
 )
 
 type Mode string
@@ -312,7 +312,7 @@ func stripGeneralUserOnlyFields(value interface{}) interface{} {
 
 func Instructions() string {
 	return strings.Join([]string{
-		"You are a diagnostic assistant for a local server-status dashboard.",
+		"You are a diagnostic assistant for a local NoobBoard dashboard.",
 		"You receive only sanitized incident facts, status data, and policy-approved log excerpts.",
 		"Never claim you can repair the system or execute actions.",
 		"Never recommend destructive storage, Unraid array, Docker removal, firewall, VLAN, or filesystem actions.",

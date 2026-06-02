@@ -2,14 +2,14 @@
 
 Commands:
 
-- `server-status.exe serve`
-- `server-status.exe check-config`
-- `server-status.exe install-service`
-- `server-status.exe uninstall-service`
-- `server-status.exe start-service`
-- `server-status.exe stop-service`
-- `server-status.exe run-once`
-- `server-status.exe version`
+- `noobboard.exe serve`
+- `noobboard.exe check-config`
+- `noobboard.exe install-service`
+- `noobboard.exe uninstall-service`
+- `noobboard.exe start-service`
+- `noobboard.exe stop-service`
+- `noobboard.exe run-once`
+- `noobboard.exe version`
 
 Initial routes:
 
@@ -66,7 +66,7 @@ server:
   port: 8787
   compact_port: 8788
 database:
-  path: "C:\\ProgramData\\ServerStatus\\data\\dashboard.db.json"
+  path: "C:\\ProgramData\\NoobBoard\\data\\dashboard.db.json"
 fixtures:
   dir: "fixtures"
   scenario: "all_systems_online"
@@ -92,7 +92,7 @@ integrations:
   nas_probe_target: "http://tower.local"
 ```
 
-`live` is the default and reports missing live collectors as collector errors instead of replacing them with fixture Docker data. Live network probes use `HSD_INTERNET_PROBE_URL`, `HSD_DNS_PROBE_HOST`, `HSD_ROUTER_PROBE_TARGET`, and `HSD_NAS_PROBE_TARGET`; router and NAS targets fall back to the configured UniFi and Unraid base URLs. Skipped probe targets are reported as unknown rather than failed. The UniFi collector counts WAN definitions and uses explicit WAN status/link fields when present; definition-only WAN responses fall back to gateway-device state. Use `HSD_INTEGRATION_MODE=fixture` only for deterministic demos/tests, or `HSD_INTEGRATION_MODE=mixed` when configured live Unraid, Unraid-backed Docker, and UniFi clients should be combined with fixture network-probe clients. API snapshots include `integration_mode`, optional `fixture_scenario`, and per-app `data_source` so clients can distinguish fixture data from live Docker telemetry.
+`live` is the default and reports missing live collectors as collector errors instead of replacing them with fixture Docker data. Live network probes use `NOOBBOARD_INTERNET_PROBE_URL`, `NOOBBOARD_DNS_PROBE_HOST`, `NOOBBOARD_ROUTER_PROBE_TARGET`, and `NOOBBOARD_NAS_PROBE_TARGET`; router and NAS targets fall back to the configured UniFi and Unraid base URLs. Skipped probe targets are reported as unknown rather than failed. The UniFi collector counts WAN definitions and uses explicit WAN status/link fields when present; definition-only WAN responses fall back to gateway-device state. Use `NOOBBOARD_INTEGRATION_MODE=fixture` only for deterministic demos/tests, or `NOOBBOARD_INTEGRATION_MODE=mixed` when configured live Unraid, Unraid-backed Docker, and UniFi clients should be combined with fixture network-probe clients. API snapshots include `integration_mode`, optional `fixture_scenario`, and per-app `data_source` so clients can distinguish fixture data from live Docker telemetry.
 
 If the Unraid GraphQL Docker API omits containers, enable `UNRAID_SSH_FALLBACK_ENABLED` / `integrations.unraid_ssh_fallback` and provide `UNRAID_SSH_HOST`, `UNRAID_SSH_USER`, and optionally `UNRAID_SSH_KEY_FILE`. The SSH collector runs `docker ps -a --no-trunc --format '{{json .}}'` without a shell, parses Docker CLI JSON, and is preferred only when it sees more containers than GraphQL or when GraphQL cannot serve logs/control for a selected SSH-sourced app.
 

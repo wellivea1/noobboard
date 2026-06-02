@@ -3,13 +3,13 @@
 Build:
 
 ```powershell
-& 'C:\Program Files\Go\bin\go.exe' build -o dist\server-status.exe .\cmd\dashboard
+& 'C:\Program Files\Go\bin\go.exe' build -o dist\noobboard.exe .\cmd\dashboard
 ```
 
 Foreground test run:
 
 ```powershell
-.\dist\server-status.exe serve
+.\dist\noobboard.exe serve
 ```
 
 Default local URLs:
@@ -21,21 +21,21 @@ Compact web app: http://127.0.0.1:8788
 
 Default Windows paths:
 
-- Config: `C:\ProgramData\ServerStatus\config.yaml`
-- Database: `C:\ProgramData\ServerStatus\data\dashboard.db.json`
-- Logs: `C:\ProgramData\ServerStatus\logs\`
+- Config: `C:\ProgramData\NoobBoard\config.yaml`
+- Database: `C:\ProgramData\NoobBoard\data\dashboard.db.json`
+- Logs: `C:\ProgramData\NoobBoard\logs\`
 
 Install service from an elevated PowerShell prompt:
 
 ```powershell
-.\dist\server-status.exe install-service
-.\dist\server-status.exe start-service
+.\dist\noobboard.exe install-service
+.\dist\noobboard.exe start-service
 ```
 
 Allow LAN access on a private network only:
 
 ```powershell
-New-NetFirewallRule -DisplayName "Server Status" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8787,8788 -Profile Private
+New-NetFirewallRule -DisplayName "NoobBoard" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8787,8788 -Profile Private
 ```
 
 For LAN use, set `server.bind_address` to the mini PC LAN IP or `0.0.0.0` only when the Windows Firewall rule is limited to the private LAN profile.

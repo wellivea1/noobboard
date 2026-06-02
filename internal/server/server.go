@@ -17,20 +17,20 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wellivea1/server-status/internal/adapters/docker"
-	"github.com/wellivea1/server-status/internal/adapters/probes"
-	"github.com/wellivea1/server-status/internal/adapters/unifi"
-	"github.com/wellivea1/server-status/internal/adapters/unraid"
-	"github.com/wellivea1/server-status/internal/audit"
-	"github.com/wellivea1/server-status/internal/config"
-	"github.com/wellivea1/server-status/internal/db"
-	"github.com/wellivea1/server-status/internal/diagnostics"
-	"github.com/wellivea1/server-status/internal/llm"
-	"github.com/wellivea1/server-status/internal/models"
-	"github.com/wellivea1/server-status/internal/notifications"
-	"github.com/wellivea1/server-status/internal/privacy"
-	"github.com/wellivea1/server-status/internal/users"
-	"github.com/wellivea1/server-status/web"
+	"github.com/wellivea1/noobboard/internal/adapters/docker"
+	"github.com/wellivea1/noobboard/internal/adapters/probes"
+	"github.com/wellivea1/noobboard/internal/adapters/unifi"
+	"github.com/wellivea1/noobboard/internal/adapters/unraid"
+	"github.com/wellivea1/noobboard/internal/audit"
+	"github.com/wellivea1/noobboard/internal/config"
+	"github.com/wellivea1/noobboard/internal/db"
+	"github.com/wellivea1/noobboard/internal/diagnostics"
+	"github.com/wellivea1/noobboard/internal/llm"
+	"github.com/wellivea1/noobboard/internal/models"
+	"github.com/wellivea1/noobboard/internal/notifications"
+	"github.com/wellivea1/noobboard/internal/privacy"
+	"github.com/wellivea1/noobboard/internal/users"
+	"github.com/wellivea1/noobboard/web"
 )
 
 type Collectors struct {
@@ -418,7 +418,7 @@ func (a *App) siteConfig(mode siteMode) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
-		_, _ = fmt.Fprintf(w, "window.__HSD_SITE_MODE__ = %q;\n", string(mode))
+		_, _ = fmt.Fprintf(w, "window.__NOOBBOARD_SITE_MODE__ = %q;\nwindow.__HSD_SITE_MODE__ = window.__NOOBBOARD_SITE_MODE__;\n", string(mode))
 	}
 }
 
@@ -462,7 +462,7 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.SetCookie(w, &http.Cookie{
-		Name:     "hsd_session",
+		Name:     "noobboard_session",
 		Value:    session.Token,
 		Path:     "/",
 		HttpOnly: true,
@@ -482,6 +482,7 @@ func (a *App) logout(w http.ResponseWriter, r *http.Request) {
 	if session := sessionFromRequest(r); session != "" {
 		a.sessions.delete(session)
 	}
+	http.SetCookie(w, &http.Cookie{Name: "noobboard_session", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: a.deps.Config.Auth.CookieSecure})
 	http.SetCookie(w, &http.Cookie{Name: "hsd_session", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: a.deps.Config.Auth.CookieSecure})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "logged_out"})
 }
@@ -775,7 +776,7 @@ func (a *App) diagnose(w http.ResponseWriter, r *http.Request, mode llm.Mode, ro
 		return
 	}
 	if !llm.ProviderAvailable(cfg.LLM) {
-		writeError(w, http.StatusForbidden, errors.New("diagnostics require HSD_LLM_PROVIDER=openai or anthropic with the matching API key"))
+		writeError(w, http.StatusForbidden, errors.New("diagnostics require NOOBBOARD_LLM_PROVIDER=openai or anthropic with the matching API key"))
 		return
 	}
 	if err := requireCSRF(r); err != nil {
@@ -1380,11 +1381,13 @@ func requireCSRF(r *http.Request) error {
 }
 
 func sessionFromRequest(r *http.Request) string {
-	cookie, err := r.Cookie("hsd_session")
-	if err != nil {
-		return ""
+	for _, name := range []string{"noobboard_session", "hsd_session"} {
+		cookie, err := r.Cookie(name)
+		if err == nil {
+			return cookie.Value
+		}
 	}
-	return cookie.Value
+	return ""
 }
 
 func mustUser(r *http.Request) users.User {

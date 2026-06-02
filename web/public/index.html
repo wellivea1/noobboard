@@ -8,14 +8,14 @@
   <meta name="theme-color" content="#0f1110" media="(prefers-color-scheme: dark)">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-title" content="Server Status">
+  <meta name="apple-mobile-web-app-title" content="NoobBoard">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="format-detection" content="telephone=no">
   <link rel="manifest" href="/manifest.json">
   <link rel="icon" href="/icons/icon-192.png" sizes="192x192" type="image/png">
   <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
   <link rel="stylesheet" href="/styles.css">
-  <title>Server Status</title>
+  <title>NoobBoard</title>
 </head>
 <body>
   <div id="notice" class="notice" role="status" hidden></div>
@@ -24,7 +24,7 @@
     <section id="login" class="login">
       <div class="login-copy">
         <p class="eyebrow">Local LAN monitor</p>
-        <h1>Server Status</h1>
+        <h1>NoobBoard</h1>
         <p>Sign in to view server, network, and application health.</p>
       </div>
       <form id="login-form" class="login-form">
@@ -44,7 +44,7 @@
       <header class="topbar">
         <button id="nav-toggle" class="command nav-toggle" data-glyph="&#9776;" type="button" aria-label="Open menu" aria-controls="tabs" aria-expanded="false" data-admin-detail>Menu</button>
         <div class="title-block">
-          <p class="eyebrow">Server Status</p>
+          <p class="eyebrow">NoobBoard</p>
           <h1 id="page-title">System overview</h1>
           <p id="summary">Loading current status...</p>
         </div>
@@ -122,10 +122,10 @@
 
       <section id="tab-server" class="tab-panel" hidden data-admin-detail>
         <div class="section-head">
-          <h2>Server Status</h2>
+          <h2>Server Health</h2>
           <button type="button" class="command" data-glyph=">" data-tab-jump="apps">View apps</button>
         </div>
-        <div id="server-status-grid" class="status-grid"></div>
+        <div id="server-health-grid" class="status-grid"></div>
         <div id="server-detail-grid" class="detail-grid"></div>
       </section>
 

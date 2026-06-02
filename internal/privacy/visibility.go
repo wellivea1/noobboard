@@ -3,7 +3,7 @@ package privacy
 import (
 	"strings"
 
-	"github.com/wellivea1/server-status/internal/models"
+	"github.com/wellivea1/noobboard/internal/models"
 )
 
 func FilterSnapshotForRole(snapshot models.Snapshot, role models.Role, redactor *Redactor) models.Snapshot {

@@ -1,4 +1,4 @@
-const CACHE = "server-status-v46";
+const CACHE = "noobboard-v47";
 const ASSETS = [
   "/",
   "/site-config.js",

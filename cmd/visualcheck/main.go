@@ -60,7 +60,7 @@ type flags struct {
 	OverviewCardCount       int      `json:"overviewCardCount,omitempty"`
 	OverviewMoveButtonCount int      `json:"overviewMoveButtonCount,omitempty"`
 	OverviewRearrangeReady  bool     `json:"overviewRearrangeReady,omitempty"`
-	ServerStatusRowCount    int      `json:"serverStatusRowCount,omitempty"`
+	ServerHealthRowCount    int      `json:"serverHealthRowCount,omitempty"`
 	RouterStatusRowCount    int      `json:"routerStatusRowCount,omitempty"`
 	AppCardCount            int      `json:"appCardCount,omitempty"`
 	AppLogoCount            int      `json:"appLogoCount,omitempty"`
@@ -159,12 +159,12 @@ func run(opts options) (visualResult, error) {
 	server := exec.Command(binary, "serve")
 	server.Dir = root
 	server.Env = append(os.Environ(),
-		fmt.Sprintf("HSD_PORT=%d", opts.port),
-		fmt.Sprintf("HSD_COMPACT_PORT=%d", compactPort),
-		"HSD_INTEGRATION_MODE=fixture",
-		"HSD_DATABASE_PATH="+result.Artifacts["database"],
-		"HSD_FIXTURE_DIR="+filepath.Join(root, "fixtures"),
-		"HSD_FIXTURE_SCENARIO="+opts.scenario,
+		fmt.Sprintf("NOOBBOARD_PORT=%d", opts.port),
+		fmt.Sprintf("NOOBBOARD_COMPACT_PORT=%d", compactPort),
+		"NOOBBOARD_INTEGRATION_MODE=fixture",
+		"NOOBBOARD_DATABASE_PATH="+result.Artifacts["database"],
+		"NOOBBOARD_FIXTURE_DIR="+filepath.Join(root, "fixtures"),
+		"NOOBBOARD_FIXTURE_SCENARIO="+opts.scenario,
 	)
 	server.Stdout = serverLog
 	server.Stderr = serverLog
@@ -526,7 +526,7 @@ func assertVisualFlags(overview, server, router, apps, settings, customization, 
 	if !overview.OverviewRearrangeReady || !mobileOverview.OverviewRearrangeReady {
 		failures = append(failures, "overview rearrange mode did not enable draggable cards")
 	}
-	if server.ServerStatusRowCount < 5 {
+	if server.ServerHealthRowCount < 5 {
 		failures = append(failures, "server tab did not render expected server status rows")
 	}
 	if router.RouterStatusRowCount < 5 {
@@ -848,13 +848,13 @@ const overviewExpression = `(async () => {
 const serverExpression = `(async () => {
   document.querySelector('[data-tab="server"]')?.click();
   const started = Date.now();
-  while (document.querySelectorAll('#server-status-grid .status-list-row').length < 5 && Date.now() - started < 5000) {
+  while (document.querySelectorAll('#server-health-grid .status-list-row').length < 5 && Date.now() - started < 5000) {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   const buttonTextOverflow = hasButtonTextOverflow();
   return {
     pageTitle: document.querySelector('#page-title')?.textContent || '',
-    serverStatusRowCount: document.querySelectorAll('#server-status-grid .status-list-row').length,
+    serverHealthRowCount: document.querySelectorAll('#server-health-grid .status-list-row').length,
     detailSectionCount: document.querySelectorAll('#server-detail-grid .detail-section').length,
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow,

@@ -13,21 +13,21 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/wellivea1/server-status/internal/adapters/docker"
-	"github.com/wellivea1/server-status/internal/adapters/probes"
-	"github.com/wellivea1/server-status/internal/adapters/unifi"
-	"github.com/wellivea1/server-status/internal/adapters/unraid"
-	"github.com/wellivea1/server-status/internal/audit"
-	"github.com/wellivea1/server-status/internal/config"
-	"github.com/wellivea1/server-status/internal/db"
-	"github.com/wellivea1/server-status/internal/diagnostics"
-	"github.com/wellivea1/server-status/internal/llm"
-	"github.com/wellivea1/server-status/internal/models"
-	"github.com/wellivea1/server-status/internal/notifications"
-	"github.com/wellivea1/server-status/internal/privacy"
-	"github.com/wellivea1/server-status/internal/server"
-	"github.com/wellivea1/server-status/internal/service"
-	"github.com/wellivea1/server-status/internal/users"
+	"github.com/wellivea1/noobboard/internal/adapters/docker"
+	"github.com/wellivea1/noobboard/internal/adapters/probes"
+	"github.com/wellivea1/noobboard/internal/adapters/unifi"
+	"github.com/wellivea1/noobboard/internal/adapters/unraid"
+	"github.com/wellivea1/noobboard/internal/audit"
+	"github.com/wellivea1/noobboard/internal/config"
+	"github.com/wellivea1/noobboard/internal/db"
+	"github.com/wellivea1/noobboard/internal/diagnostics"
+	"github.com/wellivea1/noobboard/internal/llm"
+	"github.com/wellivea1/noobboard/internal/models"
+	"github.com/wellivea1/noobboard/internal/notifications"
+	"github.com/wellivea1/noobboard/internal/privacy"
+	"github.com/wellivea1/noobboard/internal/server"
+	"github.com/wellivea1/noobboard/internal/service"
+	"github.com/wellivea1/noobboard/internal/users"
 )
 
 var version = "0.1.0-dev"
@@ -64,7 +64,7 @@ func run(args []string) error {
 	case "run-once":
 		return runOnce(args[1:])
 	case "version":
-		fmt.Printf("server-status %s %s/%s\n", version, runtime.GOOS, runtime.GOARCH)
+		fmt.Printf("noobboard %s %s/%s\n", version, runtime.GOOS, runtime.GOARCH)
 		return nil
 	default:
 		return fmt.Errorf("unknown command %q", args[1])
@@ -72,7 +72,7 @@ func run(args []string) error {
 }
 
 func loadConfig(args []string) (config.Config, error) {
-	fs := flag.NewFlagSet("server-status", flag.ContinueOnError)
+	fs := flag.NewFlagSet("noobboard", flag.ContinueOnError)
 	configPath := fs.String("config", "", "path to config file")
 	if err := fs.Parse(args[1:]); err != nil {
 		return config.Config{}, err

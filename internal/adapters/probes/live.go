@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wellivea1/server-status/internal/models"
+	"github.com/wellivea1/noobboard/internal/models"
 )
 
 type LiveConfig struct {

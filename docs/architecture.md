@@ -1,6 +1,6 @@
-# Server Status Architecture
+# NoobBoard Architecture
 
-Server Status is a native Go service that runs on a separate Windows 11 mini PC and serves a LAN web/PWA dashboard.
+NoobBoard is a native Go service that runs on a separate Windows 11 mini PC and serves a LAN web/PWA dashboard.
 
 The service is built around these boundaries:
 

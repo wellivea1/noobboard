@@ -5,8 +5,8 @@ import (
 	"errors"
 	"os"
 
-	"github.com/wellivea1/server-status/internal/config"
-	"github.com/wellivea1/server-status/internal/privacy"
+	"github.com/wellivea1/noobboard/internal/config"
+	"github.com/wellivea1/noobboard/internal/privacy"
 )
 
 type DisabledClient struct {
@@ -20,7 +20,7 @@ func NewClient(cfg config.LLMConfig, redactor *privacy.Redactor) Client {
 	case "anthropic":
 		return NewAnthropicClient(cfg, redactor)
 	default:
-		return DisabledClient{reason: `llm provider is disabled; set HSD_LLM_PROVIDER to "openai" or "anthropic" and configure the matching API key`}
+		return DisabledClient{reason: `llm provider is disabled; set NOOBBOARD_LLM_PROVIDER to "openai" or "anthropic" and configure the matching API key`}
 	}
 }
 

@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wellivea1/server-status/internal/adapters/fixture"
-	"github.com/wellivea1/server-status/internal/models"
+	"github.com/wellivea1/noobboard/internal/adapters/fixture"
+	"github.com/wellivea1/noobboard/internal/models"
 )
 
 type Client interface {

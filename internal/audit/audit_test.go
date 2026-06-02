@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wellivea1/server-status/internal/config"
-	"github.com/wellivea1/server-status/internal/db"
-	"github.com/wellivea1/server-status/internal/privacy"
+	"github.com/wellivea1/noobboard/internal/config"
+	"github.com/wellivea1/noobboard/internal/db"
+	"github.com/wellivea1/noobboard/internal/privacy"
 )
 
 func TestRecordRedactsNestedDetails(t *testing.T) {

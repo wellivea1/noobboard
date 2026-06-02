@@ -18,10 +18,10 @@ const state = {
 };
 
 const $ = (id) => document.getElementById(id);
-const MONITOR_STORAGE_KEY = "hsd.hiddenMonitors.v1";
-const OVERVIEW_ORDER_STORAGE_KEY = "hsd.overviewOrder.v1";
+const MONITOR_STORAGE_KEY = "noobboard.hiddenMonitors.v1";
+const OVERVIEW_ORDER_STORAGE_KEY = "noobboard.overviewOrder.v1";
 const OVERVIEW_MONITOR_IDS = ["overview.overall", "overview.server", "overview.router", "overview.apps"];
-const SITE_MODE = String(window.__HSD_SITE_MODE__ || "admin").toLowerCase() === "compact" ? "compact" : "admin";
+const SITE_MODE = String(window.__NOOBBOARD_SITE_MODE__ || window.__HSD_SITE_MODE__ || "admin").toLowerCase() === "compact" ? "compact" : "admin";
 const SETTINGS_ENDPOINTS = [
   { title: "Visibility", section: "visibility", path: "/api/admin/settings/visibility", rows: 10 },
   { title: "Blacklist", section: "blacklist", path: "/api/admin/settings/blacklist", rows: 16 },
@@ -335,7 +335,7 @@ function showDashboard() {
     setActiveTab(state.activeTab);
   } else {
     state.activeTab = "user-home";
-    $("page-title").textContent = "Server status";
+    $("page-title").textContent = "Server health";
   }
   renderMonitorRestore();
 }
@@ -343,7 +343,7 @@ function showDashboard() {
 function setActiveTab(tabName) {
   if (!hasAdminSurface()) {
     state.activeTab = "user-home";
-    $("page-title").textContent = "Server status";
+    $("page-title").textContent = "Server health";
     return;
   }
   state.activeTab = tabName;
@@ -355,7 +355,7 @@ function setActiveTab(tabName) {
   });
   const titles = {
     overview: "System overview",
-    server: "Server status",
+    server: "Server health",
     router: "Router and UniFi",
     apps: "Application inventory",
     incidents: "Incidents and facts",
@@ -408,7 +408,7 @@ function renderSnapshot(snapshot) {
     return;
   }
   renderOverviewCards(snapshot);
-  renderServerStatus(snapshot);
+  renderServerHealth(snapshot);
   renderRouterStatus(snapshot);
   renderFacts(snapshot.facts || []);
   renderIncidentStrip(snapshot.incidents || []);
@@ -620,7 +620,7 @@ function renderOverviewCards(snapshot) {
   $("overview-cards").replaceChildren(...visibleItems.map((item) => overviewCard(item)));
 }
 
-function renderServerStatus(snapshot) {
+function renderServerHealth(snapshot) {
   const infra = snapshot.infrastructure || {};
   const rows = [
     ["server.nas", "NAS", boolStatus(infra.nas_reachable), "Dashboard host can reach the server"],
@@ -629,7 +629,7 @@ function renderServerStatus(snapshot) {
     ["server.docker", "Docker", boolStatus(infra.docker_service_available), "Container service"],
     ["server.nas-link", "NAS Link", linkStatus(infra), linkNote(infra)],
   ];
-  $("server-status-grid").replaceChildren(...rows.map(([id, label, value, note]) => statusListRow(id, label, value, note)).filter(Boolean));
+  $("server-health-grid").replaceChildren(...rows.map(([id, label, value, note]) => statusListRow(id, label, value, note)).filter(Boolean));
   const warnings = infra.storage_warnings?.length ? infra.storage_warnings.join("; ") : "No storage warnings";
   $("server-detail-grid").replaceChildren(...[
     detailSection("server.collectors", "Collectors", [
@@ -1317,7 +1317,7 @@ function renderRoleDetail(role, defaultRole, roles) {
       ),
       node("div", { class: "role-options" },
         roleFlag(role, "can_use_llm", "Status chat"),
-        roleFlag(role, "show_nas_status_to_users", "Server status"),
+        roleFlag(role, "show_nas_status_to_users", "Server health"),
         roleFlag(role, "show_wan_status_to_users", "Router status"),
         roleFlag(role, "show_incident_ids_to_users", "Incident IDs"),
       ),

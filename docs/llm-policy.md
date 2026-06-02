@@ -1,6 +1,6 @@
 # LLM Policy
 
-LLM support is provider-based. The default provider is `disabled`, so the app does not fabricate diagnostic answers when no real provider is configured. Real providers are selected with `HSD_LLM_PROVIDER=openai` or `HSD_LLM_PROVIDER=anthropic`.
+LLM support is provider-based. The default provider is `disabled`, so the app does not fabricate diagnostic answers when no real provider is configured. Real providers are selected with `NOOBBOARD_LLM_PROVIDER=openai` or `NOOBBOARD_LLM_PROVIDER=anthropic`.
 
 OpenAI uses the Responses API with strict structured outputs. Anthropic uses the Messages API with a forced client tool whose `input_schema` matches the diagnosis schema. Both providers are called through Go `net/http`; no SDK or runtime dependency is required.
 
@@ -11,7 +11,7 @@ Environment variables:
 - `ANTHROPIC_API_KEY`
 - `ANTHROPIC_MODEL`
 
-When `HSD_LLM_PROVIDER=openai`, `OPENAI_API_KEY` must be present. When `HSD_LLM_PROVIDER=anthropic`, `ANTHROPIC_API_KEY` must be present. If the provider or matching key is missing, the API reports diagnostics as unavailable and chat controls are disabled.
+When `NOOBBOARD_LLM_PROVIDER=openai`, `OPENAI_API_KEY` must be present. When `NOOBBOARD_LLM_PROVIDER=anthropic`, `ANTHROPIC_API_KEY` must be present. If the provider or matching key is missing, the API reports diagnostics as unavailable and chat controls are disabled.
 
 The LLM never receives raw credentials, unrestricted logs, arbitrary files, shell access, Docker control, Unraid mutations, UniFi configuration access, or repair tools.
 

@@ -7,10 +7,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wellivea1/server-status/internal/audit"
-	"github.com/wellivea1/server-status/internal/config"
-	"github.com/wellivea1/server-status/internal/db"
-	"github.com/wellivea1/server-status/internal/models"
+	"github.com/wellivea1/noobboard/internal/audit"
+	"github.com/wellivea1/noobboard/internal/config"
+	"github.com/wellivea1/noobboard/internal/db"
+	"github.com/wellivea1/noobboard/internal/models"
 )
 
 type Backend interface {

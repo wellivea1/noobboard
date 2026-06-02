@@ -35,11 +35,11 @@ Development bootstrap users:
 - `admin` / `change-me-now`
 - `viewer` / `change-me-now`
 
-Change these before real LAN or WAN-proxied use by setting `HSD_BOOTSTRAP_ADMIN_USERNAME` and `HSD_BOOTSTRAP_ADMIN_PASSWORD` before the first run, then create named users from Admin -> Settings -> Role Access.
+Change these before real LAN or WAN-proxied use by setting `NOOBBOARD_BOOTSTRAP_ADMIN_USERNAME` and `NOOBBOARD_BOOTSTRAP_ADMIN_PASSWORD` before the first run, then create named users from Admin -> Settings -> Role Access.
 
 For reverse-proxy deployment:
 
-- Set `HSD_BIND_ADDRESS=0.0.0.0` only behind a trusted firewall or reverse proxy.
-- Set `HSD_PUBLIC_URL=https://status.example.com`.
-- Set `HSD_COOKIE_SECURE=true` when served over HTTPS.
-- Set `HSD_ALLOWED_ORIGINS=https://status.example.com` if the proxy origin differs from the request host.
+- Set `NOOBBOARD_BIND_ADDRESS=0.0.0.0` only behind a trusted firewall or reverse proxy.
+- Set `NOOBBOARD_PUBLIC_URL=https://status.example.com`.
+- Set `NOOBBOARD_COOKIE_SECURE=true` when served over HTTPS.
+- Set `NOOBBOARD_ALLOWED_ORIGINS=https://status.example.com` if the proxy origin differs from the request host.

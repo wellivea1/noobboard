@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wellivea1/server-status/internal/config"
-	"github.com/wellivea1/server-status/internal/models"
+	"github.com/wellivea1/noobboard/internal/config"
+	"github.com/wellivea1/noobboard/internal/models"
 )
 
 func TestRedactsSecretsTokensEmailsAndBlacklistedPaths(t *testing.T) {

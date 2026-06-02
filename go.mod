@@ -1,4 +1,4 @@
-module github.com/wellivea1/server-status
+module github.com/wellivea1/noobboard
 
 go 1.25.0
 

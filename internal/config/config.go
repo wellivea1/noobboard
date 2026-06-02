@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wellivea1/server-status/internal/models"
+	"github.com/wellivea1/noobboard/internal/models"
 )
 
 type Config struct {
@@ -294,7 +294,7 @@ func (c Config) Validate() error {
 		return errors.New("auth session timeout must be at least one minute")
 	}
 	if !c.Auth.AllowInsecureRemote && isRemoteBindAddress(c.Server.BindAddress) && isDefaultPassword(c.Auth.BootstrapAdminPassword) {
-		return errors.New("remote bind requires HSD_BOOTSTRAP_ADMIN_PASSWORD or auth.allow_insecure_remote for development only")
+		return errors.New("remote bind requires NOOBBOARD_BOOTSTRAP_ADMIN_PASSWORD or auth.allow_insecure_remote for development only")
 	}
 	if c.Server.PublicURL != "" {
 		if _, err := url.ParseRequestURI(c.Server.PublicURL); err != nil {
@@ -489,71 +489,71 @@ func NormalizeIconURL(value string) (string, error) {
 func defaultBaseDir() string {
 	if runtime.GOOS == "windows" {
 		if programData := os.Getenv("ProgramData"); programData != "" {
-			return filepath.Join(programData, "ServerStatus")
+			return filepath.Join(programData, "NoobBoard")
 		}
-		return filepath.Join(`C:\ProgramData`, "ServerStatus")
+		return filepath.Join(`C:\ProgramData`, "NoobBoard")
 	}
 	if xdg := os.Getenv("XDG_STATE_HOME"); xdg != "" {
-		return filepath.Join(xdg, "server-status")
+		return filepath.Join(xdg, "noobboard")
 	}
-	return filepath.Join("/var/lib", "server-status")
+	return filepath.Join("/var/lib", "noobboard")
 }
 
 func defaultConfigPath() string {
 	if runtime.GOOS == "windows" {
 		if programData := os.Getenv("ProgramData"); programData != "" {
-			return filepath.Join(programData, "ServerStatus", "config.yaml")
+			return filepath.Join(programData, "NoobBoard", "config.yaml")
 		}
-		return filepath.Join(`C:\ProgramData`, "ServerStatus", "config.yaml")
+		return filepath.Join(`C:\ProgramData`, "NoobBoard", "config.yaml")
 	}
-	return filepath.Join("/etc", "server-status", "config.yaml")
+	return filepath.Join("/etc", "noobboard", "config.yaml")
 }
 
 func applyEnv(cfg *Config) {
-	if v := os.Getenv("HSD_BIND_ADDRESS"); v != "" {
+	if v := envValue("NOOBBOARD_BIND_ADDRESS", "HSD_BIND_ADDRESS"); v != "" {
 		cfg.Server.BindAddress = v
 	}
-	if v := os.Getenv("HSD_PORT"); v != "" {
+	if v := envValue("NOOBBOARD_PORT", "HSD_PORT"); v != "" {
 		if port, err := strconv.Atoi(v); err == nil {
 			cfg.Server.Port = port
 		}
 	}
-	if v := os.Getenv("HSD_COMPACT_PORT"); v != "" {
+	if v := envValue("NOOBBOARD_COMPACT_PORT", "HSD_COMPACT_PORT"); v != "" {
 		if port, err := strconv.Atoi(v); err == nil {
 			cfg.Server.CompactPort = port
 		}
 	}
-	if v := os.Getenv("HSD_PUBLIC_URL"); v != "" {
+	if v := envValue("NOOBBOARD_PUBLIC_URL", "HSD_PUBLIC_URL"); v != "" {
 		cfg.Server.PublicURL = strings.TrimRight(v, "/")
 	}
-	if v := os.Getenv("HSD_ALLOWED_ORIGINS"); v != "" {
+	if v := envValue("NOOBBOARD_ALLOWED_ORIGINS", "HSD_ALLOWED_ORIGINS"); v != "" {
 		cfg.Server.AllowedOrigins = splitList(v)
 	}
-	if v := os.Getenv("HSD_DATABASE_PATH"); v != "" {
+	if v := envValue("NOOBBOARD_DATABASE_PATH", "HSD_DATABASE_PATH"); v != "" {
 		cfg.Database.Path = v
 	}
-	if v := os.Getenv("HSD_FIXTURE_DIR"); v != "" {
+	if v := envValue("NOOBBOARD_FIXTURE_DIR", "HSD_FIXTURE_DIR"); v != "" {
 		cfg.FixtureDir = v
 	}
-	if v := os.Getenv("HSD_FIXTURE_SCENARIO"); v != "" {
+	if v := envValue("NOOBBOARD_FIXTURE_SCENARIO", "HSD_FIXTURE_SCENARIO"); v != "" {
 		cfg.FixtureScenario = v
 	}
-	if v := os.Getenv("HSD_BOOTSTRAP_ADMIN_USERNAME"); v != "" {
+	if v := envValue("NOOBBOARD_BOOTSTRAP_ADMIN_USERNAME", "HSD_BOOTSTRAP_ADMIN_USERNAME"); v != "" {
 		cfg.Auth.BootstrapAdminUsername = v
 	}
-	if v := os.Getenv("HSD_BOOTSTRAP_ADMIN_PASSWORD"); v != "" {
+	if v := envValue("NOOBBOARD_BOOTSTRAP_ADMIN_PASSWORD", "HSD_BOOTSTRAP_ADMIN_PASSWORD"); v != "" {
 		cfg.Auth.BootstrapAdminPassword = v
 	}
-	if v := os.Getenv("HSD_COOKIE_SECURE"); v != "" {
+	if v := envValue("NOOBBOARD_COOKIE_SECURE", "HSD_COOKIE_SECURE"); v != "" {
 		cfg.Auth.CookieSecure = parseBool(v)
 	}
-	if v := os.Getenv("HSD_ALLOW_INSECURE_REMOTE"); v != "" {
+	if v := envValue("NOOBBOARD_ALLOW_INSECURE_REMOTE", "HSD_ALLOW_INSECURE_REMOTE"); v != "" {
 		cfg.Auth.AllowInsecureRemote = parseBool(v)
 	}
 	if v := os.Getenv("NOTIFICATION_BACKEND"); v != "" {
 		cfg.Notifications.Backend = v
 	}
-	if v := os.Getenv("HSD_LLM_PROVIDER"); v != "" {
+	if v := envValue("NOOBBOARD_LLM_PROVIDER", "HSD_LLM_PROVIDER"); v != "" {
 		cfg.LLM.Provider = v
 	}
 	if v := os.Getenv("OPENAI_MODEL"); v != "" {
@@ -562,7 +562,7 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("ANTHROPIC_MODEL"); v != "" {
 		cfg.LLM.AnthropicModel = v
 	}
-	if v := os.Getenv("HSD_INTEGRATION_MODE"); v != "" {
+	if v := envValue("NOOBBOARD_INTEGRATION_MODE", "HSD_INTEGRATION_MODE"); v != "" {
 		cfg.Integrations.Mode = v
 	}
 	if v := os.Getenv("UNRAID_BASE_URL"); v != "" {
@@ -606,18 +606,30 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("UNIFI_SITE_ID"); v != "" {
 		cfg.Integrations.UniFiSiteID = v
 	}
-	if v := os.Getenv("HSD_INTERNET_PROBE_URL"); v != "" {
+	if v := envValue("NOOBBOARD_INTERNET_PROBE_URL", "HSD_INTERNET_PROBE_URL"); v != "" {
 		cfg.Integrations.InternetProbeURL = strings.TrimRight(v, "/")
 	}
-	if v := os.Getenv("HSD_DNS_PROBE_HOST"); v != "" {
+	if v := envValue("NOOBBOARD_DNS_PROBE_HOST", "HSD_DNS_PROBE_HOST"); v != "" {
 		cfg.Integrations.DNSProbeHost = v
 	}
-	if v := os.Getenv("HSD_ROUTER_PROBE_TARGET"); v != "" {
+	if v := envValue("NOOBBOARD_ROUTER_PROBE_TARGET", "HSD_ROUTER_PROBE_TARGET"); v != "" {
 		cfg.Integrations.RouterProbeTarget = strings.TrimRight(v, "/")
 	}
-	if v := os.Getenv("HSD_NAS_PROBE_TARGET"); v != "" {
+	if v := envValue("NOOBBOARD_NAS_PROBE_TARGET", "HSD_NAS_PROBE_TARGET"); v != "" {
 		cfg.Integrations.NASProbeTarget = strings.TrimRight(v, "/")
 	}
+}
+
+func envValue(primary string, aliases ...string) string {
+	if v := os.Getenv(primary); v != "" {
+		return v
+	}
+	for _, alias := range aliases {
+		if v := os.Getenv(alias); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func applySecretFiles(cfg *Config) error {

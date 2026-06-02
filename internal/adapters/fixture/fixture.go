@@ -6,12 +6,15 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/wellivea1/server-status/internal/models"
+	"github.com/wellivea1/noobboard/internal/models"
 )
 
 func LoadSnapshot(dir, scenario string) (models.Snapshot, error) {
 	if scenario == "" {
-		scenario = os.Getenv("HSD_FIXTURE_SCENARIO")
+		scenario = os.Getenv("NOOBBOARD_FIXTURE_SCENARIO")
+		if scenario == "" {
+			scenario = os.Getenv("HSD_FIXTURE_SCENARIO")
+		}
 	}
 	if scenario == "" {
 		scenario = "all_systems_online"

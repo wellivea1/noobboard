@@ -1,6 +1,6 @@
 {
-  "name": "Server Status",
-  "short_name": "Server Status",
+  "name": "NoobBoard",
+  "short_name": "NoobBoard",
   "description": "Local server, network, and app status dashboard.",
   "id": "/",
   "start_url": "/",

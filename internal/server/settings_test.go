@@ -13,19 +13,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wellivea1/server-status/internal/adapters/docker"
-	"github.com/wellivea1/server-status/internal/adapters/probes"
-	"github.com/wellivea1/server-status/internal/adapters/unifi"
-	"github.com/wellivea1/server-status/internal/adapters/unraid"
-	"github.com/wellivea1/server-status/internal/audit"
-	"github.com/wellivea1/server-status/internal/config"
-	"github.com/wellivea1/server-status/internal/db"
-	"github.com/wellivea1/server-status/internal/diagnostics"
-	"github.com/wellivea1/server-status/internal/llm"
-	"github.com/wellivea1/server-status/internal/models"
-	"github.com/wellivea1/server-status/internal/notifications"
-	"github.com/wellivea1/server-status/internal/privacy"
-	"github.com/wellivea1/server-status/internal/users"
+	"github.com/wellivea1/noobboard/internal/adapters/docker"
+	"github.com/wellivea1/noobboard/internal/adapters/probes"
+	"github.com/wellivea1/noobboard/internal/adapters/unifi"
+	"github.com/wellivea1/noobboard/internal/adapters/unraid"
+	"github.com/wellivea1/noobboard/internal/audit"
+	"github.com/wellivea1/noobboard/internal/config"
+	"github.com/wellivea1/noobboard/internal/db"
+	"github.com/wellivea1/noobboard/internal/diagnostics"
+	"github.com/wellivea1/noobboard/internal/llm"
+	"github.com/wellivea1/noobboard/internal/models"
+	"github.com/wellivea1/noobboard/internal/notifications"
+	"github.com/wellivea1/noobboard/internal/privacy"
+	"github.com/wellivea1/noobboard/internal/users"
 )
 
 func TestVisibilitySettingsEndpointPersists(t *testing.T) {
@@ -117,7 +117,7 @@ func TestDiagnoseRequiresConfiguredLLMProvider(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("POST /api/user/diagnose status = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "HSD_LLM_PROVIDER") {
+	if !strings.Contains(rec.Body.String(), "NOOBBOARD_LLM_PROVIDER") {
 		t.Fatalf("diagnose error did not explain provider setup: %s", rec.Body.String())
 	}
 }

@@ -5,11 +5,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wellivea1/server-status/internal/adapters/fixture"
-	"github.com/wellivea1/server-status/internal/config"
-	"github.com/wellivea1/server-status/internal/diagnostics"
-	"github.com/wellivea1/server-status/internal/models"
-	"github.com/wellivea1/server-status/internal/privacy"
+	"github.com/wellivea1/noobboard/internal/adapters/fixture"
+	"github.com/wellivea1/noobboard/internal/config"
+	"github.com/wellivea1/noobboard/internal/diagnostics"
+	"github.com/wellivea1/noobboard/internal/models"
+	"github.com/wellivea1/noobboard/internal/privacy"
 )
 
 func TestValidateDiagnosisRejectsInvalidJSON(t *testing.T) {

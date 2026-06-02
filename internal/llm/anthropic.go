@@ -11,8 +11,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/wellivea1/server-status/internal/config"
-	"github.com/wellivea1/server-status/internal/privacy"
+	"github.com/wellivea1/noobboard/internal/config"
+	"github.com/wellivea1/noobboard/internal/privacy"
 )
 
 type AnthropicClient struct {
