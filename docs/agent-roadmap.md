@@ -37,6 +37,52 @@ These are non-negotiable for any change in this repo.
   notifications, or LLM context passes through `internal/privacy` first, fail-closed.
 - **Source honesty.** Snapshots/app records carry `data_source` (`fixture`/`mixed`/
   `live`/`unraid-docker`). Do not let fixture data masquerade as live.
+- **General-user UI must pass a literacy + layout bar.** Any change to the compact surface
+  must keep technical vocabulary out of the default view (see the banned-term list under
+  Workstream B), avoid horizontal scroll/dense tables, use ≥44px touch targets, and ship
+  with mobile screenshots (390×844) in the PR for the key states.
+
+---
+
+## Multi-agent UX workflow
+
+From a product review of the Codex-built app (see references): the backend is solid, but a
+single implementer agent produced a developer-flavored UI. The mitigation is a process one
+— **stop treating the implementer agent as the product designer.** Split the roles:
+
+```text
+UX agent (e.g. Claude): write UX spec + microcopy
+        ↓
+Implementer agent (e.g. Codex): implement the exact spec
+        ↓
+visual-check: screenshots + semantic/literacy UX audit
+        ↓
+UX agent: critique the screenshots
+        ↓
+Implementer agent: fix specific issues, one at a time
+        ↓
+repeat
+```
+
+Phased application for any UI workstream:
+
+1. **Freeze backend scope.** Don't add backend features/adapters/security changes while
+   fixing UX. The backend already covers most requirements; the risk now is feature
+   accretion. Focus changes on compact UX, LLM presentation, and UX tests.
+2. **Produce a UX spec.** A UX-focused agent designs the compact mobile UI *only*, against
+   explicit constraints (tech-illiterate iPhone user; no admin controls/logs/hidden
+   services; large touch targets; no dense tables; no horizontal scroll).
+3. **Critique.** Return ranked UX problems, exact replacement microcopy, layout changes, and
+   acceptance criteria the implementer can satisfy.
+4. **Implement against a concrete ticket** with testable acceptance criteria — not a vague
+   "make it nicer" request.
+5. **Run the critic loop.** Feed one issue at a time; don't ask the implementer to solve 25
+   UX problems in a single pass (it produces churn).
+
+Make screenshots a required PR artifact so the implementer is forced to *look at the thing*,
+and back them with semantic DOM checks (screenshots catch aesthetics; DOM checks catch
+leaked technical/admin terms). This workflow is the connective tissue for Workstream B and
+the presentation half of Workstream C.
 
 ---
 
@@ -104,24 +150,60 @@ deployment is usable without hand-editing config or env vars.
 
 ---
 
-## Workstream B — Ease of UI customization on the noob end
+## Workstream B — Compact "noob" UX (redesign + easy customization)
 
 **Status:** `not-started`
-**Goal:** Let an admin (and optionally the general user) tailor the compact/"noob" view
-through structured controls instead of JSON editors.
+**Goal:** Make the compact surface genuinely usable by an extremely non-technical iPhone
+user (the redesign), and make it easy for an admin to tailor what that user sees (the
+customization editor). The redesign is the foundation; customization sits on top of it.
 
-### Scope
-- **Structured compact-view editor** replacing raw JSON for the common cases: choose
-  visible apps, reorder them (drag-and-drop), set friendly display names, pick icons,
-  toggle the NAS/WAN status tiles, and toggle chat/LLM availability for general users.
-- **Icon picker** sourced from the bundled `web/public/app-icons/*.svg`, Docker-label
-  icons, and admin icon-override URLs. Reuse the existing URL sanitization rules
-  (unsupported schemes / embedded credentials rejected — see `docs/security.md`).
+> Product-review context (see references): today the compact surface inherits too much
+> "dashboard thinking" — it shows source/role pills, rearrange/restore-monitor controls,
+> icon-only topbar actions, horizontally scrolling action strips, status grids, and
+> compressed/truncated app cards. It can pass mechanical mobile-overflow checks while still
+> being dense and unparseable. The compact app is a **household status remote, not an admin
+> dashboard.** Follow the Multi-agent UX workflow above to drive this work.
+
+### B1 — Compact UX foundation (redesign)
+The compact general-user view should let a user answer: *Is my thing working? Internet or
+server problem? Tell the admin? Avoid touching anything?*
+
+- **Remove from the general-user view:** rearrange/restore-monitor controls, source pill,
+  role pill, topbar horizontal action strip, admin-style tabs, app-image controls, incident
+  IDs (unless explicitly enabled), status grids, and any raw technical terms.
+- **Compact home layout:**
+  1. Hero status card — large headline, status color, one-sentence explanation, one
+     recommended next step.
+  2. Primary actions — *Notify admin*, *Check again*, and *Ask what's wrong* (only if LLM
+     available). No more than ~2 primary actions above the fold; no icon-only primary actions.
+  3. Visible apps list — icon/name + Working / Not working / Problem / Unknown + optional
+     one-sentence summary.
+  4. Per-app notification opt-in toggles.
+  5. Optional **technical details** — hidden by default.
+- **Plain-English mapping** (apply consistently in copy): container→app, endpoint failed→
+  not responding, WAN down→internet appears down, array stopped→server storage is not ready,
+  NAS unreachable→server cannot be reached, health check failed→app is not responding,
+  degraded→problem, online→working, offline→not working.
+- **Banned technical terms** in the default general-user view (allowed only in admin or a
+  hidden technical-details disclosure): container, docker, unraid, array, parity, endpoint,
+  graphql, probe, WAN, LAN, API, SSH, telemetry, SMART, syslog, filesystem, cache pool.
+- **Semantic UX audit in `cmd/visualcheck`:** extend the harness beyond pixel/overflow checks
+  with DOM-level assertions — e.g. compact home/chat visible, ≤5 status items above the fold,
+  no banned terms present, no admin tabs, no icon-only primary actions. Screenshots catch
+  aesthetics; these catch leaked admin/technical vocabulary.
+
+### B2 — Customization editor
+- **Structured compact-view editor** replacing raw JSON for the common cases: choose visible
+  apps, reorder (drag-and-drop), set friendly display names, pick icons, toggle the NAS/WAN
+  status tiles, and toggle chat/LLM availability for general users.
+- **Icon picker** sourced from the bundled `web/public/app-icons/*.svg`, Docker-label icons,
+  and admin icon-override URLs. Reuse the existing URL sanitization rules (unsupported
+  schemes / embedded credentials rejected — see `docs/security.md`).
 - **Live preview** of the compact surface while editing.
 - **Per-device vs shared.** Today, overview monitor visibility/order are client-side
   localStorage prefs (per admin device). Decide explicitly which noob-view settings are
-  shared runtime settings (persisted, affect all users) vs per-device prefs, and label
-  them in the UI so the distinction is obvious.
+  shared runtime settings (persisted, affect all users) vs per-device prefs, and label them
+  in the UI so the distinction is obvious.
 
 ### Constraints
 - All persisted mutations stay admin-only, CSRF-protected, and audited; the compact router
@@ -131,19 +213,29 @@ through structured controls instead of JSON editors.
   settings state.
 - Keep the JSON editors as an "advanced" fallback — the structured UI is additive, not a
   replacement that drops capability.
+- Backend scope stays frozen for this workstream (no new adapters/integrations); changes are
+  UI, presentation, and UX tests.
 
 ### Likely files
 `web/public/app.js`, `web/public/styles.css`, `web/public/index.html`,
-`internal/models/models.go`, settings handlers in `internal/server/server.go`,
-`internal/db/store.go`.
+`cmd/visualcheck` (semantic UX audit), `internal/models/models.go`, settings handlers in
+`internal/server/server.go`, `internal/db/store.go`. A UX spec should also be written to
+`docs/` before implementation (e.g. `docs/ux-compact.md`).
 
 ### Acceptance criteria
+- [ ] On the compact general-user view, a non-technical user can answer the four questions
+      from the first screen.
+- [ ] No banned technical terms appear in the default general-user UI (enforced by the
+      semantic audit); admin-only terms stay on the admin surface or behind technical details.
+- [ ] No horizontal overflow; ≥44px touch targets; readable on a 390×844 viewport.
 - [ ] An admin can curate the noob view (visible apps, order, names, icons, tiles, chat)
       without touching JSON.
 - [ ] Changes persist, survive restart, and reflect on the compact port.
 - [ ] Shared vs per-device settings are clearly distinguished in the UI.
 - [ ] Icon inputs are sanitized; bad URLs/schemes are rejected with feedback.
-- [ ] `go test ./...`, build, and `visual-check.ps1` all pass.
+- [ ] PR includes mobile screenshots (390×844) for: compact home, app-down, internet-down,
+      server-down, and a general-user LLM response.
+- [ ] `go test ./...`, build, `visual-check.ps1`, and the new semantic UX audit all pass.
 
 ---
 
@@ -158,7 +250,18 @@ This is the highest-risk workstream. Treat OpenCode and Codex as **reference des
 the permission/approval model**, but keep NoobBoard's tool surface deliberately narrower
 than a general coding agent.
 
-### Part 1 — Customizable LLM access (lower risk, do first)
+> **Sequencing principle (from the product review): make the LLM more *useful* before more
+> *powerful*.** The current safety policy is directionally correct; the gap is presentation
+> and workflow, not model authority. Ship Part 1 (presentation + customization) and prove it
+> is genuinely helpful to a non-technical user *before* granting any action-taking authority
+> in Part 2.
+
+### Part 1 — Customizable LLM access + presentation (lower risk, do first)
+- **User-facing presentation.** The compact LLM result should render as a clear
+  **headline + plain-English explanation + recommended next step + admin-message status**,
+  not a raw diagnostic dump. Add presentation/guided-prompt fields to the response surface
+  without changing provider behavior or relaxing redaction. (Ties directly into Workstream
+  B's compact home layout.)
 - Surface a friendly settings UI over the existing `models.LLMPolicy` map: provider +
   model selection, which roles may use the LLM, per-policy context byte/line limits,
   include-logs toggle, and the (future) web-research toggle described in
@@ -234,15 +337,26 @@ lands** — those docs currently state the LLM has no repair tools or Docker con
 
 ## Suggested sequencing
 
-1. **A (setup wizard)** and **B (noob UI)** are largely independent and can proceed in
-   parallel; both touch `web/public` and settings handlers, so coordinate frontend changes.
-2. **C Part 1 (LLM customization)** can start anytime; it reuses existing policy structures.
-3. **C Part 2 (agent access)** should land last and only after the audit/notification and
-   approval-UI groundwork from Part 1 exists. It also benefits from the setup wizard (A)
-   for provisioning the provider credentials it relies on.
+The product review's headline guidance: **freeze backend scope, fix the compact UX, and make
+the LLM useful before making it powerful.**
+
+1. **B (compact noob UX)** is the priority — start with B1 (the redesign) using the
+   Multi-agent UX workflow, then B2 (customization). Do not add backend features here.
+2. **A (setup wizard)** can proceed in parallel; it shares `web/public` and settings
+   handlers with B, so coordinate frontend changes.
+3. **C Part 1 (LLM presentation + customization)** pairs naturally with B (the compact LLM
+   result is part of the home layout) and reuses existing policy structures.
+4. **C Part 2 (agent access)** lands last — only after Part 1 proves the LLM is useful, and
+   after the audit/notification and approval-UI groundwork exists. It also benefits from the
+   setup wizard (A) for provisioning provider credentials.
 
 ## References
 
+- **Product review (origin of the UX workflow and compact-UX guidance):** a multi-agent
+  design review of the Codex-built app. Key conclusions integrated above — compact app is a
+  household status remote, split UX-designer vs implementer agent roles, freeze backend
+  scope, literacy/semantic audits, "useful before powerful." (Reproduce by giving a UX agent
+  the live screenshots + the constraints in Workstream B.)
 - OpenCode — providers, tools/permissions, agents, MCP: https://opencode.ai/docs/
 - Codex — approval modes, sandbox, login/auth: https://github.com/openai/codex
 - Existing internal notes: `docs/opencode-evaluation.md`, `docs/llm-policy.md`,
