@@ -179,7 +179,7 @@ complementary, and either can run first without breaking the other.
 
 ## Workstream B — Compact "noob" UX (redesign + easy customization)
 
-**Status:** `not-started`
+**Status:** `in-progress` (B1 spec written → `docs/ux-compact.md`; implementation not started)
 **Goal:** Make the compact surface genuinely usable by an extremely non-technical iPhone
 user (the redesign), and make it easy for an admin to tailor what that user sees (the
 customization editor). The redesign is the foundation; customization sits on top of it.
@@ -245,8 +245,8 @@ server problem? Tell the admin? Avoid touching anything?*
 ### Likely files
 `web/public/app.js`, `web/public/styles.css`, `web/public/index.html`,
 `cmd/visualcheck` (semantic UX audit), `internal/models/models.go`, settings handlers in
-`internal/server/server.go`, `internal/db/store.go`. A UX spec should also be written to
-`docs/` before implementation (e.g. `docs/ux-compact.md`).
+`internal/server/server.go`, `internal/db/store.go`. The B1 redesign spec (compact surface)
+is written: **`docs/ux-compact.md`** — implement B1 against it before starting B2.
 
 ### Acceptance criteria
 - [ ] On the compact general-user view, a non-technical user can answer the four questions
