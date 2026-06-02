@@ -8,8 +8,13 @@
     2. Downloads Go module dependencies and builds a self-contained noobboard.exe.
     3. Installs the app: by default, copies the binary to a stable location and registers
        the NoobBoard Windows service (requires an elevated/Administrator prompt).
+    4. Optionally prompts to add a LAN/WAN firewall rule and to set up the admin login now.
 
     The compiled binary embeds the web frontend, so a single .exe is all that gets installed.
+
+    The admin-login prompt only seeds the *bootstrap* credentials in the service config; it
+    does not mark setup as complete, so the future in-app setup wizard still runs and simply
+    continues from the accounts step. See docs/agent-roadmap.md and docs/deployment-windows.md.
 
 .PARAMETER NoService
     Build only. Skip copying to InstallDir and registering the Windows service.
@@ -87,6 +92,98 @@ function Confirm-Firewall {
     $choices = [System.Management.Automation.Host.ChoiceDescription[]]@($yes, $no)
     $answer  = $Host.UI.PromptForChoice($title, $message, $choices, 0)  # default = Yes
     return ($answer -eq 0)
+}
+
+function Confirm-AuthSetup {
+    # Ask whether to set up the admin login now. Skips silently in non-interactive sessions.
+    if (-not [Environment]::UserInteractive) {
+        Write-Warn2 'Non-interactive session; skipping admin login setup.'
+        return $false
+    }
+    $title   = 'Set up the NoobBoard admin login now?'
+    $message = 'Choose the admin username and password used to sign in. If you skip this, the ' +
+               'default development login (admin / change-me-now) applies until you change it, ' +
+               'and the in-app setup wizard will ask for it when that feature ships.'
+    $yes = New-Object System.Management.Automation.Host.ChoiceDescription(
+        '&Yes (recommended)', 'Enter an admin username and password now.')
+    $no  = New-Object System.Management.Automation.Host.ChoiceDescription(
+        '&No', 'Skip; use the default login or set it later in the app/wizard.')
+    $choices = [System.Management.Automation.Host.ChoiceDescription[]]@($yes, $no)
+    return ($Host.UI.PromptForChoice($title, $message, $choices, 0) -eq 0)
+}
+
+function ConvertFrom-SecureToPlain([System.Security.SecureString]$Secure) {
+    if (-not $Secure) { return '' }
+    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($Secure)
+    try { return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
+    finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+}
+
+function Read-AdminCredentials {
+    # Prompt for username (default 'admin') and a confirmed non-empty password.
+    $user = Read-Host 'Admin username [admin]'
+    if ([string]::IsNullOrWhiteSpace($user)) { $user = 'admin' }
+    if ($user -match '\s') {
+        Write-Warn2 'Username cannot contain whitespace; using "admin".'
+        $user = 'admin'
+    }
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        $p1 = ConvertFrom-SecureToPlain (Read-Host 'Admin password' -AsSecureString)
+        $p2 = ConvertFrom-SecureToPlain (Read-Host 'Confirm password' -AsSecureString)
+        if ([string]::IsNullOrEmpty($p1)) { Write-Warn2 'Password cannot be empty.'; continue }
+        if ($p1 -ne $p2)                  { Write-Warn2 'Passwords did not match; try again.'; continue }
+        return [pscustomobject]@{ Username = $user; Password = $p1 }
+    }
+    Write-Warn2 'Too many attempts; skipping admin login setup.'
+    return $null
+}
+
+function Set-NoobConfigAuth([string]$Path, [string]$Username, [string]$Password) {
+    # Merge bootstrap admin credentials into the simple key/value config file without
+    # clobbering other settings. Inserts under an existing 'auth:' section if present
+    # (idempotent re-runs don't accumulate headers). Written without a BOM (the Go config
+    # parser is BOM-sensitive).
+    $lines = @()
+    if (Test-Path -LiteralPath $Path) {
+        $lines = @(Get-Content -LiteralPath $Path)
+        if ($lines.Count -gt 0) { $lines[0] = $lines[0].TrimStart([char]0xFEFF) }
+    }
+    # Drop any bootstrap admin lines we may have written on a previous run.
+    $lines = @($lines | Where-Object { $_ -notmatch '^\s*bootstrap_admin_(username|password)\s*:' })
+    $userLine = "  bootstrap_admin_username: $Username"
+    $passLine = "  bootstrap_admin_password: $Password"
+
+    $authIdx = -1
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i].Trim() -eq 'auth:') { $authIdx = $i; break }
+    }
+
+    $out = @()
+    if ($authIdx -ge 0) {
+        $out += $lines[0..$authIdx]                 # everything up to and including 'auth:'
+        $out += $userLine
+        $out += $passLine
+        if ($authIdx -lt $lines.Count - 1) {
+            $out += $lines[($authIdx + 1)..($lines.Count - 1)]  # the rest
+        }
+    } else {
+        if ($lines.Count -gt 0) {
+            $out += $lines
+            if ($out[-1].Trim() -ne '') { $out += '' }
+        }
+        $out += @('auth:', $userLine, $passLine)
+    }
+    [System.IO.File]::WriteAllLines($Path, [string[]]$out, (New-Object System.Text.UTF8Encoding($false)))
+}
+
+function Protect-ConfigFile([string]$Path) {
+    # Restrict the config file (which holds the bootstrap password until first run) to
+    # Administrators and SYSTEM, which is the account the auto-start service runs under.
+    try {
+        & icacls $Path /inheritance:r /grant:r 'SYSTEM:F' 'Administrators:F' | Out-Null
+    } catch {
+        Write-Warn2 "Could not restrict permissions on $Path ($($_.Exception.Message))."
+    }
 }
 
 function Get-GoExe {
@@ -218,6 +315,35 @@ if (Confirm-Firewall) {
     }
 } else {
     Write-Ok 'Skipped firewall rule; NoobBoard is reachable only from this machine.'
+}
+
+# ---------------------------------------------------------------------------
+# 4. Optional: set up the admin login now
+# ---------------------------------------------------------------------------
+# This only seeds the *bootstrap* admin credentials in the service config. It does NOT mark
+# setup as complete: the future in-app setup wizard still runs and simply continues from the
+# accounts step (an admin already exists). See docs/agent-roadmap.md (Workstream A) and
+# docs/deployment-windows.md for the installer/wizard contract.
+$cfgDir  = Join-Path $env:ProgramData 'NoobBoard'
+$cfgFile = Join-Path $cfgDir 'config.yaml'
+$dbFile  = Join-Path $cfgDir 'data\dashboard.db.json'
+
+if (Confirm-AuthSetup) {
+    if (Test-Path -LiteralPath $dbFile) {
+        Write-Warn2 'A NoobBoard database already exists; bootstrap credentials only apply on first run.'
+        Write-Warn2 'To change an existing login, use the app settings (or the setup wizard) instead.'
+    }
+    $cred = Read-AdminCredentials
+    if ($cred) {
+        New-Item -ItemType Directory -Force -Path $cfgDir | Out-Null
+        Set-NoobConfigAuth -Path $cfgFile -Username $cred.Username -Password $cred.Password
+        Protect-ConfigFile -Path $cfgFile
+        Write-Ok "Saved admin login for user '$($cred.Username)' to $cfgFile"
+        Write-Host '    Stored until first run hashes it into the database; file restricted to Administrators/SYSTEM.' -ForegroundColor Gray
+    }
+} else {
+    Write-Ok 'Skipped admin login setup.'
+    Write-Host '    Default login (admin / change-me-now) applies until changed, or the setup wizard will ask.' -ForegroundColor Gray
 }
 
 if ($Start) {
