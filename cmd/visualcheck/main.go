@@ -65,6 +65,7 @@ type flags struct {
 	AppCardCount            int      `json:"appCardCount,omitempty"`
 	AppLogoCount            int      `json:"appLogoCount,omitempty"`
 	SettingsEditorCount     int      `json:"settingsEditorCount,omitempty"`
+	SettingsControlCount    int      `json:"settingsControlCount,omitempty"`
 	SettingsMenuButtonCount int      `json:"settingsMenuButtonCount,omitempty"`
 	VisibleSettingsSections int      `json:"visibleSettingsSections,omitempty"`
 	UserHomeVisible         bool     `json:"userHomeVisible,omitempty"`
@@ -547,10 +548,10 @@ func assertVisualFlags(overview, server, router, apps, settings, customization, 
 	if overview.ElementBoundsOverflow || server.ElementBoundsOverflow || router.ElementBoundsOverflow || apps.ElementBoundsOverflow || settings.ElementBoundsOverflow {
 		failures = append(failures, "desktop component bounds overflow detected: "+firstNonEmpty(overview.ElementBoundsOffender, server.ElementBoundsOffender, router.ElementBoundsOffender, apps.ElementBoundsOffender, settings.ElementBoundsOffender))
 	}
-	if settings.SettingsEditorCount < 4 {
-		failures = append(failures, "settings editors did not render")
+	if settings.SettingsControlCount < 12 {
+		failures = append(failures, "structured settings controls did not render")
 	}
-	if settings.SettingsMenuButtonCount < 6 {
+	if settings.SettingsMenuButtonCount < 7 {
 		failures = append(failures, "settings submenu did not render")
 	}
 	if settings.VisibleSettingsSections != 1 {
@@ -687,6 +688,10 @@ func newCDP(url string, debugPort int) (*cdpClient, error) {
 
 func (c *cdpClient) call(method string, params any) (json.RawMessage, error) {
 	c.id++
+	_ = c.conn.SetDeadline(time.Now().Add(30 * time.Second))
+	defer func() {
+		_ = c.conn.SetDeadline(time.Time{})
+	}()
 	request := map[string]any{
 		"id":     c.id,
 		"method": method,
@@ -1058,15 +1063,17 @@ function componentBoundsOffender() {
 const settingsExpression = `(async () => {
   document.querySelector('[data-tab="settings"]')?.click();
   const started = Date.now();
-  while (document.querySelectorAll('.settings-editor').length < 4 && Date.now() - started < 5000) {
+  while (document.querySelectorAll('.settings-card input,.settings-card select,.settings-card button').length < 12 && Date.now() - started < 5000) {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   const visibleSettingsSections = [...document.querySelectorAll('#tab-settings .settings-section')]
     .filter((element) => !element.hidden && getComputedStyle(element).display !== 'none').length;
+  const settingsControlCount = document.querySelectorAll('.settings-card input,.settings-card select,.settings-card button').length;
   const buttonTextOverflow = hasButtonTextOverflow();
   return {
     pageTitle: document.querySelector('#page-title')?.textContent || '',
     settingsEditorCount: document.querySelectorAll('.settings-editor').length,
+    settingsControlCount,
     settingsMenuButtonCount: document.querySelectorAll('#settings-menu [data-settings-section]').length,
     visibleSettingsSections,
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,

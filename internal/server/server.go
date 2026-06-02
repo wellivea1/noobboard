@@ -54,10 +54,11 @@ type Dependencies struct {
 }
 
 type App struct {
-	deps         Dependencies
-	sessions     *sessionStore
-	loginLimiter *loginLimiter
-	settingsMu   sync.RWMutex
+	deps                   Dependencies
+	sessions               *sessionStore
+	loginLimiter           *loginLimiter
+	settingsMu             sync.RWMutex
+	runtimeIntegrationsSet bool
 }
 
 const maxRequestBodyBytes int64 = 1 << 20
@@ -90,7 +91,9 @@ func New(deps Dependencies) (*App, error) {
 	if settings, ok, err := deps.Store.RuntimeSettings(); err != nil {
 		return nil, err
 	} else if ok {
-		app.applyRuntimeSettings(settings)
+		if err := app.applyRuntimeSettings(settings); err != nil {
+			return nil, err
+		}
 	}
 	return app, nil
 }
@@ -120,6 +123,8 @@ func (a *App) AdminRouter() http.Handler {
 	mux.HandleFunc("POST /api/admin/settings/apps", a.requireAdmin(a.updateAppCatalogSettings))
 	mux.HandleFunc("GET /api/admin/settings/llm", a.requireAdmin(a.getLLMSettings))
 	mux.HandleFunc("POST /api/admin/settings/llm", a.requireAdmin(a.updateLLMSettings))
+	mux.HandleFunc("GET /api/admin/settings/integrations", a.requireAdmin(a.getIntegrationSettings))
+	mux.HandleFunc("POST /api/admin/settings/integrations", a.requireAdmin(a.updateIntegrationSettings))
 	mux.HandleFunc("GET /api/admin/settings/notifications", a.requireAdmin(a.getNotificationSettings))
 	mux.HandleFunc("POST /api/admin/settings/notifications", a.requireAdmin(a.updateNotificationSettings))
 	mux.HandleFunc("GET /site-config.js", a.siteConfig(siteModeAdmin))
@@ -173,13 +178,13 @@ func (a *App) Flush() {
 }
 
 func (a *App) fullSnapshot(ctx context.Context) (models.Snapshot, error) {
-	cfg := a.configSnapshot()
-	infra, unraidLogs, err := a.deps.Collectors.Unraid.Status(ctx)
+	cfg, collectors := a.runtimeSnapshot()
+	infra, unraidLogs, err := collectors.Unraid.Status(ctx)
 	if err != nil {
 		infra = collectorFailureStatus("unraid", err)
 		unraidLogs = nil
 	}
-	apps, err := a.deps.Collectors.Docker.Apps(ctx)
+	apps, err := collectors.Docker.Apps(ctx)
 	if err != nil {
 		infra.DockerServiceAvailable = false
 		infra.SourceHealth.Docker = err.Error()
@@ -190,14 +195,14 @@ func (a *App) fullSnapshot(ctx context.Context) (models.Snapshot, error) {
 	} else {
 		infra.DockerServiceAvailable = true
 	}
-	if unifiInfra, err := a.deps.Collectors.UniFi.Status(ctx); err == nil {
+	if unifiInfra, err := collectors.UniFi.Status(ctx); err == nil {
 		mergeUniFiStatus(&infra, unifiInfra)
 	} else {
 		infra.UniFiWANUp = false
 		infra.UniFiGatewayReachable = false
 		infra.SourceHealth.UniFi = err.Error()
 	}
-	if probeInfra, err := a.deps.Collectors.Probes.Status(ctx); err == nil {
+	if probeInfra, err := collectors.Probes.Status(ctx); err == nil {
 		if probeSourceHasData(probeInfra.SourceHealth.Probes, "internet") {
 			infra.InternetReachable = probeInfra.InternetReachable
 		}
@@ -920,7 +925,14 @@ func (a *App) getLLMSettings(w http.ResponseWriter, _ *http.Request) {
 	a.settingsMu.RLock()
 	cfg := a.deps.Config.LLM
 	a.settingsMu.RUnlock()
-	writeJSON(w, http.StatusOK, cfg)
+	writeJSON(w, http.StatusOK, llmSettingsResponse(cfg))
+}
+
+func (a *App) getIntegrationSettings(w http.ResponseWriter, _ *http.Request) {
+	a.settingsMu.RLock()
+	cfg := a.deps.Config.Integrations
+	a.settingsMu.RUnlock()
+	writeJSON(w, http.StatusOK, integrationSettingsResponse(cfg))
 }
 
 func (a *App) getNotificationSettings(w http.ResponseWriter, _ *http.Request) {
@@ -1053,8 +1065,9 @@ func (a *App) updateLLMSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, err)
 		return
 	}
-	var settings config.LLMConfig
-	if err := json.NewDecoder(r.Body).Decode(&settings); err != nil {
+	current := a.configSnapshot().LLM
+	settings, err := decodeLLMSettingsUpdate(r, current)
+	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -1075,7 +1088,54 @@ func (a *App) updateLLMSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.deps.Audit.Record(mustUser(r).ID, "settings.llm.saved", map[string]interface{}{"path": r.URL.Path, "provider": settings.Provider})
-	writeJSON(w, http.StatusOK, settings)
+	writeJSON(w, http.StatusOK, llmSettingsResponse(settings))
+}
+
+func (a *App) updateIntegrationSettings(w http.ResponseWriter, r *http.Request) {
+	if err := requireCSRF(r); err != nil {
+		writeError(w, http.StatusForbidden, err)
+		return
+	}
+	current := a.configSnapshot().Integrations
+	settings, err := decodeIntegrationSettingsUpdate(r, current)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	settings, err = normalizeIntegrationSettings(settings)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	settings, err = hydrateIntegrationSecretFiles(settings)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	next := a.configSnapshot()
+	next.Integrations = settings
+	if err := next.Validate(); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	collectors := collectorsForConfig(next)
+	a.settingsMu.Lock()
+	a.deps.Config.Integrations = settings
+	a.deps.Collectors = collectors
+	a.runtimeIntegrationsSet = true
+	runtimeSettings := a.currentRuntimeSettingsLocked()
+	a.settingsMu.Unlock()
+	if err := a.deps.Store.SaveRuntimeSettings(runtimeSettings); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	a.deps.Audit.Record(mustUser(r).ID, "settings.integrations.saved", map[string]interface{}{
+		"path":       r.URL.Path,
+		"mode":       settings.Mode,
+		"unraid_set": settings.UnraidBaseURL != "" && settings.UnraidAPIKey != "",
+		"unifi_set":  settings.UniFiBaseURL != "" && settings.UniFiAPIKey != "",
+	})
+	writeJSON(w, http.StatusOK, integrationSettingsResponse(settings))
 }
 
 func (a *App) updateNotificationSettings(w http.ResponseWriter, r *http.Request) {
@@ -1101,10 +1161,316 @@ func (a *App) updateNotificationSettings(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, settings)
 }
 
+type llmSettingsView struct {
+	Enabled            bool                        `json:"enabled"`
+	Provider           string                      `json:"provider"`
+	OpenAIModel        string                      `json:"openai_model"`
+	OpenAIAPIKeySet    bool                        `json:"openai_api_key_set"`
+	AnthropicModel     string                      `json:"anthropic_model"`
+	AnthropicAPIKeySet bool                        `json:"anthropic_api_key_set"`
+	Timeout            time.Duration               `json:"timeout"`
+	Policies           map[string]models.LLMPolicy `json:"policies"`
+}
+
+type llmSettingsUpdate struct {
+	Enabled              *bool                       `json:"enabled"`
+	Provider             *string                     `json:"provider"`
+	OpenAIModel          *string                     `json:"openai_model"`
+	OpenAIAPIKey         *string                     `json:"openai_api_key"`
+	ClearOpenAIAPIKey    bool                        `json:"clear_openai_api_key"`
+	AnthropicModel       *string                     `json:"anthropic_model"`
+	AnthropicAPIKey      *string                     `json:"anthropic_api_key"`
+	ClearAnthropicAPIKey bool                        `json:"clear_anthropic_api_key"`
+	Timeout              *time.Duration              `json:"timeout"`
+	Policies             map[string]models.LLMPolicy `json:"policies"`
+}
+
+type integrationSettingsView struct {
+	Mode              string `json:"mode"`
+	UnraidBaseURL     string `json:"unraid_base_url"`
+	UnraidAPIKeySet   bool   `json:"unraid_api_key_set"`
+	UnraidAPIKeyFile  string `json:"unraid_api_key_file,omitempty"`
+	UnraidSSHFallback bool   `json:"unraid_ssh_fallback"`
+	UnraidSSHHost     string `json:"unraid_ssh_host,omitempty"`
+	UnraidSSHPort     int    `json:"unraid_ssh_port"`
+	UnraidSSHUser     string `json:"unraid_ssh_user,omitempty"`
+	UnraidSSHKeyFile  string `json:"unraid_ssh_key_file,omitempty"`
+	UnraidSSHCommand  string `json:"unraid_ssh_command,omitempty"`
+	UniFiBaseURL      string `json:"unifi_base_url"`
+	UniFiAPIKeySet    bool   `json:"unifi_api_key_set"`
+	UniFiAPIKeyFile   string `json:"unifi_api_key_file,omitempty"`
+	UniFiSiteID       string `json:"unifi_site_id"`
+	UniFiInsecureTLS  bool   `json:"unifi_insecure_tls"`
+	InternetProbeURL  string `json:"internet_probe_url"`
+	DNSProbeHost      string `json:"dns_probe_host"`
+	RouterProbeTarget string `json:"router_probe_target"`
+	NASProbeTarget    string `json:"nas_probe_target"`
+}
+
+type integrationSettingsUpdate struct {
+	Mode              *string `json:"mode"`
+	UnraidBaseURL     *string `json:"unraid_base_url"`
+	UnraidAPIKey      *string `json:"unraid_api_key"`
+	ClearUnraidAPIKey bool    `json:"clear_unraid_api_key"`
+	UnraidAPIKeyFile  *string `json:"unraid_api_key_file"`
+	UnraidSSHFallback *bool   `json:"unraid_ssh_fallback"`
+	UnraidSSHHost     *string `json:"unraid_ssh_host"`
+	UnraidSSHPort     *int    `json:"unraid_ssh_port"`
+	UnraidSSHUser     *string `json:"unraid_ssh_user"`
+	UnraidSSHKeyFile  *string `json:"unraid_ssh_key_file"`
+	UnraidSSHCommand  *string `json:"unraid_ssh_command"`
+	UniFiBaseURL      *string `json:"unifi_base_url"`
+	UniFiAPIKey       *string `json:"unifi_api_key"`
+	ClearUniFiAPIKey  bool    `json:"clear_unifi_api_key"`
+	UniFiAPIKeyFile   *string `json:"unifi_api_key_file"`
+	UniFiSiteID       *string `json:"unifi_site_id"`
+	UniFiInsecureTLS  *bool   `json:"unifi_insecure_tls"`
+	InternetProbeURL  *string `json:"internet_probe_url"`
+	DNSProbeHost      *string `json:"dns_probe_host"`
+	RouterProbeTarget *string `json:"router_probe_target"`
+	NASProbeTarget    *string `json:"nas_probe_target"`
+}
+
+func llmSettingsResponse(cfg config.LLMConfig) llmSettingsView {
+	return llmSettingsView{
+		Enabled:            cfg.Enabled,
+		Provider:           cfg.Provider,
+		OpenAIModel:        cfg.OpenAIModel,
+		OpenAIAPIKeySet:    strings.TrimSpace(cfg.OpenAIAPIKey) != "",
+		AnthropicModel:     cfg.AnthropicModel,
+		AnthropicAPIKeySet: strings.TrimSpace(cfg.AnthropicAPIKey) != "",
+		Timeout:            cfg.Timeout,
+		Policies:           cfg.Policies,
+	}
+}
+
+func decodeLLMSettingsUpdate(r *http.Request, current config.LLMConfig) (config.LLMConfig, error) {
+	var update llmSettingsUpdate
+	if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
+		return config.LLMConfig{}, err
+	}
+	settings := current
+	if update.Enabled != nil {
+		settings.Enabled = *update.Enabled
+	}
+	if update.Provider != nil {
+		settings.Provider = strings.TrimSpace(*update.Provider)
+	}
+	if update.OpenAIModel != nil {
+		settings.OpenAIModel = strings.TrimSpace(*update.OpenAIModel)
+	}
+	if update.ClearOpenAIAPIKey {
+		settings.OpenAIAPIKey = ""
+	} else if update.OpenAIAPIKey != nil {
+		if key := strings.TrimSpace(*update.OpenAIAPIKey); key != "" {
+			settings.OpenAIAPIKey = key
+		}
+	}
+	if update.AnthropicModel != nil {
+		settings.AnthropicModel = strings.TrimSpace(*update.AnthropicModel)
+	}
+	if update.ClearAnthropicAPIKey {
+		settings.AnthropicAPIKey = ""
+	} else if update.AnthropicAPIKey != nil {
+		if key := strings.TrimSpace(*update.AnthropicAPIKey); key != "" {
+			settings.AnthropicAPIKey = key
+		}
+	}
+	if update.Timeout != nil {
+		settings.Timeout = *update.Timeout
+	}
+	if update.Policies != nil {
+		settings.Policies = update.Policies
+	}
+	return settings, nil
+}
+
+func integrationSettingsResponse(cfg config.IntegrationConfig) integrationSettingsView {
+	return integrationSettingsView{
+		Mode:              cfg.Mode,
+		UnraidBaseURL:     cfg.UnraidBaseURL,
+		UnraidAPIKeySet:   strings.TrimSpace(cfg.UnraidAPIKey) != "",
+		UnraidAPIKeyFile:  cfg.UnraidAPIKeyFile,
+		UnraidSSHFallback: cfg.UnraidSSHFallback,
+		UnraidSSHHost:     cfg.UnraidSSHHost,
+		UnraidSSHPort:     cfg.UnraidSSHPort,
+		UnraidSSHUser:     cfg.UnraidSSHUser,
+		UnraidSSHKeyFile:  cfg.UnraidSSHKeyFile,
+		UnraidSSHCommand:  cfg.UnraidSSHCommand,
+		UniFiBaseURL:      cfg.UniFiBaseURL,
+		UniFiAPIKeySet:    strings.TrimSpace(cfg.UniFiAPIKey) != "",
+		UniFiAPIKeyFile:   cfg.UniFiAPIKeyFile,
+		UniFiSiteID:       cfg.UniFiSiteID,
+		UniFiInsecureTLS:  cfg.UniFiInsecureTLS,
+		InternetProbeURL:  cfg.InternetProbeURL,
+		DNSProbeHost:      cfg.DNSProbeHost,
+		RouterProbeTarget: cfg.RouterProbeTarget,
+		NASProbeTarget:    cfg.NASProbeTarget,
+	}
+}
+
+func decodeIntegrationSettingsUpdate(r *http.Request, current config.IntegrationConfig) (config.IntegrationConfig, error) {
+	var update integrationSettingsUpdate
+	if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
+		return config.IntegrationConfig{}, err
+	}
+	settings := current
+	if update.Mode != nil {
+		settings.Mode = strings.TrimSpace(*update.Mode)
+	}
+	if update.UnraidBaseURL != nil {
+		settings.UnraidBaseURL = strings.TrimSpace(*update.UnraidBaseURL)
+	}
+	if update.ClearUnraidAPIKey {
+		settings.UnraidAPIKey = ""
+	} else if update.UnraidAPIKey != nil {
+		if key := strings.TrimSpace(*update.UnraidAPIKey); key != "" {
+			settings.UnraidAPIKey = key
+		}
+	}
+	if update.UnraidAPIKeyFile != nil {
+		settings.UnraidAPIKeyFile = strings.TrimSpace(*update.UnraidAPIKeyFile)
+	}
+	if update.UnraidSSHFallback != nil {
+		settings.UnraidSSHFallback = *update.UnraidSSHFallback
+	}
+	if update.UnraidSSHHost != nil {
+		settings.UnraidSSHHost = strings.TrimSpace(*update.UnraidSSHHost)
+	}
+	if update.UnraidSSHPort != nil {
+		settings.UnraidSSHPort = *update.UnraidSSHPort
+	}
+	if update.UnraidSSHUser != nil {
+		settings.UnraidSSHUser = strings.TrimSpace(*update.UnraidSSHUser)
+	}
+	if update.UnraidSSHKeyFile != nil {
+		settings.UnraidSSHKeyFile = strings.TrimSpace(*update.UnraidSSHKeyFile)
+	}
+	if update.UnraidSSHCommand != nil {
+		settings.UnraidSSHCommand = strings.TrimSpace(*update.UnraidSSHCommand)
+	}
+	if update.UniFiBaseURL != nil {
+		settings.UniFiBaseURL = strings.TrimSpace(*update.UniFiBaseURL)
+	}
+	if update.ClearUniFiAPIKey {
+		settings.UniFiAPIKey = ""
+	} else if update.UniFiAPIKey != nil {
+		if key := strings.TrimSpace(*update.UniFiAPIKey); key != "" {
+			settings.UniFiAPIKey = key
+		}
+	}
+	if update.UniFiAPIKeyFile != nil {
+		settings.UniFiAPIKeyFile = strings.TrimSpace(*update.UniFiAPIKeyFile)
+	}
+	if update.UniFiSiteID != nil {
+		settings.UniFiSiteID = strings.TrimSpace(*update.UniFiSiteID)
+	}
+	if update.UniFiInsecureTLS != nil {
+		settings.UniFiInsecureTLS = *update.UniFiInsecureTLS
+	}
+	if update.InternetProbeURL != nil {
+		settings.InternetProbeURL = strings.TrimRight(strings.TrimSpace(*update.InternetProbeURL), "/")
+	}
+	if update.DNSProbeHost != nil {
+		settings.DNSProbeHost = strings.TrimSpace(*update.DNSProbeHost)
+	}
+	if update.RouterProbeTarget != nil {
+		settings.RouterProbeTarget = strings.TrimRight(strings.TrimSpace(*update.RouterProbeTarget), "/")
+	}
+	if update.NASProbeTarget != nil {
+		settings.NASProbeTarget = strings.TrimRight(strings.TrimSpace(*update.NASProbeTarget), "/")
+	}
+	return settings, nil
+}
+
+func normalizeIntegrationSettings(settings config.IntegrationConfig) (config.IntegrationConfig, error) {
+	defaults := config.Defaults().Integrations
+	settings.Mode = strings.TrimSpace(settings.Mode)
+	if settings.Mode == "" {
+		settings.Mode = defaults.Mode
+	}
+	if settings.UnraidSSHPort == 0 {
+		settings.UnraidSSHPort = defaults.UnraidSSHPort
+	}
+	if strings.TrimSpace(settings.UnraidSSHCommand) == "" {
+		settings.UnraidSSHCommand = defaults.UnraidSSHCommand
+	}
+	if strings.TrimSpace(settings.UniFiSiteID) == "" {
+		settings.UniFiSiteID = defaults.UniFiSiteID
+	}
+	if settings.UnraidBaseURL != "" {
+		normalized, err := config.NormalizeIntegrationBaseURL(settings.UnraidBaseURL, "http")
+		if err != nil {
+			return config.IntegrationConfig{}, fmt.Errorf("unraid_base_url: %w", err)
+		}
+		settings.UnraidBaseURL = normalized
+	}
+	if settings.UniFiBaseURL != "" {
+		normalized, err := config.NormalizeIntegrationBaseURL(settings.UniFiBaseURL, "https")
+		if err != nil {
+			return config.IntegrationConfig{}, fmt.Errorf("unifi_base_url: %w", err)
+		}
+		settings.UniFiBaseURL = normalized
+	}
+	settings.UnraidAPIKey = strings.TrimSpace(settings.UnraidAPIKey)
+	settings.UnraidAPIKeyFile = strings.TrimSpace(settings.UnraidAPIKeyFile)
+	settings.UnraidSSHHost = strings.TrimSpace(settings.UnraidSSHHost)
+	settings.UnraidSSHUser = strings.TrimSpace(settings.UnraidSSHUser)
+	settings.UnraidSSHKeyFile = strings.TrimSpace(settings.UnraidSSHKeyFile)
+	settings.UnraidSSHCommand = strings.TrimSpace(settings.UnraidSSHCommand)
+	settings.UniFiAPIKey = strings.TrimSpace(settings.UniFiAPIKey)
+	settings.UniFiAPIKeyFile = strings.TrimSpace(settings.UniFiAPIKeyFile)
+	settings.UniFiSiteID = strings.TrimSpace(settings.UniFiSiteID)
+	settings.InternetProbeURL = strings.TrimRight(strings.TrimSpace(settings.InternetProbeURL), "/")
+	settings.DNSProbeHost = strings.TrimSpace(settings.DNSProbeHost)
+	settings.RouterProbeTarget = strings.TrimRight(strings.TrimSpace(settings.RouterProbeTarget), "/")
+	settings.NASProbeTarget = strings.TrimRight(strings.TrimSpace(settings.NASProbeTarget), "/")
+	return settings, nil
+}
+
+func hydrateIntegrationSecretFiles(settings config.IntegrationConfig) (config.IntegrationConfig, error) {
+	if settings.UnraidAPIKeyFile != "" {
+		secret, err := config.ReadSecretFile(settings.UnraidAPIKeyFile)
+		if err != nil {
+			return config.IntegrationConfig{}, fmt.Errorf("unraid api key file: %w", err)
+		}
+		settings.UnraidAPIKey = secret
+	}
+	if settings.UniFiAPIKeyFile != "" {
+		secret, err := config.ReadSecretFile(settings.UniFiAPIKeyFile)
+		if err != nil {
+			return config.IntegrationConfig{}, fmt.Errorf("unifi api key file: %w", err)
+		}
+		settings.UniFiAPIKey = secret
+	}
+	return settings, nil
+}
+
+func integrationSettingsPresent(settings config.IntegrationConfig) bool {
+	return settings.Mode != "" ||
+		settings.UnraidBaseURL != "" ||
+		settings.UnraidAPIKey != "" ||
+		settings.UnraidAPIKeyFile != "" ||
+		settings.UnraidSSHHost != "" ||
+		settings.UniFiBaseURL != "" ||
+		settings.UniFiAPIKey != "" ||
+		settings.UniFiAPIKeyFile != "" ||
+		settings.InternetProbeURL != "" ||
+		settings.DNSProbeHost != "" ||
+		settings.RouterProbeTarget != "" ||
+		settings.NASProbeTarget != ""
+}
+
 func (a *App) configSnapshot() config.Config {
 	a.settingsMu.RLock()
 	defer a.settingsMu.RUnlock()
 	return a.deps.Config
+}
+
+func (a *App) runtimeSnapshot() (config.Config, Collectors) {
+	a.settingsMu.RLock()
+	defer a.settingsMu.RUnlock()
+	return a.deps.Config, a.deps.Collectors
 }
 
 func (a *App) redactorSnapshot() *privacy.Redactor {
@@ -1120,16 +1486,30 @@ func (a *App) llmRuntimeSnapshot() (config.Config, llm.Client) {
 }
 
 func (a *App) currentRuntimeSettingsLocked() db.RuntimeSettings {
-	return db.RuntimeSettings{
+	settings := db.RuntimeSettings{
 		Visibility:    a.deps.Config.Visibility,
 		Privacy:       a.deps.Config.Privacy,
 		AppCatalog:    a.deps.Config.AppCatalog,
 		LLM:           a.deps.Config.LLM,
 		Notifications: a.deps.Config.Notifications,
 	}
+	if a.runtimeIntegrationsSet {
+		settings.Integrations = runtimeIntegrationSettings(a.deps.Config.Integrations)
+	}
+	return settings
 }
 
-func (a *App) applyRuntimeSettings(settings db.RuntimeSettings) {
+func runtimeIntegrationSettings(settings config.IntegrationConfig) config.IntegrationConfig {
+	if settings.UnraidAPIKeyFile != "" {
+		settings.UnraidAPIKey = ""
+	}
+	if settings.UniFiAPIKeyFile != "" {
+		settings.UniFiAPIKey = ""
+	}
+	return settings
+}
+
+func (a *App) applyRuntimeSettings(settings db.RuntimeSettings) error {
 	a.settingsMu.Lock()
 	defer a.settingsMu.Unlock()
 	a.deps.Config.Visibility = normalizeVisibilitySettings(settings.Visibility)
@@ -1140,10 +1520,109 @@ func (a *App) applyRuntimeSettings(settings db.RuntimeSettings) {
 	a.deps.Config.AppCatalog = settings.AppCatalog
 	settings.LLM = normalizeLLMSettings(settings.LLM)
 	a.deps.Config.LLM = settings.LLM
+	if integrationSettingsPresent(settings.Integrations) {
+		integrations, err := normalizeIntegrationSettings(settings.Integrations)
+		if err != nil {
+			return err
+		}
+		integrations, err = hydrateIntegrationSecretFiles(integrations)
+		if err != nil {
+			return err
+		}
+		a.deps.Config.Integrations = integrations
+		a.deps.Collectors = collectorsForConfig(a.deps.Config)
+		a.runtimeIntegrationsSet = true
+	}
 	a.deps.Config.Notifications = settings.Notifications
 	a.deps.Redactor = privacy.NewRedactor(settings.Privacy)
 	a.deps.LLM = llm.NewClient(settings.LLM, a.deps.Redactor)
 	a.deps.Notifications.UpdateConfig(settings.Notifications)
+	return nil
+}
+
+func collectorsForConfig(cfg config.Config) Collectors {
+	collectors := unavailableCollectors(cfg)
+	if cfg.Integrations.Mode == "fixture" || cfg.Integrations.Mode == "mixed" {
+		collectors = Collectors{
+			Unraid: unraid.NewFixtureClient(cfg.FixtureDir, cfg.FixtureScenario),
+			Docker: docker.NewFixtureClient(cfg.FixtureDir, cfg.FixtureScenario),
+			UniFi:  unifi.NewFixtureClient(cfg.FixtureDir, cfg.FixtureScenario),
+			Probes: probes.NewFixtureClient(cfg.FixtureDir, cfg.FixtureScenario),
+		}
+	}
+	if cfg.Integrations.Mode == "live" || cfg.Integrations.Mode == "mixed" {
+		if cfg.Integrations.UnraidBaseURL != "" && cfg.Integrations.UnraidAPIKey != "" {
+			collectors.Unraid = unraid.NewLiveClient(cfg.Integrations.UnraidBaseURL, cfg.Integrations.UnraidAPIKey)
+			collectors.Docker = docker.NewUnraidLiveClient(cfg.Integrations.UnraidBaseURL, cfg.Integrations.UnraidAPIKey)
+		}
+		if cfg.Integrations.UnraidSSHFallback {
+			sshDocker := docker.NewSSHClient(docker.SSHOptions{
+				Host:    cfg.Integrations.UnraidSSHHost,
+				Port:    cfg.Integrations.UnraidSSHPort,
+				User:    cfg.Integrations.UnraidSSHUser,
+				KeyFile: cfg.Integrations.UnraidSSHKeyFile,
+				Command: cfg.Integrations.UnraidSSHCommand,
+			})
+			if collectors.Docker != nil {
+				collectors.Docker = docker.NewLargestListClient(collectors.Docker, sshDocker)
+			} else {
+				collectors.Docker = sshDocker
+			}
+		}
+		if cfg.Integrations.UniFiBaseURL != "" && cfg.Integrations.UniFiAPIKey != "" {
+			collectors.UniFi = unifi.NewLiveClient(cfg.Integrations.UniFiBaseURL, cfg.Integrations.UniFiAPIKey, cfg.Integrations.UniFiSiteID, cfg.Integrations.UniFiInsecureTLS)
+		}
+	}
+	return collectors
+}
+
+func unavailableCollectors(cfg config.Config) Collectors {
+	return Collectors{
+		Unraid: unavailableUnraidClient("unraid live credentials are not configured"),
+		Docker: unavailableDockerClient("unraid docker live credentials are not configured"),
+		UniFi:  unavailableUniFiClient("unifi live credentials are not configured"),
+		Probes: probes.NewLiveClient(probes.LiveConfig{
+			InternetURL:  cfg.Integrations.InternetProbeURL,
+			DNSHost:      cfg.Integrations.DNSProbeHost,
+			RouterTarget: firstNonEmpty(cfg.Integrations.RouterProbeTarget, cfg.Integrations.UniFiBaseURL),
+			NASTarget:    firstNonEmpty(cfg.Integrations.NASProbeTarget, cfg.Integrations.UnraidBaseURL),
+		}),
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+type unavailableUnraidClient string
+
+func (c unavailableUnraidClient) Status(context.Context) (models.InfrastructureStatus, []models.LogLine, error) {
+	return models.InfrastructureStatus{}, nil, errors.New(string(c))
+}
+
+type unavailableDockerClient string
+
+func (c unavailableDockerClient) Apps(context.Context) ([]models.AppStatus, error) {
+	return nil, errors.New(string(c))
+}
+
+func (c unavailableDockerClient) ControlContainer(context.Context, models.AppStatus, docker.ContainerAction) (docker.ControlResult, error) {
+	return docker.ControlResult{}, errors.New(string(c))
+}
+
+func (c unavailableDockerClient) Logs(context.Context, models.AppStatus, docker.LogOptions) ([]models.LogLine, error) {
+	return nil, errors.New(string(c))
+}
+
+type unavailableUniFiClient string
+
+func (c unavailableUniFiClient) Status(context.Context) (models.InfrastructureStatus, error) {
+	return models.InfrastructureStatus{}, errors.New(string(c))
 }
 
 func (a *App) defaultRole() models.Role {

@@ -16,7 +16,10 @@ The service is built around these boundaries:
   context on Stop/Shutdown. Run from a console it falls back to signal-based foreground mode.
 - The backend exposes two HTTP routers on separate ports: the admin site has the detailed panel and `/api/admin/*`; the compact site serves the lightweight compact web app and shared user APIs only.
 - Overview monitor visibility and order are client-side preferences. They use local storage so each admin device can hide and arrange live status rows without mutating shared runtime settings.
-- Runtime settings are grouped behind a frontend settings submenu. The role editor remains a structured UI, while lower-level visibility, blacklist, app image, LLM, and notification settings stay in focused JSON editor sections.
+- Runtime settings are grouped behind a frontend settings submenu. Role access, visibility,
+  blacklist, app image, LLM, integration, and notification settings use structured admin
+  controls rather than raw JSON editors. API key fields are write-only in the UI: settings
+  responses report whether a key is configured, but never echo key material.
 
 Initial implementation uses fixture collectors. Real adapters should implement the same interfaces in `internal/adapters/*` without changing the server, rule engine, privacy, notification, or LLM policy layers.
 

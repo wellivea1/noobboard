@@ -44,6 +44,7 @@ type RuntimeSettings struct {
 	Privacy       config.PrivacyConfig      `json:"privacy"`
 	AppCatalog    config.AppCatalogConfig   `json:"app_catalog"`
 	LLM           config.LLMConfig          `json:"llm"`
+	Integrations  config.IntegrationConfig  `json:"integrations"`
 	Notifications config.NotificationConfig `json:"notifications"`
 }
 

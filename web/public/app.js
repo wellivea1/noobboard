@@ -23,11 +23,12 @@ const OVERVIEW_ORDER_STORAGE_KEY = "noobboard.overviewOrder.v1";
 const OVERVIEW_MONITOR_IDS = ["overview.overall", "overview.server", "overview.router", "overview.apps"];
 const SITE_MODE = String(window.__NOOBBOARD_SITE_MODE__ || window.__HSD_SITE_MODE__ || "admin").toLowerCase() === "compact" ? "compact" : "admin";
 const SETTINGS_ENDPOINTS = [
-  { title: "Visibility", section: "visibility", path: "/api/admin/settings/visibility", rows: 10 },
-  { title: "Blacklist", section: "blacklist", path: "/api/admin/settings/blacklist", rows: 16 },
-  { title: "App Images", section: "apps", path: "/api/admin/settings/apps", rows: 10 },
-  { title: "LLM", section: "llm", path: "/api/admin/settings/llm", rows: 18 },
-  { title: "Notifications", section: "notifications", path: "/api/admin/settings/notifications", rows: 10 },
+  { title: "Visibility", section: "visibility", path: "/api/admin/settings/visibility" },
+  { title: "Blacklist", section: "blacklist", path: "/api/admin/settings/blacklist" },
+  { title: "App Images", section: "apps", path: "/api/admin/settings/apps" },
+  { title: "LLM", section: "llm", path: "/api/admin/settings/llm" },
+  { title: "Integrations", section: "integrations", path: "/api/admin/settings/integrations" },
+  { title: "Notifications", section: "notifications", path: "/api/admin/settings/notifications" },
 ];
 const BUILTIN_APP_ICON_RULES = [
   { icon: "media-server", label: "media server", patterns: ["emby", "jellyfin", "plex"] },
@@ -1365,7 +1366,15 @@ function roleStat(label, value) {
 }
 
 function usersForRole(roleName) {
-  return state.roleUsers.filter((user) => String(user.role || "") === String(roleName || ""));
+  return assignableRoleUsers().filter((user) => String(user.role || "") === String(roleName || ""));
+}
+
+function assignableRoleUsers() {
+  return state.roleUsers.filter((user) => String(user.role || "") !== "admin");
+}
+
+function accountRoles(roles) {
+  return [{ role: "admin", display_name: "Admin" }, ...roles];
 }
 
 function roleAssignmentSection(role, roles) {
@@ -1387,7 +1396,7 @@ function roleAssignmentSection(role, roles) {
       }),
     ),
     node("div", { class: "role-assignment-list" },
-      state.roleUsers.length ? state.roleUsers.map((user) => roleAssignmentRow(user, roles, role.role)) : node("span", { class: "empty inline-empty", text: "No users" }),
+      assignableRoleUsers().length ? assignableRoleUsers().map((user) => roleAssignmentRow(user, roles, role.role)) : node("span", { class: "empty inline-empty", text: "No non-admin users" }),
     ),
   );
 }
@@ -1415,7 +1424,7 @@ function roleAssignmentRow(user, roles, selectedRole) {
 
 function changedRoleAssignmentCount() {
   const original = new Map((state.roleUsersOriginal || []).map((user) => [user.username, String(user.role || "")]));
-  return state.roleUsers.filter((user) => String(user.role || "") !== (original.get(user.username) || "")).length;
+  return assignableRoleUsers().filter((user) => String(user.role || "") !== (original.get(user.username) || "")).length;
 }
 
 function visibleRoleAppCount(role) {
@@ -1473,10 +1482,11 @@ function updateRoleApp(role, appID, visible) {
 }
 
 function renderUserManagement(roles) {
+  const userRoles = accountRoles(roles);
   const username = node("input", { placeholder: "Username", autocomplete: "off" });
   const displayName = node("input", { placeholder: "Display name", autocomplete: "off" });
   const password = node("input", { placeholder: "Password for new/reset", type: "password", autocomplete: "new-password" });
-  const roleSelect = node("select", {}, roles.map((role) => node("option", { value: role.role, text: role.display_name || role.role })));
+  const roleSelect = node("select", {}, userRoles.map((role) => node("option", { value: role.role, text: role.display_name || role.role })));
   const disabled = node("input", { type: "checkbox" });
   return node("section", { class: "user-editor" },
     node("div", { class: "section-head" },
@@ -1502,7 +1512,7 @@ function renderUserManagement(roles) {
           node("strong", { text: user.display_name || user.username }),
           node("small", { text: user.username }),
         ),
-        node("span", { class: `user-role ${user.disabled ? "disabled" : ""}`, text: user.disabled ? "Disabled" : roleDisplayName(roles, user.role) }),
+        node("span", { class: `user-role ${user.disabled ? "disabled" : ""}`, text: user.disabled ? "Disabled" : roleDisplayName(userRoles, user.role) }),
       ))),
       node("div", { class: "user-form-panel" },
         node("div", { class: "user-form-head" },
@@ -1570,7 +1580,7 @@ async function saveUser(fields) {
 
 async function saveRoleAssignments() {
   const original = new Map((state.roleUsersOriginal || []).map((user) => [user.username, String(user.role || "")]));
-  const changed = state.roleUsers.filter((user) => String(user.role || "") !== (original.get(user.username) || ""));
+  const changed = assignableRoleUsers().filter((user) => String(user.role || "") !== (original.get(user.username) || ""));
   if (!changed.length) return;
   try {
     for (const user of changed) {
@@ -1630,39 +1640,530 @@ function clone(value) {
 }
 
 function renderSettingsCard(item, data) {
+  switch (item.section) {
+    case "visibility":
+      return renderVisibilitySettings(item, data);
+    case "blacklist":
+      return renderBlacklistSettings(item, data);
+    case "apps":
+      return renderAppImageSettings(item, data);
+    case "llm":
+      return renderLLMSettings(item, data);
+    case "integrations":
+      return renderIntegrationSettings(item, data);
+    case "notifications":
+      return renderNotificationSettings(item, data);
+    default:
+      return settingsCard(item, node("div", { class: "empty", text: "Unknown settings section." }));
+  }
+}
+
+function settingsCard(item, body, save) {
   const status = node("span", { class: "settings-save-state muted", "aria-live": "polite" });
-  const textarea = node("textarea", {
-    class: "settings-editor",
-    rows: item.rows,
-    spellcheck: "false",
-    "aria-label": `${item.title} JSON`,
-  }, JSON.stringify(data, null, 2));
-  const save = node("button", {
+  const saveButton = save ? node("button", {
     type: "button",
     class: "primary command",
     "data-glyph": "v",
-    onclick: () => saveSetting(item.title, item.path, textarea, status),
+    onclick: () => save(status),
     text: "Save",
-  });
+  }) : null;
   return node("article", { class: "settings-card settings-section", "data-settings-section": item.section },
     node("header", {},
       node("h3", { text: item.title }),
-      node("div", { class: "settings-actions" }, save, status),
+      node("div", { class: "settings-actions" }, saveButton, status),
     ),
-    textarea,
+    body,
   );
 }
 
-async function saveSetting(title, path, textarea, status) {
-  let payload;
-  try {
-    payload = JSON.parse(textarea.value);
-  } catch (error) {
-    status.textContent = "Invalid JSON";
-    status.dataset.tone = "error";
-    showNotice(`${title}: ${error.message}`, "error");
-    return;
+function renderVisibilitySettings(item, data) {
+  const settings = clone(data || {});
+  settings.roles ||= [];
+  const roleOptions = settings.roles.map((role) => ({ value: role.role, label: role.display_name || role.role }));
+  const defaultRole = settingSelectField("Default role", settings.default_role || "general_user", roleOptions);
+  const chat = settingToggle("Status chat", settings.general_user_can_use_llm !== false);
+  const nas = settingToggle("Server health", settings.show_nas_status_to_users !== false);
+  const wan = settingToggle("Router status", settings.show_wan_status_to_users !== false);
+  const incidentIDs = settingToggle("Incident IDs", !!settings.show_incident_ids_to_users);
+  const hiddenApps = listEditor("Hidden app IDs", settings.hidden_app_ids || [], "app id");
+  const hiddenContainers = listEditor("Hidden container names", settings.hidden_container_names || [], "container name");
+  const body = node("div", { class: "settings-form" },
+    node("div", { class: "settings-field-grid" }, defaultRole.element),
+    node("div", { class: "settings-toggle-grid" }, chat.element, nas.element, wan.element, incidentIDs.element),
+    node("div", { class: "settings-two-col" }, hiddenApps.element, hiddenContainers.element),
+  );
+  return settingsCard(item, body, (status) => saveSettingsPayload(item.title, item.path, {
+    ...settings,
+    default_role: defaultRole.input.value,
+    general_user_can_use_llm: chat.input.checked,
+    show_nas_status_to_users: nas.input.checked,
+    show_wan_status_to_users: wan.input.checked,
+    show_incident_ids_to_users: incidentIDs.input.checked,
+    hidden_app_ids: hiddenApps.values(),
+    hidden_container_names: hiddenContainers.values(),
+  }, status));
+}
+
+function renderBlacklistSettings(item, data) {
+  const settings = clone(data || {});
+  const groups = [
+    ["Apps", [
+      ["blacklist_app_ids", "App IDs", "app id"],
+      ["blacklist_container_names", "Container names", "container name"],
+      ["blacklist_display_names", "Display names", "display name"],
+    ]],
+    ["Storage", [
+      ["blacklist_folder_paths", "Folder paths", "/mnt/user/private"],
+      ["blacklist_share_names", "Share names", "share"],
+      ["blacklist_file_paths", "File paths", "path"],
+      ["blacklist_filename_globs", "Filename globs", "*.key"],
+    ]],
+    ["Network and logs", [
+      ["blacklist_log_patterns", "Log patterns", "pattern"],
+      ["blacklist_env_names", "Environment names", "*_KEY"],
+      ["blacklist_url_patterns", "URL patterns", "url pattern"],
+      ["blacklist_hostnames", "Hostnames", "host"],
+      ["blacklist_ips", "IP addresses", "ip"],
+      ["blacklist_usernames", "Usernames", "username"],
+    ]],
+  ];
+  const editors = new Map();
+  const sections = groups.map(([title, fields]) => node("section", { class: "settings-subsection" },
+    node("h4", { text: title }),
+    node("div", { class: "settings-two-col" }, fields.map(([key, label, placeholder]) => {
+      const editor = listEditor(label, settings[key] || [], placeholder);
+      editors.set(key, editor);
+      return editor.element;
+    })),
+  ));
+  const redactIPs = settingToggle("Redact IPs", !!settings.redact_ips);
+  const redactHosts = settingToggle("Redact hostnames", !!settings.redact_hostnames);
+  const redactEmails = settingToggle("Redact emails", settings.redact_emails !== false);
+  const body = node("div", { class: "settings-form" },
+    sections,
+    node("section", { class: "settings-subsection" },
+      node("h4", { text: "Redaction" }),
+      node("div", { class: "settings-toggle-grid" }, redactIPs.element, redactHosts.element, redactEmails.element),
+    ),
+  );
+  return settingsCard(item, body, (status) => {
+    const payload = { ...settings };
+    for (const [key, editor] of editors.entries()) payload[key] = editor.values();
+    payload.redact_ips = redactIPs.input.checked;
+    payload.redact_hostnames = redactHosts.input.checked;
+    payload.redact_emails = redactEmails.input.checked;
+    return saveSettingsPayload(item.title, item.path, payload, status);
+  });
+}
+
+function renderAppImageSettings(item, data) {
+  const overrides = { ...(data?.icon_overrides || {}) };
+  const apps = state.snapshot?.apps || [];
+  const appRows = [];
+  const appKeys = new Set();
+  const appList = apps.map((app) => {
+    const key = String(app.app_id || app.container_name || app.display_name || "").trim();
+    if (key) appKeys.add(key);
+    const input = node("input", {
+      value: key ? (overrides[key] || "") : "",
+      placeholder: app.icon_url && app.icon_source !== "built-in" ? app.icon_url : "https://example.local/icon.png",
+      inputmode: "url",
+    });
+    appRows.push({ key, input });
+    return node("div", { class: "settings-app-image-row" },
+      renderAppLogo(app),
+      node("span", { class: "settings-row-main" },
+        node("strong", { text: app.display_name || key || "App" }),
+        node("small", { text: app.icon_source ? `Current: ${app.icon_source}` : "No image source" }),
+      ),
+      input,
+    );
+  });
+  const extraRows = [];
+  const extras = Object.entries(overrides).filter(([key]) => !appKeys.has(key));
+  const extraList = node("div", { class: "settings-extra-list" });
+  const addExtra = (key = "", url = "") => {
+    const keyInput = node("input", { value: key, placeholder: "App key" });
+    const urlInput = node("input", { value: url, placeholder: "Image URL or /app-icons/name.svg", inputmode: "url" });
+    const row = { keyInput, urlInput, element: null };
+    row.element = node("div", { class: "settings-kv-row" },
+      keyInput,
+      urlInput,
+      node("button", {
+        type: "button",
+        class: "command ghost",
+        "data-glyph": "x",
+        "aria-label": "Remove image override",
+        onclick: () => {
+          const index = extraRows.indexOf(row);
+          if (index >= 0) extraRows.splice(index, 1);
+          row.element.remove();
+        },
+      }),
+    );
+    extraRows.push(row);
+    extraList.append(row.element);
+  };
+  extras.forEach(([key, url]) => addExtra(key, url));
+  const body = node("div", { class: "settings-form" },
+    node("section", { class: "settings-subsection" },
+      node("h4", { text: "Known apps" }),
+      node("div", { class: "settings-row-list" }, appList.length ? appList : node("div", { class: "empty", text: "No apps loaded." })),
+    ),
+    node("section", { class: "settings-subsection" },
+      node("div", { class: "settings-section-title-row" },
+        node("h4", { text: "Other images" }),
+        node("button", { type: "button", class: "command", "data-glyph": "+", onclick: () => addExtra(), text: "Add" }),
+      ),
+      extraList,
+    ),
+  );
+  return settingsCard(item, body, (status) => {
+    const icon_overrides = {};
+    for (const row of appRows) {
+      const url = row.input.value.trim();
+      if (row.key && url) icon_overrides[row.key] = url;
+    }
+    for (const row of extraRows) {
+      const key = row.keyInput.value.trim();
+      const url = row.urlInput.value.trim();
+      if (key && url) icon_overrides[key] = url;
+    }
+    return saveSettingsPayload(item.title, item.path, { icon_overrides }, status);
+  });
+}
+
+function renderLLMSettings(item, data) {
+  const settings = clone(data || {});
+  const enabled = settingToggle("Enabled", settings.enabled !== false);
+  const provider = settingSelectField("Provider", settings.provider || "disabled", [
+    { value: "disabled", label: "Disabled" },
+    { value: "openai", label: "OpenAI" },
+    { value: "anthropic", label: "Anthropic" },
+  ]);
+  const openAIModel = settingTextField("OpenAI model", settings.openai_model || "gpt-5");
+  const anthropicModel = settingTextField("Anthropic model", settings.anthropic_model || "claude-sonnet-4-5");
+  const timeout = durationSecondsField("Timeout", settings.timeout || 45000000000);
+  const openAIKey = settingTextField("OpenAI API key", "", {
+    type: "password",
+    autocomplete: "new-password",
+    placeholder: settings.openai_api_key_set ? "Saved key unchanged" : "Paste API key",
+  });
+  const anthropicKey = settingTextField("Anthropic API key", "", {
+    type: "password",
+    autocomplete: "new-password",
+    placeholder: settings.anthropic_api_key_set ? "Saved key unchanged" : "Paste API key",
+  });
+  const clearOpenAI = settingToggle("Clear saved OpenAI key", false);
+  const clearAnthropic = settingToggle("Clear saved Anthropic key", false);
+  clearOpenAI.input.disabled = !settings.openai_api_key_set;
+  clearAnthropic.input.disabled = !settings.anthropic_api_key_set;
+  const policyEditors = Object.entries(settings.policies || {}).map(([name, policy]) => policyEditor(name, policy));
+  const body = node("div", { class: "settings-form" },
+    node("section", { class: "settings-subsection" },
+      node("h4", { text: "Provider" }),
+      node("div", { class: "settings-field-grid" }, provider.element, openAIModel.element, anthropicModel.element, timeout.element),
+      node("div", { class: "settings-toggle-grid" }, enabled.element),
+    ),
+    node("section", { class: "settings-subsection" },
+      node("h4", { text: "API keys" }),
+      node("div", { class: "settings-field-grid" },
+        keyFieldWithState(openAIKey, settings.openai_api_key_set),
+        keyFieldWithState(anthropicKey, settings.anthropic_api_key_set),
+      ),
+      node("div", { class: "settings-toggle-grid" }, clearOpenAI.element, clearAnthropic.element),
+    ),
+    node("section", { class: "settings-subsection" },
+      node("h4", { text: "Policies" }),
+      node("div", { class: "settings-policy-list" }, policyEditors.map((editor) => editor.element)),
+    ),
+  );
+  return settingsCard(item, body, (status) => {
+    const payload = {
+      enabled: enabled.input.checked,
+      provider: provider.input.value,
+      openai_model: openAIModel.input.value.trim(),
+      anthropic_model: anthropicModel.input.value.trim(),
+      timeout: secondsToDuration(timeout.input.value),
+      clear_openai_api_key: clearOpenAI.input.checked,
+      clear_anthropic_api_key: clearAnthropic.input.checked,
+      policies: {},
+    };
+    if (openAIKey.input.value.trim()) payload.openai_api_key = openAIKey.input.value.trim();
+    if (anthropicKey.input.value.trim()) payload.anthropic_api_key = anthropicKey.input.value.trim();
+    for (const editor of policyEditors) payload.policies[editor.name] = editor.value();
+    return saveSettingsPayload(item.title, item.path, payload, status);
+  });
+}
+
+function renderIntegrationSettings(item, data) {
+  const settings = clone(data || {});
+  const mode = settingSelectField("Mode", settings.mode || "live", [
+    { value: "live", label: "Live" },
+    { value: "mixed", label: "Mixed" },
+    { value: "fixture", label: "Fixture" },
+  ]);
+  const unraidURL = settingTextField("Unraid base URL", settings.unraid_base_url || "", { placeholder: "http://tower.local", inputmode: "url" });
+  const unraidKey = settingTextField("Unraid API key", "", {
+    type: "password",
+    autocomplete: "new-password",
+    placeholder: settings.unraid_api_key_set ? "Saved key unchanged" : "Paste API key",
+  });
+  const clearUnraidKey = settingToggle("Clear saved Unraid key", false);
+  clearUnraidKey.input.disabled = !settings.unraid_api_key_set;
+  const unraidKeyFile = settingTextField("Unraid key file", settings.unraid_api_key_file || "", { placeholder: "C:\\path\\to\\unraid.key" });
+  const sshFallback = settingToggle("SSH fallback", !!settings.unraid_ssh_fallback);
+  const sshHost = settingTextField("SSH host", settings.unraid_ssh_host || "");
+  const sshPort = settingNumberField("SSH port", settings.unraid_ssh_port || 22, { min: 1, max: 65535 });
+  const sshUser = settingTextField("SSH user", settings.unraid_ssh_user || "");
+  const sshKeyFile = settingTextField("SSH key file", settings.unraid_ssh_key_file || "");
+  const sshCommand = settingTextField("SSH command", settings.unraid_ssh_command || "ssh");
+  const unifiURL = settingTextField("UniFi base URL", settings.unifi_base_url || "", { placeholder: "https://192.168.1.1", inputmode: "url" });
+  const unifiKey = settingTextField("UniFi API key", "", {
+    type: "password",
+    autocomplete: "new-password",
+    placeholder: settings.unifi_api_key_set ? "Saved key unchanged" : "Paste API key",
+  });
+  const clearUniFiKey = settingToggle("Clear saved UniFi key", false);
+  clearUniFiKey.input.disabled = !settings.unifi_api_key_set;
+  const unifiKeyFile = settingTextField("UniFi key file", settings.unifi_api_key_file || "", { placeholder: "C:\\path\\to\\unifi.key" });
+  const unifiSite = settingTextField("UniFi site ID", settings.unifi_site_id || "default");
+  const unifiTLS = settingToggle("Allow self-signed UniFi TLS", settings.unifi_insecure_tls !== false);
+  const internetProbe = settingTextField("Internet probe URL", settings.internet_probe_url || "", { inputmode: "url" });
+  const dnsProbe = settingTextField("DNS probe host", settings.dns_probe_host || "");
+  const routerProbe = settingTextField("Router probe target", settings.router_probe_target || "", { inputmode: "url" });
+  const nasProbe = settingTextField("NAS probe target", settings.nas_probe_target || "", { inputmode: "url" });
+  const body = node("div", { class: "settings-form" },
+    node("section", { class: "settings-subsection" },
+      node("h4", { text: "Mode" }),
+      node("div", { class: "settings-field-grid" }, mode.element),
+    ),
+    node("section", { class: "settings-subsection" },
+      node("h4", { text: "Unraid" }),
+      node("div", { class: "settings-field-grid" }, unraidURL.element, keyFieldWithState(unraidKey, settings.unraid_api_key_set), unraidKeyFile.element),
+      node("div", { class: "settings-toggle-grid" }, clearUnraidKey.element, sshFallback.element),
+      node("div", { class: "settings-field-grid" }, sshHost.element, sshPort.element, sshUser.element, sshKeyFile.element, sshCommand.element),
+    ),
+    node("section", { class: "settings-subsection" },
+      node("h4", { text: "UniFi" }),
+      node("div", { class: "settings-field-grid" }, unifiURL.element, keyFieldWithState(unifiKey, settings.unifi_api_key_set), unifiKeyFile.element, unifiSite.element),
+      node("div", { class: "settings-toggle-grid" }, clearUniFiKey.element, unifiTLS.element),
+    ),
+    node("section", { class: "settings-subsection" },
+      node("h4", { text: "Probes" }),
+      node("div", { class: "settings-field-grid" }, internetProbe.element, dnsProbe.element, routerProbe.element, nasProbe.element),
+    ),
+  );
+  return settingsCard(item, body, (status) => {
+    const payload = {
+      mode: mode.input.value,
+      unraid_base_url: unraidURL.input.value.trim(),
+      clear_unraid_api_key: clearUnraidKey.input.checked,
+      unraid_api_key_file: unraidKeyFile.input.value.trim(),
+      unraid_ssh_fallback: sshFallback.input.checked,
+      unraid_ssh_host: sshHost.input.value.trim(),
+      unraid_ssh_port: parseInt(sshPort.input.value, 10) || 22,
+      unraid_ssh_user: sshUser.input.value.trim(),
+      unraid_ssh_key_file: sshKeyFile.input.value.trim(),
+      unraid_ssh_command: sshCommand.input.value.trim(),
+      unifi_base_url: unifiURL.input.value.trim(),
+      clear_unifi_api_key: clearUniFiKey.input.checked,
+      unifi_api_key_file: unifiKeyFile.input.value.trim(),
+      unifi_site_id: unifiSite.input.value.trim(),
+      unifi_insecure_tls: unifiTLS.input.checked,
+      internet_probe_url: internetProbe.input.value.trim(),
+      dns_probe_host: dnsProbe.input.value.trim(),
+      router_probe_target: routerProbe.input.value.trim(),
+      nas_probe_target: nasProbe.input.value.trim(),
+    };
+    if (unraidKey.input.value.trim()) payload.unraid_api_key = unraidKey.input.value.trim();
+    if (unifiKey.input.value.trim()) payload.unifi_api_key = unifiKey.input.value.trim();
+    return saveSettingsPayload(item.title, item.path, payload, status);
+  });
+}
+
+function renderNotificationSettings(item, data) {
+  const settings = clone(data || {});
+  const enabled = settingToggle("Enabled", settings.enabled !== false);
+  const optIn = settingToggle("User opt-in", settings.global_opt_in_enabled !== false);
+  const dedupe = settingToggle("Whole-outage deduping", settings.whole_outage_deduping !== false);
+  const backendOptions = uniqueOptions(["mock", settings.backend].filter(Boolean).map((value) => ({ value, label: value })));
+  const backend = settingSelectField("Backend", settings.backend || "mock", backendOptions);
+  const rateLimit = durationSecondsField("Rate limit window", settings.rate_limit_window || 900000000000);
+  const body = node("div", { class: "settings-form" },
+    node("div", { class: "settings-toggle-grid" }, enabled.element, optIn.element, dedupe.element),
+    node("div", { class: "settings-field-grid" }, backend.element, rateLimit.element),
+  );
+  return settingsCard(item, body, (status) => saveSettingsPayload(item.title, item.path, {
+    enabled: enabled.input.checked,
+    global_opt_in_enabled: optIn.input.checked,
+    backend: backend.input.value,
+    rate_limit_window: secondsToDuration(rateLimit.input.value),
+    whole_outage_deduping: dedupe.input.checked,
+  }, status));
+}
+
+function settingTextField(label, value, attrs = {}) {
+  const input = node("input", { value: value || "", ...attrs });
+  return { input, element: node("label", {}, label, input) };
+}
+
+function settingNumberField(label, value, attrs = {}) {
+  const input = node("input", { type: "number", value: Number.isFinite(Number(value)) ? String(value) : "", ...attrs });
+  return { input, element: node("label", {}, label, input) };
+}
+
+function settingSelectField(label, value, options) {
+  const select = node("select", {}, options.map((option) => node("option", {
+    value: option.value,
+    selected: option.value === value,
+    text: option.label,
+  })));
+  return { input: select, element: node("label", {}, label, select) };
+}
+
+function settingToggle(label, checked) {
+  const input = node("input", { type: "checkbox", checked: !!checked });
+  return { input, element: node("label", { class: "toggle-line setting-toggle" }, input, label) };
+}
+
+function durationSecondsField(label, duration) {
+  return settingNumberField(label, durationToSeconds(duration), { min: 0, step: 1, inputmode: "numeric" });
+}
+
+function durationToSeconds(duration) {
+  const value = Number(duration || 0);
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  return Math.round(value / 1000000000);
+}
+
+function secondsToDuration(seconds) {
+  const value = Number(seconds || 0);
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  return Math.round(value * 1000000000);
+}
+
+function keyFieldWithState(field, isSet) {
+  return node("div", { class: "settings-key-field" },
+    field.element,
+    node("span", { class: `settings-key-state ${isSet ? "set" : ""}`, text: isSet ? "Saved" : "Not set" }),
+  );
+}
+
+function listEditor(label, values, placeholder) {
+  let items = compactList(values);
+  const list = node("div", { class: "settings-list-items" });
+  const input = node("input", { placeholder });
+  const render = () => {
+    list.replaceChildren(...items.map((value, index) => node("div", { class: "settings-list-item" },
+      node("span", { text: value }),
+      node("button", {
+        type: "button",
+        class: "command ghost",
+        "data-glyph": "x",
+        "aria-label": `Remove ${value}`,
+        onclick: () => {
+          items.splice(index, 1);
+          render();
+        },
+      }),
+    )));
+  };
+  const add = () => {
+    const value = input.value.trim();
+    if (!value) return;
+    const exists = items.some((item) => item.toLowerCase() === value.toLowerCase());
+    if (!exists) items.push(value);
+    input.value = "";
+    render();
+  };
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      add();
+    }
+  });
+  render();
+  return {
+    element: node("div", { class: "settings-list-editor" },
+      node("label", {}, label,
+        node("div", { class: "settings-add-row" },
+          input,
+          node("button", { type: "button", class: "command", "data-glyph": "+", onclick: add, text: "Add" }),
+        ),
+      ),
+      list,
+    ),
+    values: () => compactList(items),
+  };
+}
+
+function compactList(values) {
+  const seen = new Set();
+  const out = [];
+  for (const value of values || []) {
+    const trimmed = String(value || "").trim();
+    const key = trimmed.toLowerCase();
+    if (!trimmed || seen.has(key)) continue;
+    seen.add(key);
+    out.push(trimmed);
   }
+  return out;
+}
+
+function policyEditor(name, policy) {
+  const current = clone(policy || {});
+  const enabled = settingToggle("Enabled", current.enabled !== false);
+  const includeLogs = settingToggle("Include logs", !!current.include_logs);
+  const preferFacts = settingToggle("Prefer facts", current.prefer_incident_facts !== false);
+  const allowHidden = settingToggle("Hidden app names", !!current.allow_hidden_app_names);
+  const allowBlacklisted = settingToggle("Blacklisted names", !!current.allow_blacklisted_names);
+  const failClosed = settingToggle("Fail closed", current.fail_closed_on_redaction !== false);
+  const maxContext = settingNumberField("Max context bytes", current.max_context_bytes || 8000, { min: 1, step: 1000, inputmode: "numeric" });
+  const maxLogs = settingNumberField("Max log lines", current.max_log_lines || 0, { min: 0, step: 1, inputmode: "numeric" });
+  const logSources = listEditor("Allowed log sources", current.allowed_log_sources || [], "source");
+  return {
+    name,
+    element: node("details", { class: "settings-policy", open: name === "admin_requested" },
+      node("summary", {},
+        node("span", { text: policyDisplayName(name) }),
+        node("small", { text: current.recipient_role || "admin" }),
+      ),
+      node("div", { class: "settings-toggle-grid" }, enabled.element, includeLogs.element, preferFacts.element, allowHidden.element, allowBlacklisted.element, failClosed.element),
+      node("div", { class: "settings-field-grid" }, maxContext.element, maxLogs.element),
+      logSources.element,
+    ),
+    value: () => ({
+      ...current,
+      name: current.name || name,
+      enabled: enabled.input.checked,
+      include_logs: includeLogs.input.checked,
+      prefer_incident_facts: preferFacts.input.checked,
+      allow_hidden_app_names: allowHidden.input.checked,
+      allow_blacklisted_names: allowBlacklisted.input.checked,
+      fail_closed_on_redaction: failClosed.input.checked,
+      max_context_bytes: parseInt(maxContext.input.value, 10) || current.max_context_bytes || 1,
+      max_log_lines: parseInt(maxLogs.input.value, 10) || 0,
+      allowed_log_sources: logSources.values(),
+      recipient_role: current.recipient_role || "admin",
+    }),
+  };
+}
+
+function policyDisplayName(name) {
+  return String(name || "").replaceAll("_", " ");
+}
+
+function uniqueOptions(options) {
+  const seen = new Set();
+  return options.filter((option) => {
+    if (seen.has(option.value)) return false;
+    seen.add(option.value);
+    return true;
+  });
+}
+
+async function saveSettingsPayload(title, path, payload, status) {
   status.textContent = "Saving";
   status.dataset.tone = "info";
   try {
@@ -1670,11 +2171,12 @@ async function saveSetting(title, path, textarea, status) {
       method: "POST",
       body: JSON.stringify(payload),
     });
-    textarea.value = JSON.stringify(saved, null, 2);
     status.textContent = "Saved";
     status.dataset.tone = "ok";
     showNotice(`${title} settings saved.`);
     await refresh();
+    await loadSettings();
+    return saved;
   } catch (error) {
     status.textContent = "Failed";
     status.dataset.tone = "error";

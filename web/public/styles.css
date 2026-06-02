@@ -1564,6 +1564,221 @@ button.command.app-control:focus-visible {
   tab-size: 2;
 }
 
+.settings-form,
+.settings-subsection,
+.settings-policy-list,
+.settings-extra-list {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.settings-subsection {
+  gap: 10px;
+  padding-top: 2px;
+}
+
+.settings-subsection + .settings-subsection {
+  border-top: 1px solid var(--border-soft);
+  padding-top: 12px;
+}
+
+.settings-subsection h4 {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.86rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.settings-section-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.settings-field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  min-width: 0;
+}
+
+.settings-two-col {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  min-width: 0;
+}
+
+.settings-toggle-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.setting-toggle {
+  min-height: 42px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  padding: 6px 10px;
+  background: var(--surface-alt);
+  color: var(--text);
+}
+
+.settings-add-row,
+.settings-kv-row,
+.settings-app-image-row {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.settings-add-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.settings-list-editor {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.settings-list-items,
+.settings-row-list {
+  display: grid;
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  background: var(--surface-alt);
+}
+
+.settings-list-items:empty,
+.settings-extra-list:empty {
+  display: none;
+}
+
+.settings-list-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  border-bottom: 1px solid var(--border-soft);
+  padding: 5px 6px 5px 10px;
+}
+
+.settings-list-item:last-child,
+.settings-app-image-row:last-child {
+  border-bottom: 0;
+}
+
+.settings-list-item span,
+.settings-row-main strong,
+.settings-row-main small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-list-item button.command,
+.settings-kv-row button.command {
+  width: 38px;
+  min-width: 38px;
+  min-height: 38px;
+  padding: 0;
+}
+
+.settings-kv-row {
+  grid-template-columns: minmax(150px, 0.7fr) minmax(0, 1.3fr) auto;
+}
+
+.settings-app-image-row {
+  grid-template-columns: 38px minmax(0, 0.9fr) minmax(220px, 1.1fr);
+  align-items: center;
+  min-height: 52px;
+  border-bottom: 1px solid var(--border-soft);
+  padding: 6px 8px;
+}
+
+.settings-app-image-row .app-logo {
+  width: 34px;
+  height: 34px;
+}
+
+.settings-row-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settings-row-main small {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.settings-key-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.settings-key-state {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  padding: 0 10px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 900;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.settings-key-state.set {
+  border-color: var(--ok-border);
+  color: var(--ok-text);
+}
+
+.settings-policy {
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  background: var(--surface-alt);
+}
+
+.settings-policy summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 46px;
+  padding: 8px 10px;
+  cursor: pointer;
+  font-weight: 850;
+}
+
+.settings-policy summary small {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.settings-policy > .settings-toggle-grid,
+.settings-policy > .settings-field-grid,
+.settings-policy > .settings-list-editor {
+  margin: 0 10px 10px;
+}
+
 .settings-save-state {
   min-width: 74px;
   text-align: right;
@@ -2910,6 +3125,31 @@ body.compact-view .assistant-toggle {
   .settings-save-state {
     min-width: 0;
     text-align: left;
+  }
+
+  .settings-field-grid,
+  .settings-two-col,
+  .settings-key-field,
+  .settings-kv-row,
+  .settings-app-image-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-toggle-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-app-image-row {
+    grid-template-columns: 34px minmax(0, 1fr);
+  }
+
+  .settings-app-image-row input {
+    grid-column: 1 / -1;
+  }
+
+  .settings-key-state {
+    justify-self: start;
+    min-height: 30px;
   }
 
   .role-options {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 
 	"github.com/wellivea1/noobboard/internal/config"
 	"github.com/wellivea1/noobboard/internal/privacy"
@@ -30,12 +31,21 @@ func ProviderAvailable(cfg config.LLMConfig) bool {
 	}
 	switch cfg.Provider {
 	case "openai":
-		return os.Getenv("OPENAI_API_KEY") != ""
+		return firstConfigured(cfg.OpenAIAPIKey, os.Getenv("OPENAI_API_KEY")) != ""
 	case "anthropic":
-		return os.Getenv("ANTHROPIC_API_KEY") != ""
+		return firstConfigured(cfg.AnthropicAPIKey, os.Getenv("ANTHROPIC_API_KEY")) != ""
 	default:
 		return false
 	}
+}
+
+func firstConfigured(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func (c DisabledClient) Diagnose(context.Context, Request) (Diagnosis, error) {

@@ -122,6 +122,123 @@ func TestDiagnoseRequiresConfiguredLLMProvider(t *testing.T) {
 	}
 }
 
+func TestLLMSettingsKeysAreWriteOnly(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "llm-settings-keys")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+
+	app := newTestApp(t, cfg)
+	router := app.Router()
+	cookie, csrf := loginAdmin(t, router)
+
+	body := `{
+		"enabled": true,
+		"provider": "openai",
+		"openai_model": "gpt-test",
+		"openai_api_key": "sk-local-test",
+		"anthropic_model": "claude-test",
+		"timeout": 45000000000
+	}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/settings/llm", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/admin/settings/llm status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "sk-local-test") {
+		t.Fatalf("llm settings response exposed API key: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"openai_api_key_set":true`) {
+		t.Fatalf("llm settings response did not report saved key: %s", rec.Body.String())
+	}
+	stored, ok, err := app.deps.Store.RuntimeSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || stored.LLM.OpenAIAPIKey != "sk-local-test" {
+		t.Fatalf("runtime LLM key was not saved: ok=%v settings=%#v", ok, stored.LLM)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/admin/settings/llm", nil)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/admin/settings/llm status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "sk-local-test") {
+		t.Fatalf("llm settings GET exposed API key: %s", rec.Body.String())
+	}
+}
+
+func TestIntegrationSettingsPersistAndHideKeys(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "integration-settings")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+
+	app := newTestApp(t, cfg)
+	router := app.Router()
+	cookie, csrf := loginAdmin(t, router)
+
+	body := `{
+		"mode": "live",
+		"unraid_base_url": "192.168.0.214",
+		"unraid_api_key": "unraid-local-test",
+		"unraid_ssh_port": 22,
+		"unraid_ssh_command": "ssh",
+		"unifi_base_url": "192.168.0.1",
+		"unifi_api_key": "unifi-local-test",
+		"unifi_site_id": "default",
+		"unifi_insecure_tls": true,
+		"internet_probe_url": "https://www.gstatic.com/generate_204",
+		"dns_probe_host": "cloudflare.com"
+	}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/settings/integrations", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/admin/settings/integrations status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	responseBody := rec.Body.String()
+	if strings.Contains(responseBody, "unraid-local-test") || strings.Contains(responseBody, "unifi-local-test") {
+		t.Fatalf("integration settings response exposed API keys: %s", responseBody)
+	}
+	if !strings.Contains(responseBody, `"unraid_base_url":"http://192.168.0.214"`) || !strings.Contains(responseBody, `"unifi_base_url":"https://192.168.0.1"`) {
+		t.Fatalf("integration settings response did not normalize URLs: %s", responseBody)
+	}
+	if !strings.Contains(responseBody, `"unraid_api_key_set":true`) || !strings.Contains(responseBody, `"unifi_api_key_set":true`) {
+		t.Fatalf("integration settings response did not report saved keys: %s", responseBody)
+	}
+
+	stored, ok, err := app.deps.Store.RuntimeSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("integration settings were not persisted")
+	}
+	if stored.Integrations.UnraidBaseURL != "http://192.168.0.214" || stored.Integrations.UnraidAPIKey != "unraid-local-test" {
+		t.Fatalf("stored Unraid integration = %#v", stored.Integrations)
+	}
+	if stored.Integrations.UniFiBaseURL != "https://192.168.0.1" || stored.Integrations.UniFiAPIKey != "unifi-local-test" {
+		t.Fatalf("stored UniFi integration = %#v", stored.Integrations)
+	}
+
+	reloaded := newTestApp(t, cfg)
+	if reloaded.deps.Config.Integrations.UnraidAPIKey != "unraid-local-test" {
+		t.Fatal("saved Unraid API key was not applied after reload")
+	}
+	if reloaded.deps.Config.Integrations.UniFiAPIKey != "unifi-local-test" {
+		t.Fatal("saved UniFi API key was not applied after reload")
+	}
+}
+
 func TestSiteConfigIdentifiesAdminAndCompactRouters(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Database.Path = serverCacheTestPath(t, "site-config")
@@ -167,6 +284,7 @@ func TestCompactRouterExcludesAdminAPI(t *testing.T) {
 	}{
 		{method: http.MethodGet, path: "/api/admin/status/full"},
 		{method: http.MethodPost, path: "/api/admin/apps/emby/action", body: `{"action":"restart"}`},
+		{method: http.MethodGet, path: "/api/admin/settings/integrations"},
 	}
 	for _, tc := range adminCases {
 		rec := httptest.NewRecorder()

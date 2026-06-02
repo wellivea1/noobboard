@@ -28,7 +28,7 @@ func NewOpenAIClient(cfg config.LLMConfig, redactor *privacy.Redactor) OpenAICli
 		timeout = 45 * time.Second
 	}
 	return OpenAIClient{
-		apiKey:  os.Getenv("OPENAI_API_KEY"),
+		apiKey:  firstConfigured(cfg.OpenAIAPIKey, os.Getenv("OPENAI_API_KEY")),
 		model:   cfg.OpenAIModel,
 		http:    &http.Client{Timeout: timeout},
 		builder: NewContextBuilder(redactor),

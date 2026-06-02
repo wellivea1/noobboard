@@ -92,34 +92,36 @@ type NotificationConfig struct {
 }
 
 type LLMConfig struct {
-	Enabled        bool                        `json:"enabled"`
-	Provider       string                      `json:"provider"`
-	OpenAIModel    string                      `json:"openai_model"`
-	AnthropicModel string                      `json:"anthropic_model"`
-	Timeout        time.Duration               `json:"timeout"`
-	Policies       map[string]models.LLMPolicy `json:"policies"`
+	Enabled         bool                        `json:"enabled"`
+	Provider        string                      `json:"provider"`
+	OpenAIAPIKey    string                      `json:"openai_api_key,omitempty"`
+	OpenAIModel     string                      `json:"openai_model"`
+	AnthropicAPIKey string                      `json:"anthropic_api_key,omitempty"`
+	AnthropicModel  string                      `json:"anthropic_model"`
+	Timeout         time.Duration               `json:"timeout"`
+	Policies        map[string]models.LLMPolicy `json:"policies"`
 }
 
 type IntegrationConfig struct {
-	Mode              string
-	UnraidBaseURL     string
-	UnraidAPIKey      string
-	UnraidAPIKeyFile  string
-	UnraidSSHFallback bool
-	UnraidSSHHost     string
-	UnraidSSHPort     int
-	UnraidSSHUser     string
-	UnraidSSHKeyFile  string
-	UnraidSSHCommand  string
-	UniFiBaseURL      string
-	UniFiAPIKey       string
-	UniFiAPIKeyFile   string
-	UniFiSiteID       string
-	UniFiInsecureTLS  bool
-	InternetProbeURL  string
-	DNSProbeHost      string
-	RouterProbeTarget string
-	NASProbeTarget    string
+	Mode              string `json:"mode"`
+	UnraidBaseURL     string `json:"unraid_base_url"`
+	UnraidAPIKey      string `json:"unraid_api_key,omitempty"`
+	UnraidAPIKeyFile  string `json:"unraid_api_key_file,omitempty"`
+	UnraidSSHFallback bool   `json:"unraid_ssh_fallback"`
+	UnraidSSHHost     string `json:"unraid_ssh_host,omitempty"`
+	UnraidSSHPort     int    `json:"unraid_ssh_port"`
+	UnraidSSHUser     string `json:"unraid_ssh_user,omitempty"`
+	UnraidSSHKeyFile  string `json:"unraid_ssh_key_file,omitempty"`
+	UnraidSSHCommand  string `json:"unraid_ssh_command,omitempty"`
+	UniFiBaseURL      string `json:"unifi_base_url"`
+	UniFiAPIKey       string `json:"unifi_api_key,omitempty"`
+	UniFiAPIKeyFile   string `json:"unifi_api_key_file,omitempty"`
+	UniFiSiteID       string `json:"unifi_site_id"`
+	UniFiInsecureTLS  bool   `json:"unifi_insecure_tls"`
+	InternetProbeURL  string `json:"internet_probe_url"`
+	DNSProbeHost      string `json:"dns_probe_host"`
+	RouterProbeTarget string `json:"router_probe_target"`
+	NASProbeTarget    string `json:"nas_probe_target"`
 }
 
 type PollingConfig struct {
@@ -383,14 +385,14 @@ func validateIntegrationBaseURL(label, value string) error {
 }
 
 func normalizeIntegrationBaseURL(value, defaultScheme string) string {
-	normalized, err := normalizeIntegrationBaseURLStrict(value, defaultScheme)
+	normalized, err := NormalizeIntegrationBaseURL(value, defaultScheme)
 	if err != nil {
 		return strings.TrimRight(strings.TrimSpace(value), "/")
 	}
 	return normalized
 }
 
-func normalizeIntegrationBaseURLStrict(value, defaultScheme string) (string, error) {
+func NormalizeIntegrationBaseURL(value, defaultScheme string) (string, error) {
 	value = strings.TrimRight(strings.TrimSpace(value), "/")
 	if value == "" {
 		return "", nil
@@ -556,8 +558,14 @@ func applyEnv(cfg *Config) {
 	if v := envValue("NOOBBOARD_LLM_PROVIDER", "HSD_LLM_PROVIDER"); v != "" {
 		cfg.LLM.Provider = v
 	}
+	if v := os.Getenv("OPENAI_API_KEY"); v != "" {
+		cfg.LLM.OpenAIAPIKey = v
+	}
 	if v := os.Getenv("OPENAI_MODEL"); v != "" {
 		cfg.LLM.OpenAIModel = v
+	}
+	if v := os.Getenv("ANTHROPIC_API_KEY"); v != "" {
+		cfg.LLM.AnthropicAPIKey = v
 	}
 	if v := os.Getenv("ANTHROPIC_MODEL"); v != "" {
 		cfg.LLM.AnthropicModel = v
@@ -634,20 +642,24 @@ func envValue(primary string, aliases ...string) string {
 
 func applySecretFiles(cfg *Config) error {
 	if strings.TrimSpace(cfg.Integrations.UnraidAPIKeyFile) != "" {
-		secret, err := readSecretFile(cfg.Integrations.UnraidAPIKeyFile)
+		secret, err := ReadSecretFile(cfg.Integrations.UnraidAPIKeyFile)
 		if err != nil {
 			return fmt.Errorf("unraid api key file: %w", err)
 		}
 		cfg.Integrations.UnraidAPIKey = secret
 	}
 	if strings.TrimSpace(cfg.Integrations.UniFiAPIKeyFile) != "" {
-		secret, err := readSecretFile(cfg.Integrations.UniFiAPIKeyFile)
+		secret, err := ReadSecretFile(cfg.Integrations.UniFiAPIKeyFile)
 		if err != nil {
 			return fmt.Errorf("unifi api key file: %w", err)
 		}
 		cfg.Integrations.UniFiAPIKey = secret
 	}
 	return nil
+}
+
+func ReadSecretFile(path string) (string, error) {
+	return readSecretFile(path)
 }
 
 func readSecretFile(path string) (string, error) {

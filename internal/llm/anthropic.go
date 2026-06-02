@@ -28,7 +28,7 @@ func NewAnthropicClient(cfg config.LLMConfig, redactor *privacy.Redactor) Anthro
 		timeout = 45 * time.Second
 	}
 	return AnthropicClient{
-		apiKey:  os.Getenv("ANTHROPIC_API_KEY"),
+		apiKey:  firstConfigured(cfg.AnthropicAPIKey, os.Getenv("ANTHROPIC_API_KEY")),
 		model:   cfg.AnthropicModel,
 		http:    &http.Client{Timeout: timeout},
 		builder: NewContextBuilder(redactor),

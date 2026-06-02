@@ -238,10 +238,9 @@ server problem? Tell the admin? Avoid touching anything?*
 - Build on existing models: `models.VisibilitySettings`, the app catalog / icon overrides
   (`config.AppCatalogConfig`), and per-role app visibility. Avoid inventing parallel
   settings state.
-- Keep the JSON editors as an "advanced" fallback — the structured UI is additive, not a
-  replacement that drops capability.
-- Backend scope stays frozen for this workstream (no new adapters/integrations); changes are
-  UI, presentation, and UX tests.
+- Structured settings controls are the default surface for runtime configuration. Avoid
+  falling back to raw JSON editors unless an explicitly advanced escape hatch is added.
+- Integration settings remain admin-only and must keep API keys write-only in responses.
 
 ### Likely files
 `web/public/app.js`, `web/public/styles.css`, `web/public/index.html`,

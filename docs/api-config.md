@@ -42,6 +42,8 @@ Admin routes are registered on the admin site/port. The compact site/port serves
 - `POST /api/admin/settings/apps`
 - `GET /api/admin/settings/llm`
 - `POST /api/admin/settings/llm`
+- `GET /api/admin/settings/integrations`
+- `POST /api/admin/settings/integrations`
 - `GET /api/admin/settings/notifications`
 - `POST /api/admin/settings/notifications`
 
@@ -55,7 +57,8 @@ Runtime settings endpoints accept and return JSON:
 - `roles`: returns the visibility policy plus current apps and users for the role editor. Role writes accept the same visibility shape, including `default_role` and a `roles` array.
 - `blacklist`: snake_case privacy and redaction fields.
 - `apps`: `icon_overrides`, a map from app id/container/display name to an image URL. URLs must be `http`, `https`, or a local app-served path beginning with `/`; embedded URL credentials are rejected. Docker/Unraid icon labels are filtered with the same URL rules before being exposed to clients. When Docker/Unraid does not provide an accepted icon label and no override is configured, the frontend chooses a generic built-in category icon from the app name/image reference. These built-ins are not official product logos.
-- `llm`: snake_case provider/model/policy fields. The default provider is `disabled`; use `openai` with `OPENAI_API_KEY` or `anthropic` with `ANTHROPIC_API_KEY` for live chat/diagnosis. Duration values are encoded as Go duration nanoseconds.
+- `llm`: snake_case provider/model/policy fields plus write-only `openai_api_key` and `anthropic_api_key` inputs. The default provider is `disabled`; use `openai` with an OpenAI key or `anthropic` with an Anthropic key for live chat/diagnosis. Duration values are encoded as Go duration nanoseconds. Reads return `openai_api_key_set` / `anthropic_api_key_set` booleans instead of key values.
+- `integrations`: snake_case Unraid, UniFi, SSH fallback, and probe fields plus write-only `unraid_api_key` and `unifi_api_key` inputs. Reads return `unraid_api_key_set` / `unifi_api_key_set` booleans instead of key values. Bare local hosts/IPs are normalized to `http://...` for Unraid and `https://...` for UniFi.
 - `notifications`: snake_case notification fields. Duration values are encoded as Go duration nanoseconds.
 
 Simple config file example:

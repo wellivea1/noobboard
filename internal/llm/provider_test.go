@@ -100,6 +100,48 @@ func TestAnthropicClientUsesMessagesAPIWithDiagnosisTool(t *testing.T) {
 	}
 }
 
+func TestProviderUsesConfigKeys(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.LLM.Provider = "openai"
+	cfg.LLM.OpenAIAPIKey = "config-openai-key"
+	cfg.LLM.OpenAIModel = "gpt-test"
+	if !ProviderAvailable(cfg.LLM) {
+		t.Fatal("OpenAI provider should be available with a config API key")
+	}
+	openaiClient := NewOpenAIClient(cfg.LLM, privacy.NewRedactor(config.PrivacyConfig{}))
+	openaiClient.http = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if got := req.Header.Get("Authorization"); got != "Bearer config-openai-key" {
+			t.Fatalf("Authorization header = %q", got)
+		}
+		return jsonResponse(t, http.StatusOK, map[string]string{"output_text": validDiagnosisJSON(t)})
+	})}
+	if _, err := openaiClient.Diagnose(context.Background(), sampleLLMRequest()); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg = config.Defaults()
+	cfg.LLM.Provider = "anthropic"
+	cfg.LLM.AnthropicAPIKey = "config-anthropic-key"
+	cfg.LLM.AnthropicModel = "claude-test"
+	if !ProviderAvailable(cfg.LLM) {
+		t.Fatal("Anthropic provider should be available with a config API key")
+	}
+	anthropicClient := NewAnthropicClient(cfg.LLM, privacy.NewRedactor(config.PrivacyConfig{}))
+	anthropicClient.http = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if got := req.Header.Get("x-api-key"); got != "config-anthropic-key" {
+			t.Fatalf("x-api-key header = %q", got)
+		}
+		return jsonResponse(t, http.StatusOK, map[string]interface{}{
+			"content": []map[string]interface{}{
+				{"type": "tool_use", "name": "record_diagnosis", "input": validDiagnosisMap()},
+			},
+		})
+	})}
+	if _, err := anthropicClient.Diagnose(context.Background(), sampleLLMRequest()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDefaultClientDoesNotReturnMockDiagnosis(t *testing.T) {
 	cfg := config.Defaults()
 	client := NewClient(cfg.LLM, privacy.NewRedactor(config.PrivacyConfig{}))
