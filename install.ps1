@@ -27,8 +27,9 @@
     Run "go test ./..." before building.
 
 .PARAMETER AllowLan
-    Add the LAN/WAN firewall rule without prompting (non-interactive "yes"). When neither
-    -AllowLan nor -NoFirewall is given and the session is interactive, the installer asks.
+    Add the firewall rule (Private + Public profiles) without prompting (non-interactive
+    "yes"). When neither -AllowLan nor -NoFirewall is given and the session is interactive,
+    the installer asks.
 
 .PARAMETER NoFirewall
     Never add the firewall rule and do not prompt (non-interactive "no").
@@ -81,10 +82,10 @@ function Confirm-Firewall {
         Write-Warn2 'Non-interactive session; skipping the firewall rule. Re-run with -AllowLan to add it.'
         return $false
     }
-    $title   = 'Allow LAN/WAN access through Windows Firewall?'
-    $message = 'Add an inbound firewall rule for NoobBoard (TCP 8787-8788) so other devices ' +
-               'on your network (and the internet, if this host is exposed) can reach it. ' +
-               'Without it, NoobBoard is reachable only from this machine.'
+    $title   = 'Allow network access through Windows Firewall?'
+    $message = 'Add an inbound firewall rule for NoobBoard (TCP 8787-8788, Private + Public ' +
+               'profiles) so other devices on your network can reach it. Without it, NoobBoard ' +
+               'is reachable only from this machine.'
     $yes = New-Object System.Management.Automation.Host.ChoiceDescription(
         '&Yes (recommended)', 'Add the firewall rule to allow LAN/WAN access.')
     $no  = New-Object System.Management.Automation.Host.ChoiceDescription(
@@ -285,13 +286,15 @@ Write-Step "Installing the NoobBoard service binary to $InstallDir"
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 $installedExe = Join-Path $InstallDir 'noobboard.exe'
 
-# Stop and remove any existing service first so the binary is not locked.
+# Stop and remove any existing service first so the binary is not locked. Use sc.exe by
+# service name (not the installed binary) so this works even if the old binary is missing
+# or -InstallDir changed since the last install.
 $existing = Get-Service -Name 'NoobBoard' -ErrorAction SilentlyContinue
 if ($existing) {
     Write-Warn2 'Existing NoobBoard service found; stopping and removing it before reinstall.'
-    & $installedExe stop-service 2>$null
+    & sc.exe stop NoobBoard | Out-Null
     Start-Sleep -Seconds 1
-    & $installedExe uninstall-service 2>$null
+    & sc.exe delete NoobBoard | Out-Null
     Start-Sleep -Seconds 1
 }
 
@@ -304,12 +307,15 @@ if ($LASTEXITCODE -ne 0) { throw "install-service failed (exit $LASTEXITCODE)." 
 Write-Ok 'Service "NoobBoard" registered (auto-start).'
 
 if (Confirm-Firewall) {
-    Write-Step 'Adding firewall rule for TCP 8787-8788 (LAN/WAN access)'
+    Write-Step 'Adding firewall rule for TCP 8787-8788 (Private + Public profiles)'
     if (-not (Get-NetFirewallRule -DisplayName 'NoobBoard' -ErrorAction SilentlyContinue)) {
         New-NetFirewallRule -DisplayName 'NoobBoard' -Direction Inbound -Action Allow `
-            -Protocol TCP -LocalPort 8787,8788 -Profile Any | Out-Null
-        Write-Ok 'Firewall rule added (all network profiles).'
-        Write-Warn2 'NoobBoard may now be reachable from other devices. Change the default admin password.'
+            -Protocol TCP -LocalPort 8787,8788 -Profile Private,Public | Out-Null
+        Write-Ok 'Firewall rule added (Private and Public profiles).'
+        Write-Warn2 'This allows inbound access on Private AND Public networks. That is normally fine on a'
+        Write-Warn2 'home LAN (Windows often mislabels it "Public"), but it does NOT isolate this host if it'
+        Write-Warn2 'is genuinely internet-facing. Change the default admin password now, and for real WAN'
+        Write-Warn2 'access prefer an HTTPS reverse proxy over exposing these ports directly.'
     } else {
         Write-Ok 'Firewall rule already exists.'
     }
@@ -339,7 +345,10 @@ if (Confirm-AuthSetup) {
         Set-NoobConfigAuth -Path $cfgFile -Username $cred.Username -Password $cred.Password
         Protect-ConfigFile -Path $cfgFile
         Write-Ok "Saved admin login for user '$($cred.Username)' to $cfgFile"
-        Write-Host '    Stored until first run hashes it into the database; file restricted to Administrators/SYSTEM.' -ForegroundColor Gray
+        Write-Host '    On first run the admin is created and the password is hashed into the database.' -ForegroundColor Gray
+        Write-Host "    The password ALSO remains in plain text in $cfgFile" -ForegroundColor Gray
+        Write-Host '    (restricted to Administrators/SYSTEM). Treat that file as a secret; you may delete the' -ForegroundColor Gray
+        Write-Host '    bootstrap_admin_password line after the first successful sign-in.' -ForegroundColor Gray
     }
 } else {
     Write-Ok 'Skipped admin login setup.'

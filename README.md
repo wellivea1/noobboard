@@ -54,7 +54,8 @@ builds a self-contained `noobboard.exe`, and registers the NoobBoard Windows ser
 
 During a service install, the script also **prompts** whether to:
 
-- add a Windows Firewall rule allowing LAN/WAN access on ports 8787-8788 (recommended), and
+- add a Windows Firewall rule for ports 8787-8788 (recommended) — opens the Private and
+  Public profiles with a warning (see Windows Service below), and
 - set up the admin login now (enter a username and password).
 
 The admin-login prompt only seeds the bootstrap credentials in the service config; it does
@@ -182,7 +183,12 @@ Default Windows paths:
 - Database: `C:\ProgramData\NoobBoard\data\dashboard.db.json`
 - Logs: `C:\ProgramData\NoobBoard\logs\`
 
-Allow LAN access on a private network only (the installer can do this with `-AllowLan`):
+The installer's firewall prompt (and `-AllowLan`) opens TCP 8787-8788 on the **Private and
+Public** profiles, because Windows frequently mislabels a home LAN as "Public". This makes
+the dashboard reachable from your other devices, but it does not isolate the host if it is
+genuinely internet-facing — change the default admin password, and prefer an HTTPS reverse
+proxy for real WAN access. To restrict to the private profile only, add the rule manually
+instead:
 
 ```powershell
 New-NetFirewallRule -DisplayName "NoobBoard" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8787,8788 -Profile Private
@@ -197,6 +203,10 @@ New-NetFirewallRule -DisplayName "NoobBoard" -Direction Inbound -Action Allow -P
 - App logs, audit entries, notification text, and LLM context are redacted before use.
 - Docker controls are admin-only and audited.
 - OpenAI and Anthropic are the only supported LLM providers.
+- If you set the admin login during install, the bootstrap password is stored in plain text
+  in `config.yaml` (restricted to Administrators/SYSTEM). It is hashed into the database on
+  first run but is not removed from the file; delete the `bootstrap_admin_password` line
+  after first sign-in if you want it gone.
 
 See `docs/security.md` for the full list of controls.
 
