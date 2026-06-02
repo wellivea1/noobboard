@@ -56,7 +56,11 @@ Admin login via the installer (and the install/wizard contract):
   `config.yaml` must merge/preserve existing `auth:` keys rather than overwrite the file.
 
 Firewall: the installer prompt (and `-AllowLan`) opens TCP 8787-8788 on the **Private and
-Public** profiles, because Windows often mislabels a home LAN as "Public". This does not
+Public** profiles, because Windows often mislabels a home LAN as "Public". It also sets
+`server.bind_address: 0.0.0.0` in `config.yaml` so the server listens on the LAN — the
+firewall rule alone is not enough, because the server binds to `127.0.0.1` by default. A
+non-loopback bind requires a non-default admin password (`config.Validate`); the installer
+verifies with `check-config` and reverts to `127.0.0.1` if validation fails. This does not
 isolate the host if it is genuinely internet-facing — change the default admin password and
 prefer an HTTPS reverse proxy for real WAN access. To restrict to the private profile only,
 add the rule manually instead:
