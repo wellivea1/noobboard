@@ -55,7 +55,8 @@ builds a self-contained `noobboard.exe`, and registers the NoobBoard Windows ser
 During a service install, the script also **prompts** whether to:
 
 - add a Windows Firewall rule for ports 8787-8788 (recommended) — opens the Private and
-  Public profiles with a warning (see Windows Service below), and
+  Public profiles with a warning (see Windows Service below) **and** binds the server to
+  `0.0.0.0` so it is reachable from the LAN (not just localhost), and
 - set up the admin login now (enter a username and password).
 
 The admin-login prompt only seeds the bootstrap credentials in the service config; it does
@@ -184,11 +185,13 @@ Default Windows paths:
 - Logs: `C:\ProgramData\NoobBoard\logs\`
 
 The installer's firewall prompt (and `-AllowLan`) opens TCP 8787-8788 on the **Private and
-Public** profiles, because Windows frequently mislabels a home LAN as "Public". This makes
-the dashboard reachable from your other devices, but it does not isolate the host if it is
-genuinely internet-facing — change the default admin password, and prefer an HTTPS reverse
-proxy for real WAN access. To restrict to the private profile only, add the rule manually
-instead:
+Public** profiles, because Windows frequently mislabels a home LAN as "Public". It also sets
+`server.bind_address` to `0.0.0.0` so the server actually listens on the LAN — the firewall
+rule alone is not enough, since the server otherwise binds to `127.0.0.1` only. A non-loopback
+bind requires a non-default admin password (set one at the install prompt); if validation
+fails the installer reverts to localhost. This does not isolate the host if it is genuinely
+internet-facing — change the default admin password, and prefer an HTTPS reverse proxy for
+real WAN access. To restrict to the private profile only, add the rule manually instead:
 
 ```powershell
 New-NetFirewallRule -DisplayName "NoobBoard" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8787,8788 -Profile Private

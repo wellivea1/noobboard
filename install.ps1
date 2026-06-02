@@ -177,6 +177,41 @@ function Set-NoobConfigAuth([string]$Path, [string]$Username, [string]$Password)
     [System.IO.File]::WriteAllLines($Path, [string[]]$out, (New-Object System.Text.UTF8Encoding($false)))
 }
 
+function Set-NoobConfigKey([string]$Path, [string]$Section, [string]$Key, [string]$Value) {
+    # Set "<Key>: <Value>" under "<Section>:" in the simple key/value config, inserting under
+    # an existing section header when present and creating the section otherwise. Idempotent;
+    # written without a BOM (the Go config parser is BOM-sensitive).
+    $lines = @()
+    if (Test-Path -LiteralPath $Path) {
+        $lines = @(Get-Content -LiteralPath $Path)
+        if ($lines.Count -gt 0) { $lines[0] = $lines[0].TrimStart([char]0xFEFF) }
+    }
+    $keyPattern = '^\s*' + [Regex]::Escape($Key) + '\s*:'
+    $lines = @($lines | Where-Object { $_ -notmatch $keyPattern })
+    $keyLine = "  ${Key}: ${Value}"
+
+    $sectionIdx = -1
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i].Trim() -eq "${Section}:") { $sectionIdx = $i; break }
+    }
+
+    $out = @()
+    if ($sectionIdx -ge 0) {
+        $out += $lines[0..$sectionIdx]
+        $out += $keyLine
+        if ($sectionIdx -lt $lines.Count - 1) {
+            $out += $lines[($sectionIdx + 1)..($lines.Count - 1)]
+        }
+    } else {
+        if ($lines.Count -gt 0) {
+            $out += $lines
+            if ($out[-1].Trim() -ne '') { $out += '' }
+        }
+        $out += @("${Section}:", $keyLine)
+    }
+    [System.IO.File]::WriteAllLines($Path, [string[]]$out, (New-Object System.Text.UTF8Encoding($false)))
+}
+
 function Protect-ConfigFile([string]$Path) {
     # Restrict the config file (which holds the bootstrap password until first run) to
     # Administrators and SYSTEM, which is the account the auto-start service runs under.
@@ -306,7 +341,8 @@ Write-Step 'Registering the Windows service'
 if ($LASTEXITCODE -ne 0) { throw "install-service failed (exit $LASTEXITCODE)." }
 Write-Ok 'Service "NoobBoard" registered (auto-start).'
 
-if (Confirm-Firewall) {
+$lanRequested = Confirm-Firewall
+if ($lanRequested) {
     Write-Step 'Adding firewall rule for TCP 8787-8788 (Private + Public profiles)'
     if (-not (Get-NetFirewallRule -DisplayName 'NoobBoard' -ErrorAction SilentlyContinue)) {
         New-NetFirewallRule -DisplayName 'NoobBoard' -Direction Inbound -Action Allow `
@@ -355,6 +391,35 @@ if (Confirm-AuthSetup) {
     Write-Host '    Default login (admin / change-me-now) applies until changed, or the setup wizard will ask.' -ForegroundColor Gray
 }
 
+# ---------------------------------------------------------------------------
+# 5. If LAN access was requested, bind the server to all interfaces (0.0.0.0)
+# ---------------------------------------------------------------------------
+# The firewall rule alone is not enough: the server binds to 127.0.0.1 by default, so it
+# would still answer only on localhost. A non-loopback bind requires a non-default admin
+# password (see config.Validate), so write it, verify with check-config, and revert to
+# localhost if validation would fail (otherwise the service could not start).
+if ($lanRequested) {
+    Write-Step 'Configuring the server to listen on the LAN (bind 0.0.0.0)'
+    New-Item -ItemType Directory -Force -Path $cfgDir | Out-Null
+    Set-NoobConfigKey -Path $cfgFile -Section 'server' -Key 'bind_address' -Value '0.0.0.0'
+    Protect-ConfigFile -Path $cfgFile
+
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    & $installedExe check-config --config $cfgFile 2>$null | Out-Null
+    $bindValid = ($LASTEXITCODE -eq 0)
+    $ErrorActionPreference = $prevEAP
+
+    if ($bindValid) {
+        Write-Ok 'Server will listen on all interfaces (0.0.0.0); reachable from the LAN.'
+    } else {
+        Set-NoobConfigKey -Path $cfgFile -Section 'server' -Key 'bind_address' -Value '127.0.0.1'
+        Protect-ConfigFile -Path $cfgFile
+        Write-Warn2 'LAN binding requires a non-default admin password (config validation failed); reverted'
+        Write-Warn2 'to localhost only. Re-run and set the admin login to enable LAN access.'
+    }
+}
+
 if ($Start) {
     Write-Step 'Starting the NoobBoard service'
     & $installedExe start-service
@@ -365,6 +430,14 @@ if ($Start) {
 Write-Step 'Done'
 Write-Host '    Admin panel:     http://127.0.0.1:8787/' -ForegroundColor Gray
 Write-Host '    Compact web app: http://127.0.0.1:8788/' -ForegroundColor Gray
+if ($lanRequested -and $bindValid) {
+    $lanIp = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+        Where-Object { $_.IPAddress -notlike '169.*' -and $_.IPAddress -ne '127.0.0.1' } |
+        Select-Object -First 1).IPAddress
+    if ($lanIp) {
+        Write-Host "    On the LAN:       http://${lanIp}:8787/  and  http://${lanIp}:8788/" -ForegroundColor Gray
+    }
+}
 Write-Host ''
 Write-Host '    Configure live credentials at C:\ProgramData\NoobBoard\config.yaml' -ForegroundColor Gray
 Write-Host '    (see README "Live Configuration"). Manage the service with:' -ForegroundColor Gray
