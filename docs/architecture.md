@@ -10,7 +10,10 @@ The service is built around these boundaries:
 - Privacy filtering and redaction run before display, notifications, or LLM calls.
 - The LLM layer receives only role-specific sanitized context and returns strict JSON.
 - Notification delivery is interface-based and starts with a mock backend.
-- Windows service installation lives behind build-tagged service-management code.
+- Windows service installation lives behind build-tagged service-management code. Under the
+  Service Control Manager the binary runs as a real service (`golang.org/x/sys/windows/svc`):
+  `serve` detects SCM launch, performs the start/stop handshake, and cancels the server
+  context on Stop/Shutdown. Run from a console it falls back to signal-based foreground mode.
 - The backend exposes two HTTP routers on separate ports: the admin site has the detailed panel and `/api/admin/*`; the compact site serves the lightweight compact web app and shared user APIs only.
 - Overview monitor visibility and order are client-side preferences. They use local storage so each admin device can hide and arrange live status rows without mutating shared runtime settings.
 - Runtime settings are grouped behind a frontend settings submenu. The role editor remains a structured UI, while lower-level visibility, blacklist, app image, LLM, and notification settings stay in focused JSON editor sections.
