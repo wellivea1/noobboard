@@ -49,9 +49,13 @@ builds a self-contained `noobboard.exe`, and registers the NoobBoard Windows ser
 .\install.ps1 -Start
 ```
 
+During a service install, the script **prompts whether to add a Windows Firewall rule**
+allowing LAN/WAN access on ports 8787-8788 (recommended). Pass `-AllowLan` to answer yes
+without prompting, or `-NoFirewall` to skip it.
+
 Useful flags: `-NoService` (build only), `-Start` (start the service after install),
-`-RunTests` (run the test suite first), `-AllowLan` (add a Private-network firewall rule for
-ports 8787-8788), `-InstallDir <path>` (service binary location, default
+`-RunTests` (run the test suite first), `-AllowLan` / `-NoFirewall` (firewall rule yes/no
+without prompting), `-InstallDir <path>` (service binary location, default
 `%ProgramFiles%\NoobBoard`). Run `Get-Help .\install.ps1 -Detailed` for the full list.
 
 ### Manual build (alternative)

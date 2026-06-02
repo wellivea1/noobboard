@@ -22,8 +22,11 @@
     Run "go test ./..." before building.
 
 .PARAMETER AllowLan
-    Add a Windows Firewall rule allowing inbound TCP 8787-8788 on Private networks only.
-    Off by default because it changes firewall state; only enable on a trusted LAN.
+    Add the LAN/WAN firewall rule without prompting (non-interactive "yes"). When neither
+    -AllowLan nor -NoFirewall is given and the session is interactive, the installer asks.
+
+.PARAMETER NoFirewall
+    Never add the firewall rule and do not prompt (non-interactive "no").
 
 .PARAMETER InstallDir
     Where the service binary is installed. Default: "%ProgramFiles%\NoobBoard".
@@ -45,6 +48,7 @@ param(
     [switch]$Start,
     [switch]$RunTests,
     [switch]$AllowLan,
+    [switch]$NoFirewall,
     [string]$InstallDir = (Join-Path $env:ProgramFiles 'NoobBoard'),
     [string]$GoMinVersion = '1.25.0'
 )
@@ -61,6 +65,28 @@ function Test-Admin {
     $id = [Security.Principal.WindowsIdentity]::GetCurrent()
     $p  = New-Object Security.Principal.WindowsPrincipal($id)
     return $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Confirm-Firewall {
+    # Decide whether to add the inbound firewall rule.
+    # -AllowLan forces yes, -NoFirewall forces no, otherwise prompt (recommended = yes).
+    if ($NoFirewall) { return $false }
+    if ($AllowLan)   { return $true }
+    if (-not [Environment]::UserInteractive) {
+        Write-Warn2 'Non-interactive session; skipping the firewall rule. Re-run with -AllowLan to add it.'
+        return $false
+    }
+    $title   = 'Allow LAN/WAN access through Windows Firewall?'
+    $message = 'Add an inbound firewall rule for NoobBoard (TCP 8787-8788) so other devices ' +
+               'on your network (and the internet, if this host is exposed) can reach it. ' +
+               'Without it, NoobBoard is reachable only from this machine.'
+    $yes = New-Object System.Management.Automation.Host.ChoiceDescription(
+        '&Yes (recommended)', 'Add the firewall rule to allow LAN/WAN access.')
+    $no  = New-Object System.Management.Automation.Host.ChoiceDescription(
+        '&No', 'Leave the firewall unchanged; access stays local to this machine.')
+    $choices = [System.Management.Automation.Host.ChoiceDescription[]]@($yes, $no)
+    $answer  = $Host.UI.PromptForChoice($title, $message, $choices, 0)  # default = Yes
+    return ($answer -eq 0)
 }
 
 function Get-GoExe {
@@ -180,15 +206,18 @@ Write-Step 'Registering the Windows service'
 if ($LASTEXITCODE -ne 0) { throw "install-service failed (exit $LASTEXITCODE)." }
 Write-Ok 'Service "NoobBoard" registered (auto-start).'
 
-if ($AllowLan) {
-    Write-Step 'Adding Private-network firewall rule for TCP 8787-8788'
+if (Confirm-Firewall) {
+    Write-Step 'Adding firewall rule for TCP 8787-8788 (LAN/WAN access)'
     if (-not (Get-NetFirewallRule -DisplayName 'NoobBoard' -ErrorAction SilentlyContinue)) {
         New-NetFirewallRule -DisplayName 'NoobBoard' -Direction Inbound -Action Allow `
-            -Protocol TCP -LocalPort 8787,8788 -Profile Private | Out-Null
-        Write-Ok 'Firewall rule added (Private profile only).'
+            -Protocol TCP -LocalPort 8787,8788 -Profile Any | Out-Null
+        Write-Ok 'Firewall rule added (all network profiles).'
+        Write-Warn2 'NoobBoard may now be reachable from other devices. Change the default admin password.'
     } else {
         Write-Ok 'Firewall rule already exists.'
     }
+} else {
+    Write-Ok 'Skipped firewall rule; NoobBoard is reachable only from this machine.'
 }
 
 if ($Start) {
