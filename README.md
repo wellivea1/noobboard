@@ -1,8 +1,21 @@
 # NoobBoard
 
-NoobBoard is a local-first Go web app for monitoring an Unraid server, Docker apps, UniFi network state, and basic connectivity from a compact phone-friendly dashboard or a detailed admin panel.
+NoobBoard is a local-first Go web app for monitoring an Unraid server, Docker apps, UniFi
+network state, and basic connectivity. It serves two surfaces: a detailed **admin panel**
+and a compact, phone-friendly **household status** view aimed at non-technical users.
 
-It is designed for a LAN or private reverse-proxy deployment. Live collectors are used when credentials are configured; fixture data is only used when explicitly selected for development or visual QA.
+It is designed for a LAN or private reverse-proxy deployment. Live collectors are used when
+credentials are configured; fixture data is only used when explicitly selected for
+development or visual QA.
+
+> ## ⚠️ Disclaimer — personal use only
+>
+> This is a personal hobby project, shared as-is. It is intended for **private, personal,
+> home-lab use on a trusted LAN** — not for production, commercial, or multi-tenant
+> deployments. It comes with **no warranty and no guarantee of security, correctness, or
+> support**; use it at your own risk. You are responsible for your own credentials, network
+> exposure, and data. NoobBoard is not affiliated with or endorsed by Unraid/Lime
+> Technology, Ubiquiti/UniFi, OpenAI, or Anthropic.
 
 ## Features
 
@@ -17,12 +30,33 @@ It is designed for a LAN or private reverse-proxy deployment. Live collectors ar
 - Local username/password auth with admin and standard-user roles.
 - PWA metadata and safe-area handling for iOS Safari web apps and Android install prompts.
 
-## Quick Start
+## Quick Start (recommended)
 
 Prerequisites:
 
-- Go 1.25 or newer
-- Windows PowerShell for the examples below
+- Windows 10/11
+- Windows PowerShell 5.1+ (or PowerShell 7)
+
+The install script checks for and installs the Go toolchain (via `winget` if missing),
+builds a self-contained `noobboard.exe`, and registers the NoobBoard Windows service.
+
+```powershell
+# Build only — no service. Good for trying it out or development:
+.\install.ps1 -NoService
+.\dist\noobboard.exe serve
+
+# Full install as an auto-starting Windows service (run from an *elevated* prompt):
+.\install.ps1 -Start
+```
+
+Useful flags: `-NoService` (build only), `-Start` (start the service after install),
+`-RunTests` (run the test suite first), `-AllowLan` (add a Private-network firewall rule for
+ports 8787-8788), `-InstallDir <path>` (service binary location, default
+`%ProgramFiles%\NoobBoard`). Run `Get-Help .\install.ps1 -Detailed` for the full list.
+
+### Manual build (alternative)
+
+Requires Go 1.25 or newer:
 
 ```powershell
 & 'C:\Program Files\Go\bin\go.exe' test ./...
@@ -42,11 +76,12 @@ Development credentials:
 - `admin` / `change-me-now`
 - `viewer` / `change-me-now`
 
-Change these before any real LAN or reverse-proxy use.
+**Change these before any real LAN or reverse-proxy use.**
 
 ## Live Configuration
 
-Live mode is the default. Keep credentials in environment variables, a local config file, or local key files ignored by git.
+Live mode is the default. Keep credentials in environment variables, a local config file, or
+local key files ignored by git.
 
 ```powershell
 $env:NOOBBOARD_INTEGRATION_MODE = 'live'
@@ -66,13 +101,20 @@ $env:OPENAI_API_KEY = 'replace_me' # or ANTHROPIC_API_KEY
 .\dist\noobboard.exe serve
 ```
 
-Legacy `HSD_*` environment variables are still accepted as fallback aliases, but new configuration should use `NOOBBOARD_*`.
+You can also keep this configuration in a local config file and run
+`.\dist\noobboard.exe serve --config config.local.yaml`. When running as a Windows service,
+the default config path is `C:\ProgramData\NoobBoard\config.yaml`.
 
-Bare local IPs are accepted for `UNRAID_BASE_URL` and `UNIFI_BASE_URL`. Unraid values normalize to `http://...`; UniFi values normalize to `https://...`.
+Legacy `HSD_*` environment variables are still accepted as fallback aliases, but new
+configuration should use `NOOBBOARD_*`.
+
+Bare local IPs are accepted for `UNRAID_BASE_URL` and `UNIFI_BASE_URL`. Unraid values
+normalize to `http://...`; UniFi values normalize to `https://...`.
 
 ## Optional SSH Docker Fallback
 
-If the Unraid GraphQL Docker API omits containers, enable SSH fallback. It runs Docker CLI commands directly on Unraid using key/agent-based SSH and argument-array process execution.
+If the Unraid GraphQL Docker API omits containers, enable SSH fallback. It runs Docker CLI
+commands directly on Unraid using key/agent-based SSH and argument-array process execution.
 
 ```powershell
 $env:UNRAID_SSH_FALLBACK_ENABLED = 'true'
@@ -81,7 +123,8 @@ $env:UNRAID_SSH_USER = 'root'
 $env:UNRAID_SSH_KEY_FILE = 'C:\path\to\unraid-ssh-key'
 ```
 
-The app prefers SSH only when SSH sees more containers than GraphQL, or when GraphQL cannot serve logs/control for a selected SSH-sourced app.
+The app prefers SSH only when SSH sees more containers than GraphQL, or when GraphQL cannot
+serve logs/control for a selected SSH-sourced app.
 
 ## Fixture Mode
 
@@ -103,15 +146,21 @@ Run the visual check before and after UI changes:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\visual-check.ps1
 ```
 
-The check starts an isolated fixture-backed dashboard, signs in with the development admin and viewer accounts, captures desktop and mobile screenshots under `.cache`, and checks for common regressions such as blank dashboards, hidden login screens, missing app logos, missing compact content, button overflow, and mobile body overflow.
+The check starts an isolated fixture-backed dashboard, signs in with the development admin
+and viewer accounts, captures desktop and mobile screenshots under `.cache`, and checks for
+common regressions such as blank dashboards, hidden login screens, missing app logos,
+missing compact content, button overflow, and mobile body overflow.
 
 ## Windows Service
 
-Build first, then install from an elevated PowerShell prompt:
+The recommended path is `.\install.ps1 -Start` (see Quick Start), which builds the binary,
+copies it to `%ProgramFiles%\NoobBoard`, and registers the service. To manage it manually:
 
 ```powershell
 .\dist\noobboard.exe install-service
 .\dist\noobboard.exe start-service
+.\dist\noobboard.exe stop-service
+.\dist\noobboard.exe uninstall-service
 ```
 
 Default Windows paths:
@@ -120,7 +169,7 @@ Default Windows paths:
 - Database: `C:\ProgramData\NoobBoard\data\dashboard.db.json`
 - Logs: `C:\ProgramData\NoobBoard\logs\`
 
-Allow LAN access on a private network only:
+Allow LAN access on a private network only (the installer can do this with `-AllowLan`):
 
 ```powershell
 New-NetFirewallRule -DisplayName "NoobBoard" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8787,8788 -Profile Private
@@ -136,6 +185,8 @@ New-NetFirewallRule -DisplayName "NoobBoard" -Direction Inbound -Action Allow -P
 - Docker controls are admin-only and audited.
 - OpenAI and Anthropic are the only supported LLM providers.
 
+See `docs/security.md` for the full list of controls.
+
 ## Useful Commands
 
 ```powershell
@@ -147,6 +198,7 @@ New-NetFirewallRule -DisplayName "NoobBoard" -Direction Inbound -Action Allow -P
 ## Project Layout
 
 ```text
+install.ps1         Dependency check + build + service install
 cmd/dashboard       CLI entrypoint and server startup
 cmd/visualcheck     Local screenshot/DOM regression harness
 internal/adapters   Unraid, Docker, UniFi, probes, and fixtures
@@ -154,4 +206,11 @@ internal/server     HTTP routing, auth, settings, and static app serving
 internal/diagnostics Incident and status rules
 web/public          Embedded PWA frontend
 docs                Architecture, API config, deployment, and security notes
+AGENTS.md           Orientation + don't-regress guardrails for contributors/agents
+docs/agent-roadmap.md  Planned workstreams and design notes
 ```
+
+## Contributing / Roadmap
+
+Read `AGENTS.md` first for the app's purpose and the invariants that keep the two surfaces
+safe. Planned work and design decisions live in `docs/agent-roadmap.md`.
