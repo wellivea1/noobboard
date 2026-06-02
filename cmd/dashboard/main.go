@@ -89,6 +89,24 @@ func serve(args []string) error {
 		return err
 	}
 
+	// When the process is launched by the Windows Service Control Manager, run as a real
+	// service (SCM handshake + stop handling). Otherwise fall through to foreground mode.
+	handled, err := service.RunService(service.OptionsFromVersion(version).Name, func(ctx context.Context) error {
+		return runServers(ctx, cfg)
+	})
+	if handled {
+		return err
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return runServers(ctx, cfg)
+}
+
+// runServers starts the admin and compact HTTP servers and serves until ctx is cancelled
+// (by an OS signal in foreground mode, or by the service stop handler under SCM), then
+// shuts down gracefully.
+func runServers(ctx context.Context, cfg config.Config) error {
 	app, err := buildApp(cfg)
 	if err != nil {
 		return err
@@ -105,8 +123,8 @@ func serve(args []string) error {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
 	errCh := make(chan error, 2)
 	startServer := func(name string, srv *http.Server) {
@@ -114,7 +132,7 @@ func serve(args []string) error {
 			slog.Info("dashboard listening", "site", name, "address", srv.Addr)
 			if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				errCh <- fmt.Errorf("%s server failed: %w", name, err)
-				stop()
+				cancel()
 			}
 		}()
 	}
@@ -127,11 +145,11 @@ func serve(args []string) error {
 	case err := <-errCh:
 		serveErr = err
 		slog.Error("server failed", "error", err)
-		stop()
+		cancel()
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
 	app.Flush()
 
 	var shutdownErr error
