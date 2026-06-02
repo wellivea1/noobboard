@@ -59,25 +59,34 @@
       </header>
 
       <section id="user-home" class="user-home" hidden>
-        <div id="user-status-grid" class="user-status-grid"></div>
+        <section id="user-hero" class="user-hero" aria-live="polite"></section>
+
+        <div id="user-primary-actions" class="user-primary-actions" aria-label="Status actions">
+          <button id="user-notify-admin" type="button" class="command" data-glyph="!">Notify admin</button>
+          <button id="user-chat-open" type="button" class="primary command" data-glyph="?">Ask what's wrong</button>
+        </div>
 
         <section class="panel">
           <div class="section-head">
-            <h2>Apps</h2>
+            <h2>Your apps</h2>
             <span id="user-app-count" class="muted">0 apps</span>
           </div>
           <div id="user-apps" class="user-apps"></div>
         </section>
 
         <section class="panel user-chat">
-          <h2>Status Chat</h2>
-          <div id="user-chat-output" class="chat-output muted chat-empty">Ask what is wrong or whether a service is working.</div>
+          <h2>Ask what's wrong</h2>
+          <div id="user-chat-output" class="chat-output muted chat-empty">Ask what's wrong or whether an app is working.</div>
           <textarea id="user-chat-input" rows="3">What is wrong right now?</textarea>
           <div class="button-row">
             <button id="user-chat-send" type="button" class="primary command" data-glyph=">">Ask</button>
-            <button id="user-notify-admin" type="button" class="command" data-glyph="!">Notify admin</button>
           </div>
         </section>
+
+        <details class="user-technical-details" data-technical>
+          <summary>Technical details</summary>
+          <div id="user-status-grid" class="user-status-grid"></div>
+        </details>
       </section>
 
       <div id="nav-backdrop" class="nav-backdrop" hidden></div>

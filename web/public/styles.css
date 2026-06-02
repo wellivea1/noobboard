@@ -3265,6 +3265,344 @@ body.compact-view .assistant-toggle {
   }
 }
 
+body.compact-view .shell {
+  width: min(520px, 100%);
+  padding: calc(7px + var(--safe-top)) max(10px, var(--safe-right)) calc(10px + var(--safe-bottom)) max(10px, var(--safe-left));
+}
+
+body.compact-view .user-home {
+  gap: 9px;
+}
+
+body.compact-view .topbar {
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "title actions";
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 2px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+body.compact-view .topbar-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+  gap: 4px;
+  width: auto;
+  max-width: none;
+  overflow: visible;
+  padding-bottom: 0;
+}
+
+body.compact-view .topbar-actions button.command {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 9px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  background: transparent;
+  font-size: 0.78rem;
+  line-height: 1.05;
+}
+
+body.compact-view .topbar-actions button.command::before {
+  width: 0.84rem;
+  height: 0.84rem;
+  margin: 0 2px 0 0;
+  font-size: 0.82rem;
+}
+
+body.compact-view h1 {
+  font-size: 1.02rem;
+  line-height: 1.1;
+}
+
+body.compact-view .user-hero {
+  --hero-accent: var(--unknown-border);
+  --hero-bg: var(--surface);
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  grid-template-areas:
+    "art copy"
+    "next next";
+  gap: 8px 10px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--hero-accent) 72%, var(--border));
+  border-left-width: 4px;
+  border-radius: 8px;
+  background: var(--hero-bg);
+  box-shadow: none;
+}
+
+body.compact-view .user-hero.ok {
+  --hero-accent: var(--ok-border);
+  --hero-bg: color-mix(in srgb, var(--ok-bg) 54%, var(--surface));
+}
+
+body.compact-view .user-hero.warning {
+  --hero-accent: var(--warn-border);
+  --hero-bg: color-mix(in srgb, var(--warn-bg) 58%, var(--surface));
+}
+
+body.compact-view .user-hero.problem {
+  --hero-accent: var(--bad-border);
+  --hero-bg: color-mix(in srgb, var(--bad-bg) 58%, var(--surface));
+}
+
+body.compact-view .user-hero.neutral {
+  --hero-accent: var(--unknown-border);
+}
+
+body.compact-view .user-hero-art {
+  grid-area: art;
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  color: var(--hero-accent);
+}
+
+body.compact-view .user-hero-art .status-artwork {
+  width: 32px;
+  height: 32px;
+}
+
+body.compact-view .user-hero-copy {
+  grid-area: copy;
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+body.compact-view .user-hero-state {
+  color: var(--hero-accent);
+  font-size: 0.72rem;
+  font-weight: 820;
+  letter-spacing: 0;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+body.compact-view .user-hero h2 {
+  margin: 0;
+  font-size: 1.08rem;
+  line-height: 1.14;
+}
+
+body.compact-view .user-hero p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.86rem;
+  line-height: 1.28;
+}
+
+body.compact-view .user-hero-next {
+  grid-area: next;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--hero-accent) 34%, var(--border-soft));
+  color: var(--text) !important;
+}
+
+body.compact-view .user-primary-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+body.compact-view .user-primary-actions[data-chat-available="false"] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+body.compact-view .user-primary-actions button.command {
+  min-height: 44px;
+  width: 100%;
+  border-radius: 6px;
+  padding: 0 12px;
+  font-size: 0.86rem;
+  font-weight: 740;
+}
+
+body.compact-view #user-notify-admin,
+body.compact-view #user-chat-open {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 12px;
+  font-size: 0.86rem;
+}
+
+body.compact-view .user-primary-actions button.command::before {
+  margin-right: 3px;
+}
+
+body.compact-view #user-notify-admin::before,
+body.compact-view #user-chat-open::before {
+  margin-right: 3px;
+}
+
+body.compact-view .panel {
+  gap: 7px;
+  padding: 0;
+}
+
+body.compact-view .section-head {
+  min-height: 24px;
+}
+
+body.compact-view .section-head h2 {
+  font-size: 0.9rem;
+}
+
+body.compact-view .user-apps {
+  border-block: 1px solid var(--border-soft);
+}
+
+body.compact-view .user-app-card {
+  grid-template-columns: 32px minmax(0, 1fr);
+  min-height: 46px;
+  gap: 8px;
+  padding: 5px 0;
+}
+
+body.compact-view .user-app-card .app-logo {
+  width: 32px;
+  height: 32px;
+}
+
+body.compact-view .user-app-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+body.compact-view .app-title-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+body.compact-view .user-app-card h3 {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.9rem;
+  line-height: 1.12;
+}
+
+body.compact-view .compact-app-status {
+  flex: 0 0 auto;
+  font-size: 0.74rem;
+  font-weight: 760;
+}
+
+body.compact-view .compact-app-status .status-text {
+  color: var(--text);
+}
+
+body.compact-view .user-app-card p {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.78rem;
+  line-height: 1.2;
+}
+
+body.compact-view .panel.user-chat {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 7px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border-soft);
+  background: transparent;
+}
+
+body.compact-view .panel.user-chat[hidden] {
+  display: none !important;
+}
+
+body.compact-view .panel.user-chat h2 {
+  grid-column: 1 / -1;
+  position: static;
+  width: auto;
+  height: auto;
+  overflow: visible;
+  clip: auto;
+  white-space: normal;
+  font-size: 0.9rem;
+}
+
+body.compact-view .panel.user-chat .chat-output {
+  grid-column: 1 / -1;
+  min-height: 36px;
+  max-height: 86px;
+  overflow: auto;
+  padding: 6px 0;
+  border: 0;
+  background: transparent;
+  font-size: 0.82rem;
+  line-height: 1.3;
+}
+
+body.compact-view .panel.user-chat .chat-output.chat-empty {
+  display: none;
+}
+
+body.compact-view .panel.user-chat textarea {
+  grid-column: 1;
+  min-height: 44px;
+  height: 44px;
+  max-height: 44px;
+  padding: 9px 10px;
+  border-radius: 6px;
+  resize: none;
+}
+
+body.compact-view .panel.user-chat .button-row {
+  grid-column: 2;
+  display: flex;
+  align-self: start;
+  gap: 5px;
+}
+
+body.compact-view .panel.user-chat .button-row button,
+body.compact-view #user-chat-send {
+  width: auto;
+  min-width: 58px;
+  min-height: 44px;
+  height: 44px;
+  padding: 0 12px;
+  font-size: 0.86rem;
+}
+
+body.compact-view #user-chat-send::before {
+  margin-right: 3px;
+}
+
+body.compact-view .user-technical-details {
+  border-top: 1px solid var(--border-soft);
+  color: var(--muted);
+}
+
+body.compact-view .user-technical-details summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+body.compact-view .user-technical-details[open] .user-status-grid {
+  margin-bottom: 4px;
+}
+
 @supports (height: 100dvh) {
   :root {
     --visual-viewport-height: 100dvh;

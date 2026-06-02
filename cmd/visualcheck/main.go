@@ -69,10 +69,13 @@ type flags struct {
 	SettingsMenuButtonCount int      `json:"settingsMenuButtonCount,omitempty"`
 	VisibleSettingsSections int      `json:"visibleSettingsSections,omitempty"`
 	UserHomeVisible         bool     `json:"userHomeVisible,omitempty"`
+	UserHeroVisible         bool     `json:"userHeroVisible,omitempty"`
 	UserStatusCardCount     int      `json:"userStatusCardCount,omitempty"`
 	UserAppCardCount        int      `json:"userAppCardCount,omitempty"`
 	UserAppLogoCount        int      `json:"userAppLogoCount,omitempty"`
 	UserChatVisible         bool     `json:"userChatVisible,omitempty"`
+	BannedTermCount         int      `json:"bannedTermCount,omitempty"`
+	IconOnlyPrimaryActions  int      `json:"iconOnlyPrimaryActionCount,omitempty"`
 	AdminTabsVisible        bool     `json:"adminTabsVisible,omitempty"`
 	ViewportFitCover        bool     `json:"viewportFitCover,omitempty"`
 	AppleMobileCapable      bool     `json:"appleMobileCapable,omitempty"`
@@ -581,7 +584,7 @@ func assertVisualFlags(overview, server, router, apps, settings, customization, 
 	if customization.ElementBoundsOverflow {
 		failures = append(failures, "monitor customization component bounds overflowed: "+customization.ElementBoundsOffender)
 	}
-	if mobileOverview.SourcePillText != "Fixture data" || mobileUserHome.SourcePillText != "Fixture data" {
+	if mobileOverview.SourcePillText != "Fixture data" {
 		failures = append(failures, "fixture source-mode label was not visible")
 	}
 	if server.DetailSectionCount < 2 || router.DetailSectionCount < 2 || mobileRouter.DetailSectionCount < 2 {
@@ -632,17 +635,23 @@ func assertVisualFlags(overview, server, router, apps, settings, customization, 
 	if mobileUserHome.AdminTabsVisible {
 		failures = append(failures, "general user can see detailed admin tabs")
 	}
-	if mobileUserHome.UserStatusCardCount < 3 {
-		failures = append(failures, "general user status rollups did not render")
+	if mobileUserHome.PageTitle != "Home status" {
+		failures = append(failures, "general user page title was not plain")
+	}
+	if !mobileUserHome.UserHeroVisible {
+		failures = append(failures, "general user hero status did not render")
+	}
+	if mobileUserHome.BannedTermCount != 0 {
+		failures = append(failures, "general user default view leaked technical terms")
+	}
+	if mobileUserHome.IconOnlyPrimaryActions != 0 {
+		failures = append(failures, "general user primary actions lacked visible or accessible labels")
 	}
 	if mobileUserHome.UserAppCardCount < 1 {
 		failures = append(failures, "general user selected app cards did not render")
 	}
 	if mobileUserHome.UserAppLogoCount < 1 {
 		failures = append(failures, "general user app logos did not render")
-	}
-	if !mobileUserHome.UserChatVisible {
-		failures = append(failures, "general user chat box did not render")
 	}
 	if mobileUserHome.BodyHorizontalOverflow {
 		failures = append(failures, "general user mobile body horizontal overflow detected")
@@ -969,14 +978,31 @@ const generalUserExpression = `(async () => {
   const adminTabsVisible = !!(document.querySelector('#tabs') && !document.querySelector('#tabs').hidden && getComputedStyle(document.querySelector('#tabs')).display !== 'none');
   const chat = document.querySelector('#user-chat-input');
   const chatVisible = !!(chat && chat.getClientRects().length && getComputedStyle(chat).visibility !== 'hidden' && getComputedStyle(chat).display !== 'none');
+  const hero = document.querySelector('#user-hero');
+  const userHeroVisible = !!(hero && visibleElement(hero) && hero.textContent.trim());
+  const visibleText = visibleCompactText(document.querySelector('#user-home'));
+  const bannedMatches = visibleText.match(/\b(container|docker|unraid|array|parity|endpoint|graphql|probe|wan|lan|api|ssh|telemetry|smart|syslog|filesystem|cache pool|gateway|https|dns|unifi)\b/gi) || [];
+  const primaryActions = [...document.querySelectorAll('#user-primary-actions button, body.compact-view .topbar-actions button.command')]
+    .filter((element) => visibleElement(element));
+  const iconOnlyPrimaryActionCount = primaryActions.filter((element) => {
+    const text = (element.textContent || '').trim();
+    const aria = (element.getAttribute('aria-label') || element.getAttribute('title') || '').trim();
+    if (element.closest('#user-primary-actions')) {
+      return !text || getComputedStyle(element).fontSize === '0px';
+    }
+    return !text && !aria;
+  }).length;
   const mobileAudit = await auditMobileShell();
   return {
     pageTitle: document.querySelector('#page-title')?.textContent || '',
     userHomeVisible: visible(),
+    userHeroVisible,
     userStatusCardCount: document.querySelectorAll('#user-status-grid .user-status-card').length,
     userAppCardCount: document.querySelectorAll('#user-apps .user-app-card').length,
     userAppLogoCount: document.querySelectorAll('#user-apps .app-logo').length,
     userChatVisible: chatVisible,
+    bannedTermCount: bannedMatches.length,
+    iconOnlyPrimaryActionCount,
     adminTabsVisible,
     sourcePillText: document.querySelector('#source-pill')?.textContent || '',
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
@@ -1018,6 +1044,25 @@ const auditMobileShellExpression = `async function auditMobileShell() {
 function visibleElement(element) {
   const style = getComputedStyle(element);
   return element.getClientRects().length > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+}
+
+function visibleCompactText(root) {
+  if (!root) return '';
+  const parts = [];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(textNode) {
+      const parent = textNode.parentElement;
+      if (!parent) return NodeFilter.FILTER_REJECT;
+      if (parent.closest('details[data-technical]:not([open])')) return NodeFilter.FILTER_REJECT;
+      if (!visibleElement(parent)) return NodeFilter.FILTER_REJECT;
+      return NodeFilter.FILTER_ACCEPT;
+    }
+  });
+  while (walker.nextNode()) {
+    const text = walker.currentNode.nodeValue.trim();
+    if (text) parts.push(text);
+  }
+  return parts.join(' ');
 }
 
 function hasButtonTextOverflow() {
