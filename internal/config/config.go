@@ -1,0 +1,822 @@
+package config
+
+import (
+	"bufio"
+	"errors"
+	"fmt"
+	"net"
+	"net/url"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/wellivea1/server-status/internal/models"
+)
+
+type Config struct {
+	Server          ServerConfig
+	Database        DatabaseConfig
+	Auth            AuthConfig
+	Visibility      models.VisibilitySettings
+	Privacy         PrivacyConfig
+	AppCatalog      AppCatalogConfig
+	Notifications   NotificationConfig
+	LLM             LLMConfig
+	Integrations    IntegrationConfig
+	FixtureDir      string
+	FixtureScenario string
+	Polling         PollingConfig
+	Retention       RetentionConfig
+}
+
+type ServerConfig struct {
+	BindAddress    string
+	Port           int
+	CompactPort    int
+	PublicURL      string
+	AllowedOrigins []string
+}
+
+func (s ServerConfig) Address() string {
+	return fmt.Sprintf("%s:%d", s.BindAddress, s.Port)
+}
+
+func (s ServerConfig) CompactAddress() string {
+	return fmt.Sprintf("%s:%d", s.BindAddress, s.CompactPort)
+}
+
+type DatabaseConfig struct {
+	Path string
+}
+
+type AuthConfig struct {
+	BootstrapAdminUsername string
+	BootstrapAdminPassword string
+	SessionTimeout         time.Duration
+	CookieSecure           bool
+	AllowInsecureRemote    bool
+}
+
+type PrivacyConfig struct {
+	BlacklistAppIDs         []string `json:"blacklist_app_ids"`
+	BlacklistContainerNames []string `json:"blacklist_container_names"`
+	BlacklistDisplayNames   []string `json:"blacklist_display_names"`
+	BlacklistFolderPaths    []string `json:"blacklist_folder_paths"`
+	BlacklistShareNames     []string `json:"blacklist_share_names"`
+	BlacklistFilePaths      []string `json:"blacklist_file_paths"`
+	BlacklistFilenameGlobs  []string `json:"blacklist_filename_globs"`
+	BlacklistLogPatterns    []string `json:"blacklist_log_patterns"`
+	BlacklistEnvNames       []string `json:"blacklist_env_names"`
+	BlacklistURLPatterns    []string `json:"blacklist_url_patterns"`
+	BlacklistHostnames      []string `json:"blacklist_hostnames"`
+	BlacklistIPs            []string `json:"blacklist_ips"`
+	BlacklistUsernames      []string `json:"blacklist_usernames"`
+	RedactIPs               bool     `json:"redact_ips"`
+	RedactHostnames         bool     `json:"redact_hostnames"`
+	RedactEmails            bool     `json:"redact_emails"`
+}
+
+type AppCatalogConfig struct {
+	IconOverrides map[string]string `json:"icon_overrides"`
+}
+
+type NotificationConfig struct {
+	Enabled             bool          `json:"enabled"`
+	GlobalOptInEnabled  bool          `json:"global_opt_in_enabled"`
+	Backend             string        `json:"backend"`
+	RateLimitWindow     time.Duration `json:"rate_limit_window"`
+	WholeOutageDeduping bool          `json:"whole_outage_deduping"`
+}
+
+type LLMConfig struct {
+	Enabled        bool                        `json:"enabled"`
+	Provider       string                      `json:"provider"`
+	OpenAIModel    string                      `json:"openai_model"`
+	AnthropicModel string                      `json:"anthropic_model"`
+	Timeout        time.Duration               `json:"timeout"`
+	Policies       map[string]models.LLMPolicy `json:"policies"`
+}
+
+type IntegrationConfig struct {
+	Mode              string
+	UnraidBaseURL     string
+	UnraidAPIKey      string
+	UnraidAPIKeyFile  string
+	UnraidSSHFallback bool
+	UnraidSSHHost     string
+	UnraidSSHPort     int
+	UnraidSSHUser     string
+	UnraidSSHKeyFile  string
+	UnraidSSHCommand  string
+	UniFiBaseURL      string
+	UniFiAPIKey       string
+	UniFiAPIKeyFile   string
+	UniFiSiteID       string
+	UniFiInsecureTLS  bool
+	InternetProbeURL  string
+	DNSProbeHost      string
+	RouterProbeTarget string
+	NASProbeTarget    string
+}
+
+type PollingConfig struct {
+	Interval time.Duration
+}
+
+type RetentionConfig struct {
+	MaxAuditEntries        int
+	MaxNotificationHistory int
+	MaxLogLinesPerSource   int
+	MaxIncidentAge         time.Duration
+}
+
+func Load(path string) (Config, error) {
+	cfg := Defaults()
+	if path == "" {
+		path = defaultConfigPath()
+	}
+	if _, err := os.Stat(path); err == nil {
+		if err := applySimpleConfigFile(&cfg, path); err != nil {
+			return Config{}, err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return Config{}, err
+	}
+	applyEnv(&cfg)
+	if err := applySecretFiles(&cfg); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+func Defaults() Config {
+	base := defaultBaseDir()
+	return Config{
+		Server: ServerConfig{
+			BindAddress: "127.0.0.1",
+			Port:        8787,
+			CompactPort: 8788,
+			PublicURL:   "http://127.0.0.1:8787",
+		},
+		Database: DatabaseConfig{
+			Path: filepath.Join(base, "data", "dashboard.db.json"),
+		},
+		Auth: AuthConfig{
+			BootstrapAdminUsername: "admin",
+			BootstrapAdminPassword: "",
+			SessionTimeout:         12 * time.Hour,
+			CookieSecure:           false,
+		},
+		Visibility: models.VisibilitySettings{
+			DefaultRole:          models.RoleGeneralUser,
+			GeneralUserCanUseLLM: true,
+			ShowNASStatusToUsers: true,
+			ShowWANStatusToUsers: true,
+		},
+		Privacy: PrivacyConfig{
+			BlacklistEnvNames: []string{"*_KEY", "*_TOKEN", "*PASSWORD*", "AUTHORIZATION", "COOKIE"},
+			RedactEmails:      true,
+		},
+		AppCatalog: AppCatalogConfig{
+			IconOverrides: map[string]string{},
+		},
+		Notifications: NotificationConfig{
+			Enabled:             true,
+			GlobalOptInEnabled:  true,
+			Backend:             "mock",
+			RateLimitWindow:     15 * time.Minute,
+			WholeOutageDeduping: true,
+		},
+		LLM: LLMConfig{
+			Enabled:        true,
+			Provider:       "disabled",
+			OpenAIModel:    "gpt-5",
+			AnthropicModel: "claude-sonnet-4-5",
+			Timeout:        45 * time.Second,
+			Policies:       defaultLLMPolicies(),
+		},
+		Integrations: IntegrationConfig{
+			Mode:             "live",
+			UnraidSSHPort:    22,
+			UnraidSSHCommand: "ssh",
+			UniFiSiteID:      "default",
+			UniFiInsecureTLS: true,
+			InternetProbeURL: "https://www.gstatic.com/generate_204",
+			DNSProbeHost:     "cloudflare.com",
+		},
+		FixtureDir:      "fixtures",
+		FixtureScenario: "all_systems_online",
+		Polling: PollingConfig{
+			Interval: 30 * time.Second,
+		},
+		Retention: RetentionConfig{
+			MaxAuditEntries:        1000,
+			MaxNotificationHistory: 1000,
+			MaxLogLinesPerSource:   200,
+			MaxIncidentAge:         30 * 24 * time.Hour,
+		},
+	}
+}
+
+func defaultLLMPolicies() map[string]models.LLMPolicy {
+	return map[string]models.LLMPolicy{
+		"admin_requested": {
+			Name:                  "admin_requested",
+			Enabled:               true,
+			IncludeLogs:           true,
+			PreferIncidentFacts:   true,
+			AllowHiddenAppNames:   true,
+			AllowBlacklistedNames: false,
+			MaxContextBytes:       32000,
+			MaxLogLines:           80,
+			FailClosedOnRedaction: true,
+			RecipientRole:         models.RoleAdmin,
+		},
+		"general_user_requested": {
+			Name:                  "general_user_requested",
+			Enabled:               true,
+			IncludeLogs:           false,
+			PreferIncidentFacts:   true,
+			AllowHiddenAppNames:   false,
+			AllowBlacklistedNames: false,
+			MaxContextBytes:       12000,
+			MaxLogLines:           0,
+			FailClosedOnRedaction: true,
+			RecipientRole:         models.RoleGeneralUser,
+		},
+		"automatic_incident": {
+			Name:                  "automatic_incident",
+			Enabled:               true,
+			IncludeLogs:           false,
+			PreferIncidentFacts:   true,
+			AllowHiddenAppNames:   false,
+			AllowBlacklistedNames: false,
+			MaxContextBytes:       16000,
+			MaxLogLines:           20,
+			FailClosedOnRedaction: true,
+			RecipientRole:         models.RoleAdmin,
+		},
+		"notification_message": {
+			Name:                  "notification_message",
+			Enabled:               true,
+			IncludeLogs:           false,
+			PreferIncidentFacts:   true,
+			AllowHiddenAppNames:   false,
+			AllowBlacklistedNames: false,
+			MaxContextBytes:       8000,
+			MaxLogLines:           0,
+			FailClosedOnRedaction: true,
+			RecipientRole:         models.RoleAdmin,
+		},
+	}
+}
+
+func (c Config) Validate() error {
+	if c.Server.Port <= 0 || c.Server.Port > 65535 {
+		return fmt.Errorf("server port %d is invalid", c.Server.Port)
+	}
+	if c.Server.CompactPort <= 0 || c.Server.CompactPort > 65535 {
+		return fmt.Errorf("server compact_port %d is invalid", c.Server.CompactPort)
+	}
+	if c.Server.CompactPort == c.Server.Port {
+		return errors.New("server compact_port must be different from server port")
+	}
+	if strings.TrimSpace(c.Server.BindAddress) == "" {
+		return errors.New("server bind address is required")
+	}
+	if strings.TrimSpace(c.Database.Path) == "" {
+		return errors.New("database path is required")
+	}
+	if c.Auth.SessionTimeout < time.Minute {
+		return errors.New("auth session timeout must be at least one minute")
+	}
+	if !c.Auth.AllowInsecureRemote && isRemoteBindAddress(c.Server.BindAddress) && isDefaultPassword(c.Auth.BootstrapAdminPassword) {
+		return errors.New("remote bind requires HSD_BOOTSTRAP_ADMIN_PASSWORD or auth.allow_insecure_remote for development only")
+	}
+	if c.Server.PublicURL != "" {
+		if _, err := url.ParseRequestURI(c.Server.PublicURL); err != nil {
+			return fmt.Errorf("server public_url is invalid: %w", err)
+		}
+	}
+	for _, origin := range c.Server.AllowedOrigins {
+		parsed, err := url.Parse(origin)
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+			return fmt.Errorf("server allowed origin %q is invalid", origin)
+		}
+	}
+	if c.Polling.Interval < time.Second {
+		return errors.New("polling interval must be at least one second")
+	}
+	if err := validateRoleVisibility(c.Visibility); err != nil {
+		return err
+	}
+	for key, iconURL := range c.AppCatalog.IconOverrides {
+		if strings.TrimSpace(key) == "" {
+			return errors.New("app icon override key is required")
+		}
+		if _, err := NormalizeIconURL(iconURL); err != nil {
+			return fmt.Errorf("app icon override %s: %w", key, err)
+		}
+	}
+	switch c.Integrations.Mode {
+	case "fixture", "mixed", "live":
+	default:
+		return fmt.Errorf("integration mode %q is invalid", c.Integrations.Mode)
+	}
+	if err := validateProbeSettings(c.Integrations); err != nil {
+		return err
+	}
+	if err := validateIntegrationBaseURL("unraid_base_url", c.Integrations.UnraidBaseURL); err != nil {
+		return err
+	}
+	if c.Integrations.UnraidSSHFallback {
+		if strings.TrimSpace(c.Integrations.UnraidSSHHost) == "" {
+			return errors.New("unraid ssh fallback requires integrations.unraid_ssh_host")
+		}
+		if strings.TrimSpace(c.Integrations.UnraidSSHUser) == "" {
+			return errors.New("unraid ssh fallback requires integrations.unraid_ssh_user")
+		}
+	}
+	if c.Integrations.UnraidSSHPort <= 0 || c.Integrations.UnraidSSHPort > 65535 {
+		return fmt.Errorf("unraid ssh port %d is invalid", c.Integrations.UnraidSSHPort)
+	}
+	if strings.TrimSpace(c.Integrations.UnraidSSHCommand) == "" {
+		return errors.New("unraid ssh command is required")
+	}
+	if err := validateIntegrationBaseURL("unifi_base_url", c.Integrations.UniFiBaseURL); err != nil {
+		return err
+	}
+	switch c.LLM.Provider {
+	case "disabled", "openai", "anthropic":
+	default:
+		return fmt.Errorf("llm provider %q is invalid", c.LLM.Provider)
+	}
+	for name, policy := range c.LLM.Policies {
+		if policy.MaxContextBytes <= 0 {
+			return fmt.Errorf("llm policy %s must have max_context_bytes", name)
+		}
+		if !policy.FailClosedOnRedaction {
+			return fmt.Errorf("llm policy %s must fail closed on redaction", name)
+		}
+	}
+	return nil
+}
+
+func validateIntegrationBaseURL(label, value string) error {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return fmt.Errorf("%s %q is invalid", label, value)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("%s %q must use http or https", label, value)
+	}
+	if parsed.User != nil {
+		return fmt.Errorf("%s must not contain credentials", label)
+	}
+	return nil
+}
+
+func normalizeIntegrationBaseURL(value, defaultScheme string) string {
+	normalized, err := normalizeIntegrationBaseURLStrict(value, defaultScheme)
+	if err != nil {
+		return strings.TrimRight(strings.TrimSpace(value), "/")
+	}
+	return normalized
+}
+
+func normalizeIntegrationBaseURLStrict(value, defaultScheme string) (string, error) {
+	value = strings.TrimRight(strings.TrimSpace(value), "/")
+	if value == "" {
+		return "", nil
+	}
+	lower := strings.ToLower(value)
+	if !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") {
+		value = defaultScheme + "://" + value
+	}
+	if err := validateIntegrationBaseURL("integration base URL", value); err != nil {
+		return "", err
+	}
+	return value, nil
+}
+
+func validateProbeSettings(settings IntegrationConfig) error {
+	if settings.InternetProbeURL != "" {
+		parsed, err := url.Parse(settings.InternetProbeURL)
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+			return fmt.Errorf("internet probe URL %q is invalid", settings.InternetProbeURL)
+		}
+		if parsed.Scheme != "http" && parsed.Scheme != "https" {
+			return fmt.Errorf("internet probe URL %q must use http or https", settings.InternetProbeURL)
+		}
+	}
+	for label, value := range map[string]string{
+		"dns probe host":      settings.DNSProbeHost,
+		"router probe target": settings.RouterProbeTarget,
+		"NAS probe target":    settings.NASProbeTarget,
+	} {
+		if strings.ContainsAny(value, " \t\r\n") {
+			return fmt.Errorf("%s cannot contain whitespace", label)
+		}
+	}
+	return nil
+}
+
+func validateRoleVisibility(settings models.VisibilitySettings) error {
+	seen := map[models.Role]bool{}
+	for _, role := range settings.Roles {
+		roleName := models.Role(strings.TrimSpace(string(role.Role)))
+		if roleName == "" {
+			return errors.New("visibility role name is required")
+		}
+		if roleName == models.RoleAdmin {
+			return errors.New("admin role visibility cannot be overridden")
+		}
+		if strings.ContainsAny(string(roleName), " \t\r\n/\\") {
+			return fmt.Errorf("visibility role %q contains unsupported whitespace or slash", roleName)
+		}
+		if seen[roleName] {
+			return fmt.Errorf("visibility role %q is duplicated", roleName)
+		}
+		seen[roleName] = true
+	}
+	return nil
+}
+
+func isDefaultPassword(value string) bool {
+	value = strings.TrimSpace(value)
+	return value == "" || value == "change-me-now"
+}
+
+func isRemoteBindAddress(value string) bool {
+	host := strings.TrimSpace(value)
+	if host == "" || host == "localhost" {
+		return false
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return true
+	}
+	return !ip.IsLoopback()
+}
+
+func NormalizeIconURL(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", nil
+	}
+	if strings.HasPrefix(value, "/") && !strings.HasPrefix(value, "//") {
+		return value, nil
+	}
+	if strings.HasPrefix(strings.ToLower(value), "http://") || strings.HasPrefix(strings.ToLower(value), "https://") {
+		parsed, err := url.Parse(value)
+		if err != nil || parsed.Host == "" {
+			return "", fmt.Errorf("image URL %q is invalid", value)
+		}
+		if parsed.User != nil {
+			return "", errors.New("image URL must not contain credentials")
+		}
+		return value, nil
+	}
+	return "", fmt.Errorf("image URL must be http, https, or a local app path beginning with /")
+}
+
+func defaultBaseDir() string {
+	if runtime.GOOS == "windows" {
+		if programData := os.Getenv("ProgramData"); programData != "" {
+			return filepath.Join(programData, "ServerStatus")
+		}
+		return filepath.Join(`C:\ProgramData`, "ServerStatus")
+	}
+	if xdg := os.Getenv("XDG_STATE_HOME"); xdg != "" {
+		return filepath.Join(xdg, "server-status")
+	}
+	return filepath.Join("/var/lib", "server-status")
+}
+
+func defaultConfigPath() string {
+	if runtime.GOOS == "windows" {
+		if programData := os.Getenv("ProgramData"); programData != "" {
+			return filepath.Join(programData, "ServerStatus", "config.yaml")
+		}
+		return filepath.Join(`C:\ProgramData`, "ServerStatus", "config.yaml")
+	}
+	return filepath.Join("/etc", "server-status", "config.yaml")
+}
+
+func applyEnv(cfg *Config) {
+	if v := os.Getenv("HSD_BIND_ADDRESS"); v != "" {
+		cfg.Server.BindAddress = v
+	}
+	if v := os.Getenv("HSD_PORT"); v != "" {
+		if port, err := strconv.Atoi(v); err == nil {
+			cfg.Server.Port = port
+		}
+	}
+	if v := os.Getenv("HSD_COMPACT_PORT"); v != "" {
+		if port, err := strconv.Atoi(v); err == nil {
+			cfg.Server.CompactPort = port
+		}
+	}
+	if v := os.Getenv("HSD_PUBLIC_URL"); v != "" {
+		cfg.Server.PublicURL = strings.TrimRight(v, "/")
+	}
+	if v := os.Getenv("HSD_ALLOWED_ORIGINS"); v != "" {
+		cfg.Server.AllowedOrigins = splitList(v)
+	}
+	if v := os.Getenv("HSD_DATABASE_PATH"); v != "" {
+		cfg.Database.Path = v
+	}
+	if v := os.Getenv("HSD_FIXTURE_DIR"); v != "" {
+		cfg.FixtureDir = v
+	}
+	if v := os.Getenv("HSD_FIXTURE_SCENARIO"); v != "" {
+		cfg.FixtureScenario = v
+	}
+	if v := os.Getenv("HSD_BOOTSTRAP_ADMIN_USERNAME"); v != "" {
+		cfg.Auth.BootstrapAdminUsername = v
+	}
+	if v := os.Getenv("HSD_BOOTSTRAP_ADMIN_PASSWORD"); v != "" {
+		cfg.Auth.BootstrapAdminPassword = v
+	}
+	if v := os.Getenv("HSD_COOKIE_SECURE"); v != "" {
+		cfg.Auth.CookieSecure = parseBool(v)
+	}
+	if v := os.Getenv("HSD_ALLOW_INSECURE_REMOTE"); v != "" {
+		cfg.Auth.AllowInsecureRemote = parseBool(v)
+	}
+	if v := os.Getenv("NOTIFICATION_BACKEND"); v != "" {
+		cfg.Notifications.Backend = v
+	}
+	if v := os.Getenv("HSD_LLM_PROVIDER"); v != "" {
+		cfg.LLM.Provider = v
+	}
+	if v := os.Getenv("OPENAI_MODEL"); v != "" {
+		cfg.LLM.OpenAIModel = v
+	}
+	if v := os.Getenv("ANTHROPIC_MODEL"); v != "" {
+		cfg.LLM.AnthropicModel = v
+	}
+	if v := os.Getenv("HSD_INTEGRATION_MODE"); v != "" {
+		cfg.Integrations.Mode = v
+	}
+	if v := os.Getenv("UNRAID_BASE_URL"); v != "" {
+		cfg.Integrations.UnraidBaseURL = normalizeIntegrationBaseURL(v, "http")
+	}
+	if v := os.Getenv("UNRAID_API_KEY"); v != "" {
+		cfg.Integrations.UnraidAPIKey = v
+	}
+	if v := os.Getenv("UNRAID_API_KEY_FILE"); v != "" {
+		cfg.Integrations.UnraidAPIKeyFile = v
+	}
+	if v := os.Getenv("UNRAID_SSH_FALLBACK_ENABLED"); v != "" {
+		cfg.Integrations.UnraidSSHFallback = parseBool(v)
+	}
+	if v := os.Getenv("UNRAID_SSH_HOST"); v != "" {
+		cfg.Integrations.UnraidSSHHost = v
+	}
+	if v := os.Getenv("UNRAID_SSH_PORT"); v != "" {
+		if port, err := strconv.Atoi(v); err == nil {
+			cfg.Integrations.UnraidSSHPort = port
+		}
+	}
+	if v := os.Getenv("UNRAID_SSH_USER"); v != "" {
+		cfg.Integrations.UnraidSSHUser = v
+	}
+	if v := os.Getenv("UNRAID_SSH_KEY_FILE"); v != "" {
+		cfg.Integrations.UnraidSSHKeyFile = v
+	}
+	if v := os.Getenv("UNRAID_SSH_COMMAND"); v != "" {
+		cfg.Integrations.UnraidSSHCommand = v
+	}
+	if v := os.Getenv("UNIFI_BASE_URL"); v != "" {
+		cfg.Integrations.UniFiBaseURL = normalizeIntegrationBaseURL(v, "https")
+	}
+	if v := os.Getenv("UNIFI_API_KEY"); v != "" {
+		cfg.Integrations.UniFiAPIKey = v
+	}
+	if v := os.Getenv("UNIFI_API_KEY_FILE"); v != "" {
+		cfg.Integrations.UniFiAPIKeyFile = v
+	}
+	if v := os.Getenv("UNIFI_SITE_ID"); v != "" {
+		cfg.Integrations.UniFiSiteID = v
+	}
+	if v := os.Getenv("HSD_INTERNET_PROBE_URL"); v != "" {
+		cfg.Integrations.InternetProbeURL = strings.TrimRight(v, "/")
+	}
+	if v := os.Getenv("HSD_DNS_PROBE_HOST"); v != "" {
+		cfg.Integrations.DNSProbeHost = v
+	}
+	if v := os.Getenv("HSD_ROUTER_PROBE_TARGET"); v != "" {
+		cfg.Integrations.RouterProbeTarget = strings.TrimRight(v, "/")
+	}
+	if v := os.Getenv("HSD_NAS_PROBE_TARGET"); v != "" {
+		cfg.Integrations.NASProbeTarget = strings.TrimRight(v, "/")
+	}
+}
+
+func applySecretFiles(cfg *Config) error {
+	if strings.TrimSpace(cfg.Integrations.UnraidAPIKeyFile) != "" {
+		secret, err := readSecretFile(cfg.Integrations.UnraidAPIKeyFile)
+		if err != nil {
+			return fmt.Errorf("unraid api key file: %w", err)
+		}
+		cfg.Integrations.UnraidAPIKey = secret
+	}
+	if strings.TrimSpace(cfg.Integrations.UniFiAPIKeyFile) != "" {
+		secret, err := readSecretFile(cfg.Integrations.UniFiAPIKeyFile)
+		if err != nil {
+			return fmt.Errorf("unifi api key file: %w", err)
+		}
+		cfg.Integrations.UniFiAPIKey = secret
+	}
+	return nil
+}
+
+func readSecretFile(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	var values []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(strings.TrimPrefix(scanner.Text(), "\ufeff"))
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if token := secretLineValue(line); token != "" {
+			values = append(values, token)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return "", err
+	}
+	if len(values) == 0 {
+		return "", errors.New("file contains no secret value")
+	}
+	if len(values) > 1 {
+		return "", errors.New("file must contain exactly one non-comment secret value")
+	}
+	return values[0], nil
+}
+
+func secretLineValue(line string) string {
+	for _, delimiter := range []string{"=", ":"} {
+		if idx := strings.Index(line, delimiter); idx > 0 {
+			key := strings.TrimSpace(line[:idx])
+			if isConfigLikeKey(key) {
+				return strings.Trim(strings.TrimSpace(line[idx+1:]), `"`)
+			}
+		}
+	}
+	return strings.Trim(strings.TrimSpace(line), `"`)
+}
+
+func isConfigLikeKey(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '-' || r == '.' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func applySimpleConfigFile(cfg *Config, path string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	section := ""
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasSuffix(line, ":") && !strings.Contains(line, " ") {
+			section = strings.TrimSuffix(line, ":")
+			continue
+		}
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) != 2 {
+			return fmt.Errorf("%s: unsupported config line %q", path, line)
+		}
+		key := strings.TrimSpace(parts[0])
+		value := strings.Trim(strings.TrimSpace(parts[1]), `"`)
+		applyConfigKey(cfg, section, key, value)
+	}
+	return scanner.Err()
+}
+
+func applyConfigKey(cfg *Config, section, key, value string) {
+	switch section + "." + key {
+	case "server.bind_address":
+		cfg.Server.BindAddress = value
+	case "server.port":
+		if port, err := strconv.Atoi(value); err == nil {
+			cfg.Server.Port = port
+		}
+	case "server.compact_port":
+		if port, err := strconv.Atoi(value); err == nil {
+			cfg.Server.CompactPort = port
+		}
+	case "server.public_url":
+		cfg.Server.PublicURL = strings.TrimRight(value, "/")
+	case "server.allowed_origins":
+		cfg.Server.AllowedOrigins = splitList(value)
+	case "database.path":
+		cfg.Database.Path = value
+	case "fixtures.dir":
+		cfg.FixtureDir = value
+	case "fixtures.scenario":
+		cfg.FixtureScenario = value
+	case "auth.bootstrap_admin_username":
+		cfg.Auth.BootstrapAdminUsername = value
+	case "auth.bootstrap_admin_password":
+		cfg.Auth.BootstrapAdminPassword = value
+	case "auth.cookie_secure":
+		cfg.Auth.CookieSecure = parseBool(value)
+	case "auth.allow_insecure_remote":
+		cfg.Auth.AllowInsecureRemote = parseBool(value)
+	case "notifications.enabled":
+		cfg.Notifications.Enabled = parseBool(value)
+	case "notifications.global_opt_in_enabled":
+		cfg.Notifications.GlobalOptInEnabled = parseBool(value)
+	case "notifications.backend":
+		cfg.Notifications.Backend = value
+	case "integrations.mode":
+		cfg.Integrations.Mode = value
+	case "integrations.unraid_base_url":
+		cfg.Integrations.UnraidBaseURL = normalizeIntegrationBaseURL(value, "http")
+	case "integrations.unraid_api_key":
+		cfg.Integrations.UnraidAPIKey = value
+	case "integrations.unraid_api_key_file":
+		cfg.Integrations.UnraidAPIKeyFile = value
+	case "integrations.unraid_ssh_fallback":
+		cfg.Integrations.UnraidSSHFallback = parseBool(value)
+	case "integrations.unraid_ssh_host":
+		cfg.Integrations.UnraidSSHHost = value
+	case "integrations.unraid_ssh_port":
+		if port, err := strconv.Atoi(value); err == nil {
+			cfg.Integrations.UnraidSSHPort = port
+		}
+	case "integrations.unraid_ssh_user":
+		cfg.Integrations.UnraidSSHUser = value
+	case "integrations.unraid_ssh_key_file":
+		cfg.Integrations.UnraidSSHKeyFile = value
+	case "integrations.unraid_ssh_command":
+		cfg.Integrations.UnraidSSHCommand = value
+	case "integrations.unifi_base_url":
+		cfg.Integrations.UniFiBaseURL = normalizeIntegrationBaseURL(value, "https")
+	case "integrations.unifi_api_key":
+		cfg.Integrations.UniFiAPIKey = value
+	case "integrations.unifi_api_key_file":
+		cfg.Integrations.UniFiAPIKeyFile = value
+	case "integrations.unifi_site_id":
+		cfg.Integrations.UniFiSiteID = value
+	case "integrations.internet_probe_url":
+		cfg.Integrations.InternetProbeURL = strings.TrimRight(value, "/")
+	case "integrations.dns_probe_host":
+		cfg.Integrations.DNSProbeHost = value
+	case "integrations.router_probe_target":
+		cfg.Integrations.RouterProbeTarget = strings.TrimRight(value, "/")
+	case "integrations.nas_probe_target":
+		cfg.Integrations.NASProbeTarget = strings.TrimRight(value, "/")
+	}
+}
+
+func splitList(value string) []string {
+	parts := strings.FieldsFunc(value, func(r rune) bool {
+		return r == ',' || r == ';'
+	})
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			out = append(out, strings.TrimRight(trimmed, "/"))
+		}
+	}
+	return out
+}
+
+func parseBool(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}

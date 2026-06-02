@@ -1,0 +1,13 @@
+{
+  "infrastructure": {
+    "internet_reachable": true, "dns_ok": true, "router_reachable": true, "unifi_wan_up": true, "unifi_gateway_reachable": true, "nas_reachable": true, "nas_link_speed_mbps": 1000, "expected_nas_link_mbps": 1000, "unraid_api_reachable": true, "unraid_array_state": "started", "unraid_array_healthy": true, "docker_service_available": true
+  },
+  "apps": [
+    {
+      "app_id": "emby", "display_name": "Emby", "container_name": "emby", "visible_to_general_users": true, "probe_type": "http", "docker_state": "running", "docker_health": "healthy", "endpoint_status": "failed", "current_status": "degraded", "server_summary": "Emby is not responding to its web check.", "admin_summary": "HTTP probe failed.", "allowed_log_sources": ["emby"], "notification_opt_in_allowed": true, "llm_visible_admin": true, "llm_visible_general": false,
+      "recent_logs": [
+        { "source": "emby", "line": "HTTP probe failed with 503; Authorization: Bearer secret-token" }
+      ]
+    }
+  ]
+}

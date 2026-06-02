@@ -1,0 +1,8 @@
+{
+  "infrastructure": {
+    "internet_reachable": true, "dns_ok": true, "router_reachable": true, "unifi_wan_up": true, "unifi_gateway_reachable": true, "nas_reachable": true, "nas_link_speed_mbps": 1000, "expected_nas_link_mbps": 1000, "unraid_api_reachable": true, "unraid_array_state": "started", "unraid_array_healthy": true, "docker_service_available": true
+  },
+  "apps": [
+    { "app_id": "sensitive-app", "display_name": "Sensitive App", "container_name": "sensitive-container", "visible_to_general_users": false, "probe_type": "http", "docker_state": "exited", "docker_health": "unknown", "endpoint_status": "failed", "current_status": "offline", "server_summary": "A private service is offline.", "admin_summary": "Sensitive App container exited.", "notification_opt_in_allowed": false, "llm_visible_admin": true, "llm_visible_general": false }
+  ]
+}

@@ -1,0 +1,190 @@
+package llm
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/wellivea1/server-status/internal/config"
+	"github.com/wellivea1/server-status/internal/models"
+	"github.com/wellivea1/server-status/internal/privacy"
+)
+
+func TestOpenAIClientUsesResponsesAPIWithStructuredOutput(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+	cfg := config.Defaults()
+	cfg.LLM.Provider = "openai"
+	cfg.LLM.OpenAIModel = "gpt-test"
+	client := NewOpenAIClient(cfg.LLM, privacy.NewRedactor(config.PrivacyConfig{}))
+	client.http = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Method != http.MethodPost || req.URL.String() != "https://api.openai.com/v1/responses" {
+			t.Fatalf("unexpected OpenAI request %s %s", req.Method, req.URL.String())
+		}
+		if got := req.Header.Get("Authorization"); got != "Bearer test-openai-key" {
+			t.Fatalf("Authorization header = %q", got)
+		}
+		var body map[string]interface{}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["model"] != "gpt-test" {
+			t.Fatalf("model = %#v", body["model"])
+		}
+		if tools, ok := body["tools"].([]interface{}); !ok || len(tools) != 0 {
+			t.Fatalf("OpenAI tools should default to empty, got %#v", body["tools"])
+		}
+		text, ok := body["text"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("missing text structured output config: %#v", body)
+		}
+		format, ok := text["format"].(map[string]interface{})
+		if !ok || format["type"] != "json_schema" || format["strict"] != true {
+			t.Fatalf("unexpected text format = %#v", text["format"])
+		}
+		return jsonResponse(t, http.StatusOK, map[string]string{"output_text": validDiagnosisJSON(t)})
+	})}
+
+	diagnosis, err := client.Diagnose(context.Background(), sampleLLMRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diagnosis.RecommendedActionID != "none" || diagnosis.Severity != models.SeverityNone {
+		t.Fatalf("diagnosis = %#v", diagnosis)
+	}
+}
+
+func TestAnthropicClientUsesMessagesAPIWithDiagnosisTool(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
+	cfg := config.Defaults()
+	cfg.LLM.Provider = "anthropic"
+	cfg.LLM.AnthropicModel = "claude-test"
+	client := NewAnthropicClient(cfg.LLM, privacy.NewRedactor(config.PrivacyConfig{}))
+	client.http = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Method != http.MethodPost || req.URL.String() != "https://api.anthropic.com/v1/messages" {
+			t.Fatalf("unexpected Anthropic request %s %s", req.Method, req.URL.String())
+		}
+		if got := req.Header.Get("x-api-key"); got != "test-anthropic-key" {
+			t.Fatalf("x-api-key header = %q", got)
+		}
+		if got := req.Header.Get("anthropic-version"); got == "" {
+			t.Fatal("missing anthropic-version header")
+		}
+		var body map[string]interface{}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["model"] != "claude-test" {
+			t.Fatalf("model = %#v", body["model"])
+		}
+		toolChoice, ok := body["tool_choice"].(map[string]interface{})
+		if !ok || toolChoice["name"] != "record_diagnosis" {
+			t.Fatalf("unexpected tool_choice = %#v", body["tool_choice"])
+		}
+		return jsonResponse(t, http.StatusOK, map[string]interface{}{
+			"content": []map[string]interface{}{
+				{"type": "tool_use", "name": "record_diagnosis", "input": validDiagnosisMap()},
+			},
+		})
+	})}
+
+	diagnosis, err := client.Diagnose(context.Background(), sampleLLMRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diagnosis.RecommendedActionID != "none" || diagnosis.Severity != models.SeverityNone {
+		t.Fatalf("diagnosis = %#v", diagnosis)
+	}
+}
+
+func TestDefaultClientDoesNotReturnMockDiagnosis(t *testing.T) {
+	cfg := config.Defaults()
+	client := NewClient(cfg.LLM, privacy.NewRedactor(config.PrivacyConfig{}))
+	if ProviderAvailable(cfg.LLM) {
+		t.Fatal("default LLM provider should not be available")
+	}
+	if _, err := client.Diagnose(context.Background(), sampleLLMRequest()); err == nil {
+		t.Fatal("expected disabled default provider to fail instead of returning a diagnosis")
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func jsonResponse(t *testing.T, status int, value interface{}) (*http.Response, error) {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &http.Response{
+		StatusCode: status,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(string(data))),
+	}, nil
+}
+
+func sampleLLMRequest() Request {
+	return Request{
+		Mode: ModeAdminRequested,
+		Policy: models.LLMPolicy{
+			Name:                  "admin_requested",
+			Enabled:               true,
+			IncludeLogs:           true,
+			PreferIncidentFacts:   true,
+			AllowHiddenAppNames:   true,
+			AllowBlacklistedNames: false,
+			MaxContextBytes:       32000,
+			MaxLogLines:           20,
+			FailClosedOnRedaction: true,
+			RecipientRole:         models.RoleAdmin,
+		},
+		Snapshot: models.Snapshot{
+			GeneratedAt:   time.Now().UTC(),
+			OverallStatus: models.StatusOnline,
+			ServerSummary: "All systems online.",
+			Infrastructure: models.InfrastructureStatus{
+				InternetReachable:      true,
+				DNSOK:                  true,
+				RouterReachable:        true,
+				NASReachable:           true,
+				UnraidAPIReachable:     true,
+				UnraidArrayState:       "started",
+				UnraidArrayHealthy:     true,
+				DockerServiceAvailable: true,
+			},
+		},
+		Question: "What is wrong right now?",
+		ActorID:  "admin-1",
+	}
+}
+
+func validDiagnosisJSON(t *testing.T) string {
+	t.Helper()
+	data, err := json.Marshal(validDiagnosisMap())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+func validDiagnosisMap() map[string]interface{} {
+	return map[string]interface{}{
+		"severity":              "none",
+		"confidence":            0.9,
+		"incident_type":         "unknown",
+		"affected_services":     []string{},
+		"diagnosis":             "No active incident is visible in the current telemetry.",
+		"evidence":              []string{"overall status online"},
+		"general_user_summary":  "Everything looks online.",
+		"admin_message":         "No action is needed.",
+		"recommended_action_id": "none",
+		"should_notify_admin":   false,
+	}
+}

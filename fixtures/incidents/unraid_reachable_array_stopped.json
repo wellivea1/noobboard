@@ -1,0 +1,19 @@
+{
+  "infrastructure": {
+    "internet_reachable": true,
+    "dns_ok": true,
+    "router_reachable": true,
+    "unifi_wan_up": true,
+    "unifi_gateway_reachable": true,
+    "nas_reachable": true,
+    "nas_link_speed_mbps": 1000,
+    "expected_nas_link_mbps": 1000,
+    "unraid_api_reachable": true,
+    "unraid_array_state": "stopped",
+    "unraid_array_healthy": false,
+    "docker_service_available": false
+  },
+  "apps": [
+    { "app_id": "emby", "display_name": "Emby", "container_name": "emby", "visible_to_general_users": true, "probe_type": "docker_state", "docker_state": "unknown", "docker_health": "unknown", "endpoint_status": "unknown", "current_status": "unknown", "server_summary": "Emby is unavailable while the array is stopped.", "notification_opt_in_allowed": true, "llm_visible_admin": true, "llm_visible_general": true }
+  ]
+}

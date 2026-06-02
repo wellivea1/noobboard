@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Container app">
+  <rect width="64" height="64" rx="14" fill="#14181c"/>
+  <path d="m32 13 19 10v21L32 54 13 44V23l19-10Z" fill="#20262c" stroke="#c7d7e6" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M32 34v20M13 23l19 11 19-11M22 28l19-10" fill="none" stroke="#56606b" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M44 40v6" stroke="#48bd72" stroke-width="4" stroke-linecap="round"/>
+</svg>

@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#f4f2ec" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0f1110" media="(prefers-color-scheme: dark)">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Server Status">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="format-detection" content="telephone=no">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" href="/icons/icon-192.png" sizes="192x192" type="image/png">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="/styles.css">
+  <title>Server Status</title>
+</head>
+<body>
+  <div id="notice" class="notice" role="status" hidden></div>
+
+  <main class="shell">
+    <section id="login" class="login">
+      <div class="login-copy">
+        <p class="eyebrow">Local LAN monitor</p>
+        <h1>Server Status</h1>
+        <p>Sign in to view server, network, and application health.</p>
+      </div>
+      <form id="login-form" class="login-form">
+        <label>
+          Username
+          <input name="username" autocomplete="username" value="admin">
+        </label>
+        <label>
+          Password
+          <input name="password" type="password" autocomplete="current-password">
+        </label>
+        <button type="submit" class="primary command" data-glyph=">">Sign in</button>
+      </form>
+    </section>
+
+    <section id="dashboard" class="dashboard" hidden>
+      <header class="topbar">
+        <button id="nav-toggle" class="command nav-toggle" data-glyph="&#9776;" type="button" aria-label="Open menu" aria-controls="tabs" aria-expanded="false" data-admin-detail>Menu</button>
+        <div class="title-block">
+          <p class="eyebrow">Server Status</p>
+          <h1 id="page-title">System overview</h1>
+          <p id="summary">Loading current status...</p>
+        </div>
+        <div class="topbar-actions">
+          <span id="role-pill" class="pill">offline</span>
+          <span id="source-pill" class="pill source-pill" hidden></span>
+          <button id="refresh" class="command" data-glyph="&#8635;" type="button">Refresh</button>
+          <button id="quick-diagnose" class="command" data-glyph="?" type="button" data-admin-detail>Diagnose</button>
+          <button id="restore-monitors" class="command" data-glyph="+" type="button" data-admin-detail hidden>Restore monitors</button>
+          <button id="logout" class="command" data-glyph="x" type="button">Sign out</button>
+        </div>
+      </header>
+
+      <section id="user-home" class="user-home" hidden>
+        <div id="user-status-grid" class="user-status-grid"></div>
+
+        <section class="panel">
+          <div class="section-head">
+            <h2>Apps</h2>
+            <span id="user-app-count" class="muted">0 apps</span>
+          </div>
+          <div id="user-apps" class="user-apps"></div>
+        </section>
+
+        <section class="panel user-chat">
+          <h2>Status Chat</h2>
+          <div id="user-chat-output" class="chat-output muted chat-empty">Ask what is wrong or whether a service is working.</div>
+          <textarea id="user-chat-input" rows="3">What is wrong right now?</textarea>
+          <div class="button-row">
+            <button id="user-chat-send" type="button" class="primary command" data-glyph=">">Ask</button>
+            <button id="user-notify-admin" type="button" class="command" data-glyph="!">Notify admin</button>
+          </div>
+        </section>
+      </section>
+
+      <div id="nav-backdrop" class="nav-backdrop" hidden></div>
+      <nav id="tabs" class="tabs side-nav" aria-label="Dashboard sections" data-admin-detail>
+        <div class="side-nav-head">
+          <span>Sections</span>
+          <button id="nav-close" class="command monitor-hide" data-glyph="x" type="button" aria-label="Close menu">Close</button>
+        </div>
+        <button type="button" data-tab="overview" class="active">Overview</button>
+        <button type="button" data-tab="server">Server</button>
+        <button type="button" data-tab="router">Router</button>
+        <button type="button" data-tab="apps">Apps</button>
+        <button type="button" data-tab="incidents">Incidents</button>
+        <button type="button" data-tab="diagnostics">Diagnostics</button>
+        <button type="button" data-tab="admin" data-admin-only>Admin</button>
+        <button type="button" data-tab="settings" data-admin-only>Settings</button>
+      </nav>
+
+      <section id="tab-overview" class="tab-panel" data-admin-detail>
+        <div class="section-head overview-head">
+          <h2>Live Status</h2>
+          <button id="overview-rearrange" type="button" class="command" data-glyph="&#8645;" aria-pressed="false">Rearrange</button>
+        </div>
+        <div id="overview-cards" class="overview-cards"></div>
+        <div class="overview-grid">
+          <section class="panel">
+            <div class="section-head">
+              <h2>Current Incidents</h2>
+              <button type="button" class="command" data-glyph=">" data-tab-jump="incidents">View all</button>
+            </div>
+            <div id="incident-strip" class="stack"></div>
+          </section>
+          <section class="panel">
+            <div class="section-head">
+              <h2>Diagnostic Facts</h2>
+              <span id="fact-count" class="muted">0 facts</span>
+            </div>
+            <div id="facts" class="stack"></div>
+          </section>
+        </div>
+      </section>
+
+      <section id="tab-server" class="tab-panel" hidden data-admin-detail>
+        <div class="section-head">
+          <h2>Server Status</h2>
+          <button type="button" class="command" data-glyph=">" data-tab-jump="apps">View apps</button>
+        </div>
+        <div id="server-status-grid" class="status-grid"></div>
+        <div id="server-detail-grid" class="detail-grid"></div>
+      </section>
+
+      <section id="tab-router" class="tab-panel" hidden data-admin-detail>
+        <div class="section-head">
+          <h2>Router And UniFi</h2>
+          <button type="button" class="command" data-glyph="?" data-tab-jump="diagnostics">Diagnose</button>
+        </div>
+        <div id="router-status-grid" class="status-grid"></div>
+        <div id="router-detail-grid" class="detail-grid"></div>
+      </section>
+
+      <section id="tab-apps" class="tab-panel" hidden data-admin-detail>
+        <div class="toolbar">
+          <label class="search-label">
+            Search apps
+            <input id="app-search" placeholder="Filter by app or status">
+          </label>
+          <div id="app-filters" class="segmented" aria-label="App status filter">
+            <button type="button" data-filter="all" class="active">All</button>
+            <button type="button" data-filter="online">Online</button>
+            <button type="button" data-filter="degraded">Degraded</button>
+            <button type="button" data-filter="offline">Offline</button>
+            <button type="button" data-filter="unknown">Unknown</button>
+          </div>
+        </div>
+        <div id="apps" class="apps"></div>
+      </section>
+
+      <section id="tab-incidents" class="tab-panel" hidden data-admin-detail>
+        <div class="section-head">
+          <h2>Incident History</h2>
+          <span id="incident-count" class="muted">0 incidents</span>
+        </div>
+        <div id="incident-list" class="incident-list"></div>
+      </section>
+
+      <section id="tab-diagnostics" class="tab-panel" hidden data-admin-detail>
+        <div class="diagnostics-grid">
+          <section class="panel">
+            <h2>Ask For A Diagnosis</h2>
+            <textarea id="diagnostic-question" rows="4">What is wrong right now?</textarea>
+            <div class="button-row">
+              <button id="diagnose" type="button" class="primary command" data-glyph="?">Run diagnosis</button>
+              <button id="notify-admin" type="button" class="command" data-glyph="!">Notify admin</button>
+            </div>
+          </section>
+          <section class="panel">
+            <h2>Diagnosis Output</h2>
+            <div id="diagnostic-output" class="diagnostic-output muted chat-empty">No diagnosis has been requested yet.</div>
+          </section>
+        </div>
+      </section>
+
+      <section id="tab-admin" class="tab-panel" hidden data-admin-detail>
+        <div class="admin-grid">
+          <section class="panel">
+            <div class="section-head">
+              <h2>Audit Log</h2>
+              <button id="audit-refresh" type="button" class="command" data-glyph="&#8635;">Reload</button>
+            </div>
+            <pre id="audit-output"></pre>
+          </section>
+          <section class="panel">
+            <h2>Raw Admin Snapshot</h2>
+            <pre id="admin-output"></pre>
+          </section>
+        </div>
+      </section>
+
+      <section id="tab-settings" class="tab-panel" hidden data-admin-detail>
+        <div class="section-head">
+          <h2>Runtime Settings</h2>
+          <button id="settings-refresh" type="button" class="command" data-glyph="&#8635;">Reload</button>
+        </div>
+        <div class="settings-workspace">
+          <nav id="settings-menu" class="settings-menu" aria-label="Settings sections">
+            <button type="button" data-settings-section="roles" class="active">Role Access</button>
+            <button type="button" data-settings-section="visibility">Visibility</button>
+            <button type="button" data-settings-section="blacklist">Blacklist</button>
+            <button type="button" data-settings-section="apps">App Images</button>
+            <button type="button" data-settings-section="llm">LLM</button>
+            <button type="button" data-settings-section="notifications">Notifications</button>
+          </nav>
+          <div class="settings-detail">
+            <section class="panel role-access settings-section" data-settings-section="roles">
+              <div class="section-head">
+                <h2>Role Access</h2>
+                <div class="button-row inline-actions">
+                  <button id="add-role" type="button" class="command" data-glyph="+">Add role</button>
+                  <button id="save-roles" type="button" class="primary command" data-glyph="v">Save roles</button>
+                </div>
+              </div>
+              <div id="role-settings" class="role-settings"></div>
+            </section>
+            <div id="settings-grid" class="settings-grid"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="assistant-dock" class="assistant-dock" aria-label="Status assistant">
+        <button id="assistant-toggle" type="button" class="assistant-toggle">Ask me for help!</button>
+        <div id="assistant-panel" class="assistant-panel" hidden>
+          <div id="assistant-output" class="chat-output muted chat-empty">Ask me for help!</div>
+          <textarea id="assistant-input" rows="2">What is wrong right now?</textarea>
+          <div class="button-row inline-actions">
+            <button id="assistant-send" type="button" class="primary command" data-glyph=">">Ask</button>
+            <button id="assistant-notify" type="button" class="command" data-glyph="!">Notify admin</button>
+          </div>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <script src="/site-config.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+# Local secrets and machine state
+.env
+AUTH (LOCAL-ONLY FOR DEVELOPMENT).txt
+*.local
+config.local.yaml
+config.yaml
+data/
+logs/
+state/
+.cache/
+
+# Build outputs
+bin/
+dist/
+*.exe
+*.test
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
