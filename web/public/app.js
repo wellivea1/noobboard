@@ -332,11 +332,14 @@ function showDashboard() {
   document.querySelectorAll("[data-admin-only]").forEach((element) => {
     element.hidden = !admin;
   });
+  $("refresh").textContent = admin ? "Refresh" : "Check again";
+  $("refresh").setAttribute("aria-label", admin ? "Refresh status" : "Check again");
+  $("logout").setAttribute("aria-label", "Sign out");
   if (admin) {
     setActiveTab(state.activeTab);
   } else {
     state.activeTab = "user-home";
-    $("page-title").textContent = "Server health";
+    $("page-title").textContent = "Home status";
   }
   renderMonitorRestore();
 }
@@ -344,7 +347,7 @@ function showDashboard() {
 function setActiveTab(tabName) {
   if (!hasAdminSurface()) {
     state.activeTab = "user-home";
-    $("page-title").textContent = "Server health";
+    $("page-title").textContent = "Home status";
     return;
   }
   state.activeTab = tabName;
@@ -433,20 +436,27 @@ function syncAssistant(snapshot) {
 function renderUserHome(snapshot) {
   const infra = snapshot.infrastructure || {};
   const apps = snapshot.apps || [];
+  const hero = compactHero(snapshot);
   const available = diagnosticsAvailable(snapshot);
   const canChat = available && canUseCompactChat(snapshot);
   const userChatPanel = document.querySelector(".panel.user-chat");
-  if (userChatPanel) userChatPanel.dataset.chatAvailable = canChat ? "true" : "false";
-  $("summary").textContent = snapshot.server_summary || "Status loaded.";
-  $("user-chat-input").placeholder = canChat ? "Ask what is wrong or whether a service is working." : "Chat unavailable";
+  renderUserHero(hero);
+  $("summary").textContent = hero.explanation || hero.headline;
+  $("user-primary-actions").dataset.chatAvailable = canChat ? "true" : "false";
+  if ($("user-chat-open")) $("user-chat-open").hidden = !canChat;
+  if (userChatPanel) {
+    userChatPanel.hidden = !canChat;
+    userChatPanel.dataset.chatAvailable = canChat ? "true" : "false";
+  }
+  $("user-chat-input").placeholder = "Ask what's wrong or whether an app is working.";
   $("user-chat-input").disabled = !canChat;
   $("user-chat-send").disabled = !canChat;
   if (!canChat) {
-    $("user-chat-input").value = "";
-    setChatNotice($("user-chat-output"), available ? "Status chat is disabled by the administrator." : diagnosticsUnavailableMessage(snapshot));
+    if (!$("user-chat-input").value.trim()) $("user-chat-input").value = "What is wrong right now?";
+    setChatNotice($("user-chat-output"), "Status chat is not available.");
   } else if ($("user-chat-output").classList.contains("chat-unavailable")) {
     if (!$("user-chat-input").value.trim()) $("user-chat-input").value = "What is wrong right now?";
-    resetChatPlaceholder($("user-chat-output"), "Ask what is wrong or whether a service is working.");
+    resetChatPlaceholder($("user-chat-output"), "Ask what's wrong or whether an app is working.");
   }
   const statusCards = [
     userStatusCard("Overall", snapshot.overall_status || "unknown", compactOverallSummary(snapshot)),
@@ -464,6 +474,132 @@ function renderUserHome(snapshot) {
     return;
   }
   $("user-apps").replaceChildren(...apps.map(renderUserAppCard));
+}
+
+function renderUserHero(hero) {
+  const element = $("user-hero");
+  element.className = `user-hero ${hero.tone}`;
+  element.setAttribute("aria-label", `${hero.headline}. ${hero.explanation} ${hero.nextStep || ""}`.trim());
+  element.replaceChildren(
+    node("div", { class: "user-hero-art" }, statusArtwork(hero.icon)),
+    node("div", { class: "user-hero-copy" },
+      node("span", { class: "user-hero-state", text: hero.status }),
+      node("h2", {}, ...heroNameNodes(hero.headline, hero.appName)),
+      node("p", { text: hero.explanation }),
+    ),
+    hero.nextStep ? node("p", { class: "user-hero-next" }, ...heroNameNodes(hero.nextStep, hero.appName)) : null,
+  );
+}
+
+// Render text that may contain an app display name (a proper noun), wrapping the name in a
+// [data-app-name] span so the literacy audit skips it (names can contain banned substrings,
+// e.g. "UniFi Controller").
+function heroNameNodes(text, appName) {
+  if (!appName || !text.includes(appName)) return [document.createTextNode(text)];
+  const segments = text.split(appName);
+  const out = [];
+  segments.forEach((segment, index) => {
+    if (segment) out.push(document.createTextNode(segment));
+    if (index < segments.length - 1) out.push(node("span", { "data-app-name": "", text: appName }));
+  });
+  return out;
+}
+
+function compactHero(snapshot) {
+  const infra = snapshot.infrastructure || {};
+  const apps = snapshot.apps || [];
+  const appProblems = apps.filter(isProblemApp);
+  if (infra.nas_reachable === false) {
+    return {
+      tone: "problem",
+      status: "Problem",
+      icon: "server",
+      headline: "Can't reach the home server",
+      explanation: "The home server isn't responding right now.",
+      nextStep: "Wait a few minutes; if it doesn't come back, tell the admin.",
+    };
+  }
+  if (infra.internet_reachable === false && infra.nas_reachable === true && !hasHomeServerProblem(infra)) {
+    return {
+      tone: "warning",
+      status: "Problem",
+      icon: "router",
+      headline: "The internet looks down",
+      explanation: "Your home server is fine - the internet connection isn't working.",
+      nextStep: "This is usually your internet provider. Check the modem/router or wait. You don't need to touch the server.",
+    };
+  }
+  if (hasHomeServerProblem(infra)) {
+    return {
+      tone: "problem",
+      status: "Problem",
+      icon: "server",
+      headline: "The home server has a problem",
+      explanation: "Storage or apps aren't running correctly right now.",
+      nextStep: "Tell the admin. Avoid changing settings.",
+    };
+  }
+  if (appProblems.length === 1) {
+    const name = appDisplayName(appProblems[0]);
+    return {
+      tone: "warning",
+      status: "Problem",
+      icon: "apps",
+      headline: `${name} isn't working`,
+      explanation: "Everything else looks fine.",
+      nextStep: `Tell the admin if you need ${name}.`,
+      appName: name,
+    };
+  }
+  if (appProblems.length > 1) {
+    return {
+      tone: "warning",
+      status: "Problem",
+      icon: "apps",
+      headline: "Some apps aren't working",
+      explanation: `${appProblems.length} apps are down; the rest are fine.`,
+      nextStep: "Tell the admin if you need them.",
+    };
+  }
+  // No problems detected. If the snapshot has loaded, reassure; only show "Checking..."
+  // before the first status arrives (so an app with an unknown status doesn't get stuck on
+  // a transient-looking message).
+  const loaded = Boolean(snapshot.overall_status) || apps.length > 0 || Boolean(infra.last_checked_at);
+  if (loaded) {
+    return {
+      tone: "ok",
+      status: "Working",
+      icon: "overall",
+      headline: "Everything's working",
+      explanation: "Nothing is reporting a problem right now.",
+      nextStep: "Nothing to do.",
+    };
+  }
+  return {
+    tone: "neutral",
+    status: "Checking",
+    icon: "overall",
+    headline: "Checking...",
+    explanation: "Getting the latest status.",
+    nextStep: "",
+  };
+}
+
+function hasHomeServerProblem(infra) {
+  const arrayState = String(infra.unraid_array_state || "").toLowerCase();
+  return infra.unraid_api_reachable === false ||
+    (arrayState && arrayState !== "started") ||
+    infra.unraid_array_healthy === false ||
+    infra.docker_service_available === false;
+}
+
+function isProblemApp(app) {
+  const status = normalizeStatus(app.current_status);
+  return status === "offline" || status === "degraded";
+}
+
+function appDisplayName(app) {
+  return String(app.display_name || app.app_id || "An app").trim();
 }
 
 function diagnosticsAvailable(snapshot) {
@@ -509,16 +645,33 @@ function userStatusCard(label, value, summary) {
 
 function renderUserAppCard(app) {
   const status = normalizeStatus(app.current_status);
-  return node("article", { class: `user-app-card app-row ${status}`, "aria-label": `${app.display_name || app.app_id}: ${app.current_status || "unknown"}` },
+  const statusText = plainAppStatus(app);
+  return node("article", { class: `user-app-card app-row ${status}`, "aria-label": `${appDisplayName(app)}: ${statusText}` },
     renderAppLogo(app),
     node("div", { class: "user-app-main" },
       node("div", { class: "app-title-line" },
-        statusIndicator(app.current_status || "unknown", status, "status-dot-only"),
-        node("h3", { text: app.display_name || app.app_id }),
+        node("h3", { "data-app-name": "", text: appDisplayName(app) }),
+        statusIndicator(statusText, status, "compact-app-status"),
       ),
-      node("p", { class: "muted", text: compactAppSummary(app) }),
+      node("p", { class: "muted", text: plainAppSummary(app) }),
     ),
   );
+}
+
+function plainAppStatus(app) {
+  const status = normalizeStatus(app.current_status);
+  if (status === "online") return "Working";
+  if (status === "offline") return "Not working";
+  if (status === "degraded") return "Problem";
+  return "Unknown";
+}
+
+function plainAppSummary(app) {
+  const status = normalizeStatus(app.current_status);
+  if (status === "online") return "Working normally.";
+  if (status === "offline") return "Not responding.";
+  if (status === "degraded") return "Having a problem.";
+  return "Status unknown.";
 }
 
 function compactAppSummary(app) {
@@ -1038,9 +1191,12 @@ async function runAppAction(app, action, button) {
 function renderAppLogo(app) {
   const builtIn = builtInAppIcon(app);
   const iconURL = app.icon_url || builtIn.url;
+  const logoTitle = hasAdminSurface()
+    ? (app.icon_url ? `Logo from ${app.icon_source || "app metadata"}` : `Built-in ${builtIn.label} icon`)
+    : (app.icon_url ? "App image" : "App icon");
   const root = node("div", {
     class: `app-logo logo-missing${app.icon_url ? "" : " app-logo-built-in"}`,
-    title: app.icon_url ? `Logo from ${app.icon_source || "app metadata"}` : `Built-in ${builtIn.label} icon`,
+    title: logoTitle,
   });
   const fallback = node("span", { class: "app-logo-fallback", text: appInitials(app.display_name || app.app_id) });
   if (!iconURL) {
@@ -1126,6 +1282,13 @@ async function runUserChat() {
     $("user-chat-input").value || "What is wrong right now?",
     $("user-chat-output"),
   );
+}
+
+function focusUserChat() {
+  const panel = document.querySelector(".panel.user-chat");
+  if (!panel || panel.hidden) return;
+  panel.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
+  $("user-chat-input").focus({ preventScroll: true });
 }
 
 async function runAssistantChat() {
@@ -2344,8 +2507,9 @@ $("quick-diagnose").addEventListener("click", () => {
 });
 $("diagnose").addEventListener("click", diagnose);
 $("notify-admin").addEventListener("click", () => notifyAdmin());
+$("user-chat-open").addEventListener("click", focusUserChat);
 $("user-chat-send").addEventListener("click", runUserChat);
-$("user-notify-admin").addEventListener("click", () => notifyAdmin($("user-chat-input").value || "A standard user reported a problem."));
+$("user-notify-admin").addEventListener("click", () => notifyAdmin("A standard user reported a problem."));
 $("audit-refresh").addEventListener("click", loadAudit);
 $("settings-refresh").addEventListener("click", loadSettings);
 $("settings-menu").addEventListener("click", (event) => {
