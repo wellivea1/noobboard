@@ -1,6 +1,10 @@
 # Local secrets and machine state
 .env
 AUTH (LOCAL-ONLY FOR DEVELOPMENT).txt
+auth.txt
+auth*.txt
+*.key
+secrets/
 *.local
 config.local.yaml
 config.yaml
