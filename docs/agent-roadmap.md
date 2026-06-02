@@ -97,7 +97,9 @@ deployment is usable without hand-editing config or env vars.
 1. **First-run detection + lock.** Add a persisted `setup_completed` flag (in the file
    store, `internal/db/store.go`). Until set, the admin site redirects to the wizard;
    after completion the wizard routes return `404`/redirect. Never expose the wizard on
-   the compact port.
+   the compact port. **First-run detection keys off `setup_completed` only** — never off
+   the mere existence of an admin user or bootstrap credentials (see the installer contract
+   below), so a pre-seeded admin does not bypass the wizard.
 2. **Credentials step.** Collect Unraid base URL + API key and UniFi base URL + API key.
    Write keys to local key files using the existing secret-file format, and persist the
    non-secret config (base URLs, site id, mode=`live`) — mirror `config.local.yaml`.
@@ -111,8 +113,12 @@ deployment is usable without hand-editing config or env vars.
      Codex `codex login` (ChatGPT auth) for the UX/token-exchange pattern. Tokens are
      secrets — store like key files, refresh server-side, never log. Ship phase 1 first;
      gate phase 2 behind a feature flag.
-4. **Accounts step.** Force replacement of the bootstrap `admin` password, then create
-   named admin/general users. Reuse `internal/users` (PBKDF2 hashing already there).
+4. **Accounts step.** Ensure a real admin login exists, then optionally create named
+   admin/general users. Reuse `internal/users` (PBKDF2 hashing already there). **If an admin
+   was already pre-seeded by the installer** (see contract below), treat this step as
+   satisfied: detect the existing admin and let the operator *continue* (optionally offering
+   to change the password) rather than forcing re-entry or erroring. If only the built-in
+   `change-me-now` default is present, require a replacement here.
 5. **Compact/noob view step.** Pick what the noob surface shows: which apps are visible,
    whether NAS/WAN tiles appear, whether chat/LLM is available to general users. This
    writes `models.VisibilitySettings` + app visibility rather than introducing new state.
@@ -132,6 +138,25 @@ deployment is usable without hand-editing config or env vars.
 `internal/config/config.go` (write-back helpers), `web/public/index.html`,
 `web/public/app.js`, `web/public/styles.css`.
 
+### Installer interop contract (do not break)
+`install.ps1` can optionally pre-seed the admin login before the wizard ever runs. The
+wizard MUST remain compatible with this. The contract:
+
+- The installer writes `auth.bootstrap_admin_username` / `auth.bootstrap_admin_password`
+  into the service config (`C:\ProgramData\NoobBoard\config.yaml`). It does **not** touch
+  any `setup_completed` flag and does **not** create wizard state.
+- `internal/users` bootstrap is **create-only**, keyed on the admin username: it seeds the
+  admin once and is a no-op if that user already exists. Pre-seeding therefore just means
+  "an admin user exists with a real password instead of `change-me-now`."
+- Consequently, when the wizard ships it must: (a) still run whenever `setup_completed`
+  is false, regardless of whether an admin already exists; and (b) at the accounts step,
+  detect a pre-seeded admin and **continue** from there (don't force re-entry, don't error).
+- The wizard owns `config.yaml` going forward; when it writes config it must **preserve**
+  any existing `auth:` keys (merge, don't clobber) — mirroring how the installer merges.
+
+Net effect: installer (optional credential seeding) and wizard (full guided setup) are
+complementary, and either can run first without breaking the other.
+
 ### Acceptance criteria
 - [ ] Fresh install (empty data dir) lands on the wizard; completing it yields a working
       live dashboard with no manual env/config editing.
@@ -139,6 +164,8 @@ deployment is usable without hand-editing config or env vars.
 - [ ] After completion the wizard is unreachable; re-running the binary goes straight to
       login.
 - [ ] No secret is written to a git-tracked path or returned in any API response.
+- [ ] With an installer-pre-seeded admin, the wizard still runs and continues from the
+      accounts step (no re-entry forced, no error); existing `auth:` config is preserved.
 - [ ] `go test ./...`, build, and `visual-check.ps1` all pass.
 
 ### Open questions

@@ -32,6 +32,26 @@ Install service from an elevated PowerShell prompt:
 .\dist\noobboard.exe start-service
 ```
 
+Or use the one-step installer, which also prompts for the firewall rule and the admin login:
+
+```powershell
+.\install.ps1 -Start
+```
+
+Admin login via the installer (and the install/wizard contract):
+
+- When you accept the admin-login prompt, `install.ps1` writes `auth.bootstrap_admin_username`
+  and `auth.bootstrap_admin_password` into `C:\ProgramData\NoobBoard\config.yaml` and
+  restricts that file to Administrators/SYSTEM (the service runs as LocalSystem).
+- These are **bootstrap** credentials: the admin user is created from them on the service's
+  **first run** and the password is then hashed into the database. Bootstrap is create-only,
+  so changing these values later does **not** rotate an existing admin password — use the
+  app's settings (or the setup wizard) to change an existing login.
+- The installer never sets a "setup complete" marker. When the in-app setup wizard ships, it
+  still runs and simply continues from the accounts step (an admin already exists). See the
+  "Installer interop contract" in `docs/agent-roadmap.md`. Anything that later writes
+  `config.yaml` must merge/preserve existing `auth:` keys rather than overwrite the file.
+
 Allow LAN access on a private network only:
 
 ```powershell

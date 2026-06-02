@@ -49,9 +49,15 @@ builds a self-contained `noobboard.exe`, and registers the NoobBoard Windows ser
 .\install.ps1 -Start
 ```
 
-During a service install, the script **prompts whether to add a Windows Firewall rule**
-allowing LAN/WAN access on ports 8787-8788 (recommended). Pass `-AllowLan` to answer yes
-without prompting, or `-NoFirewall` to skip it.
+During a service install, the script also **prompts** whether to:
+
+- add a Windows Firewall rule allowing LAN/WAN access on ports 8787-8788 (recommended), and
+- set up the admin login now (enter a username and password).
+
+The admin-login prompt only seeds the bootstrap credentials in the service config; it does
+**not** complete setup, so the in-app setup wizard (when available) still runs and continues
+from where the installer left off. See the install/wizard contract in
+`docs/deployment-windows.md` and `docs/agent-roadmap.md`.
 
 Useful flags: `-NoService` (build only), `-Start` (start the service after install),
 `-RunTests` (run the test suite first), `-AllowLan` / `-NoFirewall` (firewall rule yes/no
