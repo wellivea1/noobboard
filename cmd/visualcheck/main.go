@@ -318,6 +318,24 @@ func run(opts options) (visualResult, error) {
 	}); err != nil {
 		return result, err
 	}
+	// Emulate a touch device so `@media (pointer: coarse)` matches, which is what a real
+	// iPhone/Android sees. Without this the viewport is mobile-sized but reports a fine
+	// pointer, so coarse-only touch sizing (min 44px) is skipped and small-target checks
+	// produce false failures.
+	if _, err := cdp.call("Emulation.setTouchEmulationEnabled", map[string]any{
+		"enabled":        true,
+		"maxTouchPoints": 5,
+	}); err != nil {
+		return result, err
+	}
+	if _, err := cdp.call("Emulation.setEmulatedMedia", map[string]any{
+		"features": []map[string]any{
+			{"name": "pointer", "value": "coarse"},
+			{"name": "any-pointer", "value": "coarse"},
+		},
+	}); err != nil {
+		return result, err
+	}
 	time.Sleep(500 * time.Millisecond)
 	mobileOverview, err := evalFlags(cdp, overviewExpression)
 	if err != nil {
@@ -1054,6 +1072,9 @@ function visibleCompactText(root) {
       const parent = textNode.parentElement;
       if (!parent) return NodeFilter.FILTER_REJECT;
       if (parent.closest('details[data-technical]:not([open])')) return NodeFilter.FILTER_REJECT;
+      // App display names are user/Docker-chosen proper nouns (e.g. "UniFi Controller") and
+      // may legitimately contain otherwise-banned substrings; don't scan them.
+      if (parent.closest('[data-app-name]')) return NodeFilter.FILTER_REJECT;
       if (!visibleElement(parent)) return NodeFilter.FILTER_REJECT;
       return NodeFilter.FILTER_ACCEPT;
     }

@@ -2807,10 +2807,10 @@ body.compact-view .assistant-toggle {
   }
 
   .topbar-actions button.command {
-    flex: 0 0 42px;
-    width: 42px;
-    min-width: 42px;
-    min-height: 42px;
+    flex: 0 0 44px;
+    width: 44px;
+    min-width: 44px;
+    min-height: 44px;
     border-color: transparent;
     background: transparent;
     padding: 0;

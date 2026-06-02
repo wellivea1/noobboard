@@ -484,11 +484,25 @@ function renderUserHero(hero) {
     node("div", { class: "user-hero-art" }, statusArtwork(hero.icon)),
     node("div", { class: "user-hero-copy" },
       node("span", { class: "user-hero-state", text: hero.status }),
-      node("h2", { text: hero.headline }),
+      node("h2", {}, ...heroNameNodes(hero.headline, hero.appName)),
       node("p", { text: hero.explanation }),
     ),
-    hero.nextStep ? node("p", { class: "user-hero-next", text: hero.nextStep }) : null,
+    hero.nextStep ? node("p", { class: "user-hero-next" }, ...heroNameNodes(hero.nextStep, hero.appName)) : null,
   );
+}
+
+// Render text that may contain an app display name (a proper noun), wrapping the name in a
+// [data-app-name] span so the literacy audit skips it (names can contain banned substrings,
+// e.g. "UniFi Controller").
+function heroNameNodes(text, appName) {
+  if (!appName || !text.includes(appName)) return [document.createTextNode(text)];
+  const segments = text.split(appName);
+  const out = [];
+  segments.forEach((segment, index) => {
+    if (segment) out.push(document.createTextNode(segment));
+    if (index < segments.length - 1) out.push(node("span", { "data-app-name": "", text: appName }));
+  });
+  return out;
 }
 
 function compactHero(snapshot) {
@@ -505,7 +519,7 @@ function compactHero(snapshot) {
       nextStep: "Wait a few minutes; if it doesn't come back, tell the admin.",
     };
   }
-  if (infra.internet_reachable === false && infra.nas_reachable === true) {
+  if (infra.internet_reachable === false && infra.nas_reachable === true && !hasHomeServerProblem(infra)) {
     return {
       tone: "warning",
       status: "Problem",
@@ -534,6 +548,7 @@ function compactHero(snapshot) {
       headline: `${name} isn't working`,
       explanation: "Everything else looks fine.",
       nextStep: `Tell the admin if you need ${name}.`,
+      appName: name,
     };
   }
   if (appProblems.length > 1) {
@@ -546,13 +561,17 @@ function compactHero(snapshot) {
       nextStep: "Tell the admin if you need them.",
     };
   }
-  if (apps.every((app) => normalizeStatus(app.current_status) === "online") && infra.nas_reachable !== false) {
+  // No problems detected. If the snapshot has loaded, reassure; only show "Checking..."
+  // before the first status arrives (so an app with an unknown status doesn't get stuck on
+  // a transient-looking message).
+  const loaded = Boolean(snapshot.overall_status) || apps.length > 0 || Boolean(infra.last_checked_at);
+  if (loaded) {
     return {
       tone: "ok",
       status: "Working",
       icon: "overall",
       headline: "Everything's working",
-      explanation: "All your apps and the home server are running.",
+      explanation: "Nothing is reporting a problem right now.",
       nextStep: "Nothing to do.",
     };
   }
@@ -631,7 +650,7 @@ function renderUserAppCard(app) {
     renderAppLogo(app),
     node("div", { class: "user-app-main" },
       node("div", { class: "app-title-line" },
-        node("h3", { text: appDisplayName(app) }),
+        node("h3", { "data-app-name": "", text: appDisplayName(app) }),
         statusIndicator(statusText, status, "compact-app-status"),
       ),
       node("p", { class: "muted", text: plainAppSummary(app) }),
