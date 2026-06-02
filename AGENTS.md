@@ -6,7 +6,7 @@ roadmaps, and detailed specs live in `docs/` (start with `docs/agent-roadmap.md`
 
 ## What NoobBoard is
 
-A local, Windows-first **household** server-status and diagnostics dashboard. It runs on a
+A local, Windows-first shared server monitoring and diagnostics dashboard. It runs on a
 headless Windows 11 mini PC on the home LAN and serves a web/PWA dashboard. It monitors an
 Unraid NAS (array, capacity, parity), Docker apps, UniFi network/WAN state, and basic
 internet/DNS/router/NAS connectivity, with optional OpenAI/Anthropic diagnosis.
@@ -15,7 +15,7 @@ It has **two distinct surfaces**, and conflating them is the most common mistake
 
 - **Admin panel** (port `8787`) — a dense, detailed dashboard for the technical owner:
   full status, incidents, logs, settings, and Docker controls.
-- **Compact app** (port `8788`) — a **household status remote**, not a mini admin panel.
+- **Compact app** (port `8788`) — a **shared home status remote**, not a mini admin panel.
   Its users are *extremely non-technical iPhone users*. It exists to answer four questions:
   1. Is the thing I want working?
   2. Is this an internet problem or a server problem?

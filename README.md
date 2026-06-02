@@ -2,7 +2,10 @@
 
 NoobBoard is a local-first Go web app for monitoring an Unraid server, Docker apps, UniFi
 network state, and basic connectivity. It serves two surfaces: a detailed **admin panel**
-and a compact, phone-friendly **household status** view aimed at non-technical users.
+and a compact, phone-friendly **shared home status** view aimed at non-technical users.
+
+The compact view is meant to help everyone in the home share awareness of service health
+without needing to understand or manage the server itself.
 
 It is designed for a LAN or private reverse-proxy deployment. Live collectors are used when
 credentials are configured; fixture data is only used when explicitly selected for

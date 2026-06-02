@@ -188,7 +188,7 @@ customization editor). The redesign is the foundation; customization sits on top
 > "dashboard thinking" — it shows source/role pills, rearrange/restore-monitor controls,
 > icon-only topbar actions, horizontally scrolling action strips, status grids, and
 > compressed/truncated app cards. It can pass mechanical mobile-overflow checks while still
-> being dense and unparseable. The compact app is a **household status remote, not an admin
+> being dense and unparseable. The compact app is a **shared home status remote, not an admin
 > dashboard.** Follow the Multi-agent UX workflow above to drive this work.
 
 ### B1 — Compact UX foundation (redesign)
@@ -381,7 +381,7 @@ the LLM useful before making it powerful.**
 
 - **Product review (origin of the UX workflow and compact-UX guidance):** a multi-agent
   design review of the Codex-built app. Key conclusions integrated above — compact app is a
-  household status remote, split UX-designer vs implementer agent roles, freeze backend
+  shared home status remote, split UX-designer vs implementer agent roles, freeze backend
   scope, literacy/semantic audits, "useful before powerful." (Reproduce by giving a UX agent
   the live screenshots + the constraints in Workstream B.)
 - OpenCode — providers, tools/permissions, agents, MCP: https://opencode.ai/docs/
