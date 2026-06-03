@@ -877,6 +877,14 @@ label {
   color: var(--muted);
 }
 
+.chat-pending {
+  color: var(--muted);
+}
+
+.chat-error {
+  color: var(--bad-text);
+}
+
 .overview-card {
   display: grid;
   grid-template-columns: 24px minmax(0, 1fr) minmax(156px, 0.42fr) auto;

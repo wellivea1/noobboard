@@ -2,7 +2,9 @@ package llm
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -92,10 +94,13 @@ func (c *ChatGPTClient) Diagnose(ctx context.Context, req Request) (Diagnosis, e
 	headers.Set("Authorization", "Bearer "+accessToken)
 	headers.Set("ChatGPT-Account-Id", c.accountID)
 	headers.Set("Originator", "noobboard")
+	headers.Set("Session-Id", chatGPTSessionID())
 	headers.Set("User-Agent", "NoobBoard")
 	return runOpenAIResponsesDiagnosis(ctx, c.http, c.endpoint, headers, c.model, contextText, req, c.builder.redactor, "chatgpt codex responses api", openAIResponsesOptions{
-		ReasoningEffort: ChatGPTCodexReasoningHigh,
-		InputAsList:     true,
+		ReasoningEffort:           ChatGPTCodexReasoningHigh,
+		IncludeEncryptedReasoning: true,
+		InputAsList:               true,
+		StoreFalse:                true,
 	})
 }
 
@@ -187,6 +192,14 @@ func ChatGPTTokenExpiresAt(tokens ChatGPTTokenResponse, now time.Time) time.Time
 		expiresIn = defaultChatGPTAccessSeconds
 	}
 	return now.Add(time.Duration(expiresIn) * time.Second).UTC()
+}
+
+func chatGPTSessionID() string {
+	var data [16]byte
+	if _, err := rand.Read(data[:]); err != nil {
+		return fmt.Sprintf("noobboard-%d", time.Now().UTC().UnixNano())
+	}
+	return "noobboard-" + hex.EncodeToString(data[:])
 }
 
 func parseJWTClaims(token string) map[string]interface{} {

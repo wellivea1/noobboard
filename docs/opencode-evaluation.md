@@ -10,6 +10,8 @@ Relevant ideas worth copying:
 - MCP extensibility: OpenCode supports MCP servers for external tools, but its own docs warn that MCP tools add context. For this app, MCP is a future extension point, not a default path for Unraid/UniFi diagnostics.
 - Web access split: copy the distinction between discovery and retrieval. A future implementation should separate search from fetching a specific URL, and the LLM policy should be able to enable one without the other.
 - Action guard from source: OpenCode's browser/headless OpenAI connector only handles credentials. Tool safety lives elsewhere: agent/session permission rules decide which tools are advertised, and tool implementations call the permission service again before side effects. NoobBoard copies that split by keeping ChatGPT browser auth as credential transport and putting live API tool access behind LLM policy rules.
+- Codex request shape: OpenCode routes ChatGPT-account requests to `https://chatgpt.com/backend-api/codex/responses`, sends the ChatGPT account header plus `originator` and `session-id`, omits max output token overrides, sets `store: false`, includes `reasoning.encrypted_content` for stateless Responses continuation, and strips stored response item ids unless storage is explicitly enabled.
+- Context overflow: OpenCode does not split one oversized request into model-call chunks. It detects overflow against the model context window, compacts/summarizes older session history, prunes old tool output when configured, and retries with a single smaller request. NoobBoard follows the same principle for compact diagnostics by shrinking the structured general-user status report before sending it.
 - Current NoobBoard implementation: admin diagnosis can opt into read-only live status tools (`noobboard_current_status`, `noobboard_server_status`, `noobboard_network_status`, `noobboard_app_status`). These tools refresh sanitized NoobBoard snapshots and do not expose shell, filesystem, raw API clients, credentials, Docker control, Unraid mutations, or UniFi configuration mutation. General-user policies never receive tools.
 
 Security decision:
@@ -23,6 +25,9 @@ References:
 - https://opencode.ai/docs/tools/
 - https://opencode.ai/docs/mcp-servers/
 - `sst/opencode`: `packages/opencode/src/plugin/openai/codex.ts`
+- `sst/opencode`: `packages/opencode/src/provider/transform.ts`
+- `sst/opencode`: `packages/opencode/src/session/overflow.ts`
+- `sst/opencode`: `packages/opencode/src/session/compaction.ts`
 - `sst/opencode`: `packages/opencode/src/permission/index.ts`
 - `sst/opencode`: `packages/opencode/src/tool/registry.ts`
 - `sst/opencode`: `packages/opencode/src/tool/shell.ts`

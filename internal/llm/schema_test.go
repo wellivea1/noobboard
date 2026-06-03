@@ -215,6 +215,106 @@ func TestGeneralUserLLMContextStaysWithinDefaultLimitWithManyApps(t *testing.T) 
 	}
 }
 
+func TestGeneralUserLLMContextCompactsVerboseVisibleStatus(t *testing.T) {
+	now := time.Now().UTC()
+	snapshot := models.Snapshot{
+		GeneratedAt:   now,
+		OverallStatus: models.StatusOffline,
+		ServerSummary: strings.Repeat("Several selected apps are not responding. ", 40),
+		Infrastructure: models.InfrastructureStatus{
+			InternetReachable:      true,
+			DNSOK:                  true,
+			RouterReachable:        true,
+			NASReachable:           true,
+			UnraidAPIReachable:     true,
+			UnraidArrayState:       "started",
+			UnraidArrayHealthy:     true,
+			DockerServiceAvailable: true,
+			UniFiWANUp:             true,
+			UniFiGatewayReachable:  true,
+			UniFiWarnings:          []string{strings.Repeat("Long network warning. ", 80)},
+			SourceHealth:           models.SourceHealth{Unraid: "live", Docker: "live", UniFi: "live", Probes: "live"},
+		},
+		Visibility:      models.VisibilitySettings{GeneralUserCanUseLLM: true, ShowNASStatusToUsers: true, ShowWANStatusToUsers: true},
+		IntegrationMode: "live",
+	}
+	for i := 0; i < 60; i++ {
+		status := models.StatusOnline
+		severity := models.SeverityNone
+		if i%4 == 0 {
+			status = models.StatusOffline
+			severity = models.SeverityHigh
+		}
+		snapshot.Apps = append(snapshot.Apps, models.AppStatus{
+			AppID:                 fmt.Sprintf("app-%02d", i),
+			DisplayName:           fmt.Sprintf("Long App %02d", i),
+			VisibleToGeneralUsers: true,
+			CurrentStatus:         status,
+			Severity:              severity,
+			DockerState:           models.DockerRunning,
+			EndpointStatus:        models.EndpointOK,
+			ServerSummary:         strings.Repeat(fmt.Sprintf("Detailed status for app %02d. ", i), 40),
+			CurrentProbeResult: models.ProbeResult{
+				Type:      models.ProbeHTTP,
+				OK:        status == models.StatusOnline,
+				Message:   strings.Repeat("Probe output is verbose. ", 40),
+				LatencyMS: int64(i),
+				CheckedAt: now,
+			},
+		})
+		snapshot.Incidents = append(snapshot.Incidents, models.Incident{
+			ID:               fmt.Sprintf("incident-%02d", i),
+			Type:             models.IncidentAppDown,
+			Severity:         severity,
+			Status:           status,
+			Summary:          strings.Repeat("Long incident summary. ", 30),
+			AffectedServices: []string{fmt.Sprintf("Long App %02d", i), "Another affected app"},
+			StartedAt:        now,
+			UpdatedAt:        now,
+		})
+		snapshot.Facts = append(snapshot.Facts, models.IncidentFact{
+			ID:               fmt.Sprintf("fact-%02d", i),
+			Type:             models.IncidentAppDown,
+			Severity:         severity,
+			Summary:          strings.Repeat("Long diagnostic fact. ", 30),
+			AffectedServices: []string{fmt.Sprintf("Long App %02d", i)},
+			CreatedAt:        now,
+			VisibleToUsers:   true,
+		})
+	}
+
+	builder := NewContextBuilder(privacy.NewRedactor(config.PrivacyConfig{}))
+	contextText, err := builder.Build(Request{
+		Mode: ModeGeneralUserRequested,
+		Policy: models.LLMPolicy{
+			Name:                  "general_user_requested",
+			Enabled:               true,
+			IncludeLogs:           false,
+			PreferIncidentFacts:   true,
+			AllowHiddenAppNames:   false,
+			AllowBlacklistedNames: false,
+			MaxContextBytes:       12000,
+			MaxLogLines:           0,
+			FailClosedOnRedaction: true,
+			RecipientRole:         models.RoleGeneralUser,
+		},
+		Snapshot: snapshot,
+		Question: "What is wrong with Long App 56?",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(contextText) > 12000 {
+		t.Fatalf("general user context length = %d, want <= 12000", len(contextText))
+	}
+	if !json.Valid([]byte(contextText)) {
+		t.Fatalf("context should stay valid JSON: %s", contextText)
+	}
+	if !strings.Contains(contextText, "app-56") {
+		t.Fatalf("compacted context omitted app mentioned in question: %s", contextText)
+	}
+}
+
 func TestAdminLLMContextRedactsSecretsInAllowedLogs(t *testing.T) {
 	snapshot, err := fixture.LoadSnapshot("../../fixtures", "llm_context_admin_allowed_logs")
 	if err != nil {

@@ -23,6 +23,11 @@ const state = {
   userDrawerActiveSection: "settings",
   userDrawerLastFocus: null,
   openAIAuthDialog: null,
+  chatBusy: {
+    diagnostic: false,
+    user: false,
+    assistant: false,
+  },
 };
 
 const $ = (id) => document.getElementById(id);
@@ -751,8 +756,8 @@ function syncAssistant(snapshot) {
   dock.hidden = !canChat;
   document.body.classList.toggle("assistant-available", canChat && hasAdminSurface());
   if (!canChat) $("assistant-panel").hidden = true;
-  $("assistant-input").disabled = !canChat;
-  $("assistant-send").disabled = !canChat;
+  $("assistant-input").disabled = !canChat || state.chatBusy.assistant;
+  $("assistant-send").disabled = !canChat || state.chatBusy.assistant;
   if (!canChat) {
     setChatNotice($("assistant-output"), available ? "Status chat is disabled for this role." : diagnosticsUnavailableMessage(snapshot));
   } else if ($("assistant-output").classList.contains("chat-unavailable")) {
@@ -776,8 +781,8 @@ function renderUserHome(snapshot) {
     userChatPanel.dataset.chatAvailable = canChat ? "true" : "false";
   }
   $("user-chat-input").placeholder = "Ask what's wrong or whether an app is working.";
-  $("user-chat-input").disabled = !canChat;
-  $("user-chat-send").disabled = !canChat;
+  $("user-chat-input").disabled = !canChat || state.chatBusy.user;
+  $("user-chat-send").disabled = !canChat || state.chatBusy.user;
   if (!canChat) {
     if (!$("user-chat-input").value.trim()) $("user-chat-input").value = "What is wrong right now?";
     setChatNotice($("user-chat-output"), "Status chat is not available.");
@@ -1104,15 +1109,50 @@ function diagnosticsUnavailableMessage(snapshot) {
 }
 
 function setChatNotice(output, message) {
-  output.classList.remove("chat-empty", "chat-result");
+  output.classList.remove("chat-empty", "chat-result", "chat-pending", "chat-error");
   output.classList.add("chat-unavailable", "muted");
   output.textContent = message;
 }
 
 function resetChatPlaceholder(output, message) {
-  output.classList.remove("chat-unavailable", "chat-result");
+  output.classList.remove("chat-unavailable", "chat-result", "chat-pending", "chat-error");
   output.classList.add("chat-empty", "muted");
   output.textContent = message;
+}
+
+function setChatPending(output, message) {
+  output.classList.remove("chat-empty", "chat-unavailable", "chat-result", "chat-error");
+  output.classList.add("chat-pending", "muted");
+  output.textContent = message;
+}
+
+function setChatError(output, message) {
+  output.classList.remove("chat-empty", "chat-unavailable", "chat-result", "chat-pending", "muted");
+  output.classList.add("chat-error");
+  output.textContent = message;
+}
+
+function setChatControlsBusy(input, button, busy) {
+  for (const control of [input, button]) {
+    if (!control) continue;
+    control.disabled = !!busy;
+    control.setAttribute("aria-busy", String(!!busy));
+  }
+}
+
+function compactChatErrorMessage(error) {
+  const message = String(error?.message || "");
+  if (error?.status === 403) return "Status chat is not available right now.";
+  if (/context|codex|responses api|api key|token|json|model/i.test(message)) {
+    return "I could not check that right now. Tell the admin if this keeps happening.";
+  }
+  return "I could not check that right now. Tell the admin if this keeps happening.";
+}
+
+function submitOnEnter(event, handler) {
+  if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
+  event.preventDefault();
+  handler();
 }
 
 function userStatusCard(label, value, summary) {
@@ -1786,6 +1826,7 @@ async function diagnose() {
   await runDiagnosis(
     $("diagnostic-question").value || "What is wrong right now?",
     $("diagnostic-output"),
+    { input: $("diagnostic-question"), button: $("diagnose"), busyKey: "diagnostic" },
   );
 }
 
@@ -1793,6 +1834,7 @@ async function runUserChat() {
   await runDiagnosis(
     $("user-chat-input").value || "What is wrong right now?",
     $("user-chat-output"),
+    { input: $("user-chat-input"), button: $("user-chat-send"), busyKey: "user" },
   );
 }
 
@@ -1807,29 +1849,48 @@ async function runAssistantChat() {
   await runDiagnosis(
     $("assistant-input").value || "What is wrong right now?",
     $("assistant-output"),
+    { input: $("assistant-input"), button: $("assistant-send"), busyKey: "assistant" },
   );
   $("assistant-panel").hidden = false;
 }
 
-async function runDiagnosis(question, output) {
+async function runDiagnosis(question, output, options = {}) {
   const adminSurface = hasAdminSurface();
   const path = adminSurface ? "/api/admin/diagnose" : "/api/user/diagnose";
+  const questionText = String(question || "What is wrong right now?").trim() || "What is wrong right now?";
+  if (options.busyKey && state.chatBusy[options.busyKey]) return;
+  if (options.busyKey) state.chatBusy[options.busyKey] = true;
+  setChatPending(output, "Checking status...");
+  setChatControlsBusy(options.input, options.button, true);
   try {
     const result = await api(path, {
       method: "POST",
-      body: JSON.stringify({ question }),
+      body: JSON.stringify({ question: questionText }),
     });
-    output.classList.remove("chat-empty", "muted");
+    output.classList.remove("chat-empty", "muted", "chat-pending", "chat-error");
     output.classList.add("chat-result");
-    output.replaceChildren(
-      node("strong", { text: `${result.severity} confidence ${Math.round((result.confidence || 0) * 100)}%` }),
-      node("p", { text: result.diagnosis || result.general_user_summary || "No diagnosis returned." }),
-      result.evidence?.length ? node("p", { class: "muted", text: `Evidence: ${result.evidence.join("; ")}` }) : null,
-      adminSurface ? node("p", { class: "muted", text: result.admin_message || "" }) : null,
-    );
+    if (adminSurface) {
+      output.replaceChildren(
+        node("strong", { text: `${result.severity} confidence ${Math.round((result.confidence || 0) * 100)}%` }),
+        node("p", { text: result.diagnosis || result.general_user_summary || "No diagnosis returned." }),
+        result.evidence?.length ? node("p", { class: "muted", text: `Evidence: ${result.evidence.join("; ")}` }) : null,
+        result.admin_message ? node("p", { class: "muted", text: result.admin_message }) : null,
+      );
+    } else {
+      output.replaceChildren(
+        node("strong", { text: "Answer" }),
+        node("p", { text: result.general_user_summary || result.diagnosis || "I could not find a clear answer." }),
+        result.should_notify_admin ? node("p", { class: "muted", text: "Tell the admin if you need this fixed." }) : null,
+      );
+    }
     showNotice("Diagnosis completed.");
   } catch (error) {
-    showNotice(error.message, "error");
+    const message = adminSurface ? error.message : compactChatErrorMessage(error);
+    setChatError(output, message);
+    if (adminSurface) showNotice(error.message, "error");
+  } finally {
+    if (options.busyKey) state.chatBusy[options.busyKey] = false;
+    setChatControlsBusy(options.input, options.button, false);
   }
 }
 
@@ -3390,9 +3451,11 @@ $("quick-diagnose").addEventListener("click", () => {
   setActiveTab("diagnostics");
 });
 $("diagnose").addEventListener("click", diagnose);
+$("diagnostic-question").addEventListener("keydown", (event) => submitOnEnter(event, diagnose));
 $("notify-admin").addEventListener("click", () => notifyAdmin());
 $("user-chat-open").addEventListener("click", focusUserChat);
 $("user-chat-send").addEventListener("click", runUserChat);
+$("user-chat-input").addEventListener("keydown", (event) => submitOnEnter(event, runUserChat));
 $("user-notify-admin").addEventListener("click", () => notifyAdmin("A standard user reported a problem."));
 $("audit-refresh").addEventListener("click", loadAudit);
 $("audit-filter").addEventListener("input", renderAuditTable);
@@ -3415,6 +3478,7 @@ $("assistant-toggle").addEventListener("click", () => {
   $("assistant-panel").hidden = !$("assistant-panel").hidden;
 });
 $("assistant-send").addEventListener("click", runAssistantChat);
+$("assistant-input").addEventListener("keydown", (event) => submitOnEnter(event, runAssistantChat));
 $("assistant-notify").addEventListener("click", () => notifyAdmin($("assistant-input").value || "A standard user reported a problem."));
 $("logout").addEventListener("click", logout);
 $("tabs").addEventListener("click", (event) => {
