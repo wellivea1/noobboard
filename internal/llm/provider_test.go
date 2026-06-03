@@ -250,7 +250,7 @@ func TestChatGPTConnectorUsesCodexResponsesEndpoint(t *testing.T) {
 	cfg.LLM.ChatGPTAccessToken = "access-token"
 	cfg.LLM.ChatGPTAccountID = "account-123"
 	cfg.LLM.ChatGPTTokenExpiresAt = time.Now().UTC().Add(time.Hour)
-	cfg.LLM.OpenAIModel = "gpt-chatgpt-test"
+	cfg.LLM.OpenAIModel = "gpt-5"
 	if !ProviderAvailable(cfg.LLM) {
 		t.Fatal("ChatGPT connector should be available with refresh token and account id")
 	}
@@ -272,13 +272,39 @@ func TestChatGPTConnectorUsesCodexResponsesEndpoint(t *testing.T) {
 		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 			t.Fatal(err)
 		}
-		if body["model"] != "gpt-chatgpt-test" {
+		if body["model"] != DefaultChatGPTCodexModel {
 			t.Fatalf("model = %#v", body["model"])
+		}
+		reasoning, ok := body["reasoning"].(map[string]interface{})
+		if !ok || reasoning["effort"] != ChatGPTCodexReasoningHigh {
+			t.Fatalf("reasoning = %#v", body["reasoning"])
 		}
 		return jsonResponse(t, http.StatusOK, map[string]string{"output_text": validDiagnosisJSON(t)})
 	})}
 	if _, err := client.Diagnose(context.Background(), sampleLLMRequest()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestChatGPTModelNormalizesUnsupportedCodexModels(t *testing.T) {
+	tests := []struct {
+		name  string
+		model string
+		want  string
+	}{
+		{name: "empty", model: "", want: DefaultChatGPTCodexModel},
+		{name: "legacy gpt 5", model: "gpt-5", want: DefaultChatGPTCodexModel},
+		{name: "allowed default", model: "gpt-5.5", want: "gpt-5.5"},
+		{name: "allowed mini", model: "gpt-5.4-mini", want: "gpt-5.4-mini"},
+		{name: "future codex model", model: "gpt-5.6", want: "gpt-5.6"},
+		{name: "unknown", model: "gpt-chatgpt-test", want: DefaultChatGPTCodexModel},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := chatGPTModel(tt.model); got != tt.want {
+				t.Fatalf("chatGPTModel(%q) = %q, want %q", tt.model, got, tt.want)
+			}
+		})
 	}
 }
 

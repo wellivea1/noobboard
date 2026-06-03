@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,8 +23,17 @@ const (
 	OpenAIChatGPTClientID       = "app_EMoamEEZ73f0CkXaXp7hrann"
 	OpenAIChatGPTIssuer         = "https://auth.openai.com"
 	OpenAIChatGPTCodexEndpoint  = "https://chatgpt.com/backend-api/codex/responses"
+	DefaultChatGPTCodexModel    = "gpt-5.5"
+	ChatGPTCodexReasoningHigh   = "high"
 	defaultChatGPTAccessSeconds = 3600
 )
+
+var chatGPTCodexAllowedModels = map[string]bool{
+	"gpt-5.5":             true,
+	"gpt-5.4":             true,
+	"gpt-5.4-mini":        true,
+	"gpt-5.3-codex-spark": true,
+}
 
 type ChatGPTTokenResponse struct {
 	IDToken      string `json:"id_token"`
@@ -83,7 +93,7 @@ func (c *ChatGPTClient) Diagnose(ctx context.Context, req Request) (Diagnosis, e
 	headers.Set("ChatGPT-Account-Id", c.accountID)
 	headers.Set("Originator", "noobboard")
 	headers.Set("User-Agent", "NoobBoard")
-	return runOpenAIResponsesDiagnosis(ctx, c.http, c.endpoint, headers, c.model, contextText, req, c.builder.redactor, "chatgpt codex responses api")
+	return runOpenAIResponsesDiagnosis(ctx, c.http, c.endpoint, headers, c.model, contextText, req, c.builder.redactor, "chatgpt codex responses api", openAIResponsesOptions{ReasoningEffort: ChatGPTCodexReasoningHigh})
 }
 
 func (c *ChatGPTClient) ensureAccessToken(ctx context.Context) (string, error) {
@@ -199,10 +209,24 @@ func stringClaim(claims map[string]interface{}, key string) string {
 
 func chatGPTModel(model string) string {
 	model = strings.TrimSpace(model)
-	if model == "" {
-		return "gpt-5"
+	if chatGPTCodexModelAllowed(model) {
+		return model
 	}
-	return model
+	return DefaultChatGPTCodexModel
+}
+
+func chatGPTCodexModelAllowed(model string) bool {
+	if chatGPTCodexAllowedModels[model] {
+		return true
+	}
+	const prefix = "gpt-"
+	if !strings.HasPrefix(model, prefix) {
+		return false
+	}
+	version := strings.TrimPrefix(model, prefix)
+	parts := strings.SplitN(version, "-", 2)
+	parsed, err := strconv.ParseFloat(parts[0], 64)
+	return err == nil && parsed > 5.4
 }
 
 var _ Client = (*ChatGPTClient)(nil)
