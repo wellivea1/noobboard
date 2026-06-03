@@ -246,7 +246,9 @@ server problem? Tell the admin? Avoid touching anything?*
 `web/public/app.js`, `web/public/styles.css`, `web/public/index.html`,
 `cmd/visualcheck` (semantic UX audit), `internal/models/models.go`, settings handlers in
 `internal/server/server.go`, `internal/db/store.go`. The B1 redesign spec (compact surface)
-is written: **`docs/ux-compact.md`** — implement B1 against it before starting B2.
+is written: **`docs/ux-compact.md`** — implement B1 against it before starting B2. A related
+follow-on, **B3 — compact settings drawer** (hamburger → extensible side panel with a minimal
+Settings destination: notifications + account), is specified in **`docs/ux-compact-settings.md`**.
 
 ### Acceptance criteria
 - [ ] On the compact general-user view, a non-technical user can answer the four questions
