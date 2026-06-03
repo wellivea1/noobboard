@@ -43,7 +43,6 @@ Admin routes are registered on the admin site/port. The compact site/port serves
 - `GET /api/admin/settings/llm`
 - `POST /api/admin/settings/llm`
 - `POST /api/admin/settings/llm/openai/browser/start`
-- `GET /api/admin/settings/llm/openai/browser/callback`
 - `POST /api/admin/settings/llm/openai/browser/finish`
 - `POST /api/admin/settings/llm/openai/headless/start`
 - `POST /api/admin/settings/llm/openai/headless/poll`
@@ -62,7 +61,7 @@ Runtime settings endpoints accept and return JSON:
 - `roles`: returns the visibility policy plus current apps and users for the role editor. Role writes accept the same visibility shape, including `default_role` and a `roles` array.
 - `blacklist`: snake_case privacy and redaction fields.
 - `apps`: `icon_overrides`, a map from app id/container/display name to an image URL. URLs must be `http`, `https`, or a local app-served path beginning with `/`; embedded URL credentials are rejected. Docker/Unraid icon labels are filtered with the same URL rules before being exposed to clients. When Docker/Unraid does not provide an accepted icon label and no override is configured, the frontend chooses a generic built-in category icon from the app name/image reference. These built-ins are not official product logos.
-- `llm`: snake_case provider/model/policy fields plus write-only `openai_api_key` and `anthropic_api_key` inputs. The default provider is `disabled`; use `openai` with `openai_auth_method=api_key` and an OpenAI key, `openai_auth_method=chatgpt_browser|chatgpt_headless` with the admin-only ChatGPT connector, or `anthropic` with an Anthropic key for live chat/diagnosis. Browser login redirects back to the same admin origin that started the login, so LAN users should start it from the host/IP they expect the browser to return to. Duration values are encoded as Go duration nanoseconds. Reads return `openai_api_key_set`, `anthropic_api_key_set`, `chatgpt_connected`, `chatgpt_access_token_set`, and `chatgpt_account_id_set` booleans instead of key/token values. `clear_chatgpt_auth=true` forgets saved ChatGPT connector tokens.
+- `llm`: snake_case provider/model/policy fields plus write-only `openai_api_key` and `anthropic_api_key` inputs. The default provider is `disabled`; use `openai` with `openai_auth_method=api_key` and an OpenAI key, `openai_auth_method=chatgpt_browser|chatgpt_headless` with the admin-only ChatGPT connector, or `anthropic` with an Anthropic key for live chat/diagnosis. Browser login uses OpenAI's registered loopback callback and only works when the admin page is opened as `localhost` on the NoobBoard host; LAN devices should use the headless code login. Duration values are encoded as Go duration nanoseconds. Reads return `openai_api_key_set`, `anthropic_api_key_set`, `chatgpt_connected`, `chatgpt_access_token_set`, and `chatgpt_account_id_set` booleans instead of key/token values. `clear_chatgpt_auth=true` forgets saved ChatGPT connector tokens.
 - `integrations`: snake_case Unraid, UniFi, SSH fallback, and probe fields plus write-only `unraid_api_key` and `unifi_api_key` inputs. Reads return `unraid_api_key_set` / `unifi_api_key_set` booleans instead of key values. Bare local hosts/IPs are normalized to `http://...` for Unraid and `https://...` for UniFi.
 - `notifications`: snake_case notification fields. Duration values are encoded as Go duration nanoseconds.
 

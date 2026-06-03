@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -22,9 +23,10 @@ import (
 )
 
 const (
-	openAIChatGPTBrowserCallbackPath = "/api/admin/settings/llm/openai/browser/callback"
-	openAIChatGPTAuthTTL             = 5 * time.Minute
-	openAIChatGPTHeadlessTTL         = 10 * time.Minute
+	openAIChatGPTCallbackAddress = "localhost:1455"
+	openAIChatGPTCallbackPath    = "/auth/callback"
+	openAIChatGPTAuthTTL         = 5 * time.Minute
+	openAIChatGPTHeadlessTTL     = 10 * time.Minute
 )
 
 type openAIAuthStore struct {
@@ -32,6 +34,7 @@ type openAIAuthStore struct {
 	browser        map[string]openAIBrowserPending
 	browserResults map[string]openAIBrowserResult
 	headless       map[string]openAIHeadlessPending
+	callbackServer *http.Server
 }
 
 type openAIBrowserPending struct {
@@ -71,6 +74,17 @@ func (a *App) startOpenAIChatGPTBrowserAuth(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusForbidden, err)
 		return
 	}
+	if !openAIChatGPTBrowserAllowed(r) {
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error":    "ChatGPT browser login only works when this admin page is opened as localhost on the NoobBoard host. Use the code login from LAN devices.",
+			"fallback": "chatgpt_headless",
+		})
+		return
+	}
+	if err := a.ensureOpenAIChatGPTCallbackServer(); err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
 	pkce, err := generateOpenAIPKCE()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -81,7 +95,7 @@ func (a *App) startOpenAIChatGPTBrowserAuth(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	redirectURI := openAIChatGPTRedirectURI(r)
+	redirectURI := openAIChatGPTRedirectURI()
 	expiresAt := time.Now().UTC().Add(openAIChatGPTAuthTTL)
 	a.openAIAuth.mu.Lock()
 	a.openAIAuth.cleanupExpiredLocked(time.Now().UTC())
@@ -222,6 +236,33 @@ func (a *App) pollOpenAIChatGPTHeadlessAuth(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "connected", "settings": llmSettingsResponse(a.configSnapshot().LLM)})
 }
 
+func (a *App) ensureOpenAIChatGPTCallbackServer() error {
+	a.openAIAuth.mu.Lock()
+	defer a.openAIAuth.mu.Unlock()
+	a.openAIAuth.cleanupExpiredLocked(time.Now().UTC())
+	if a.openAIAuth.callbackServer != nil {
+		return nil
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc(openAIChatGPTCallbackPath, a.openAIChatGPTBrowserCallback)
+	server := &http.Server{
+		Addr:              openAIChatGPTCallbackAddress,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	ln, err := net.Listen("tcp", openAIChatGPTCallbackAddress)
+	if err != nil {
+		return fmt.Errorf("OpenAI browser callback port %s is unavailable: %w", openAIChatGPTCallbackAddress, err)
+	}
+	a.openAIAuth.callbackServer = server
+	go func() {
+		if err := server.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			a.deps.Audit.Record("system", "settings.llm.chatgpt.browser.callback_error", map[string]interface{}{"error": err.Error()})
+		}
+	}()
+	return nil
+}
+
 func (a *App) openAIChatGPTBrowserCallback(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -246,6 +287,7 @@ func (a *App) openAIChatGPTBrowserCallback(w http.ResponseWriter, r *http.Reques
 	}
 	a.openAIAuth.cleanupExpiredLocked(now)
 	a.openAIAuth.mu.Unlock()
+	defer a.stopOpenAIChatGPTCallbackServerIfIdle()
 	if !ok || now.After(pending.ExpiresAt) {
 		a.writeOpenAICallbackHTML(w, http.StatusBadRequest, "Authorization Failed", "The login request expired or did not match the expected state.")
 		return
@@ -262,6 +304,20 @@ func (a *App) openAIChatGPTBrowserCallback(w http.ResponseWriter, r *http.Reques
 	}
 	a.openAIAuth.mu.Unlock()
 	a.writeOpenAICallbackHTML(w, http.StatusOK, "OpenAI Connected", "You can close this window and return to NoobBoard.")
+}
+
+func (a *App) stopOpenAIChatGPTCallbackServerIfIdle() {
+	a.openAIAuth.mu.Lock()
+	if len(a.openAIAuth.browser) != 0 || a.openAIAuth.callbackServer == nil {
+		a.openAIAuth.mu.Unlock()
+		return
+	}
+	server := a.openAIAuth.callbackServer
+	a.openAIAuth.callbackServer = nil
+	a.openAIAuth.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = server.Shutdown(ctx)
 }
 
 func (a *App) writeOpenAICallbackHTML(w http.ResponseWriter, status int, title, message string) {
@@ -360,8 +416,21 @@ func buildOpenAIChatGPTAuthorizeURL(pkce openAIPKCE, state, redirectURI string) 
 	return strings.TrimRight(llm.OpenAIChatGPTIssuer, "/") + "/oauth/authorize?" + params.Encode()
 }
 
-func openAIChatGPTRedirectURI(r *http.Request) string {
-	return strings.TrimRight(requestOrigin(r), "/") + openAIChatGPTBrowserCallbackPath
+func openAIChatGPTRedirectURI() string {
+	return "http://" + openAIChatGPTCallbackAddress + openAIChatGPTCallbackPath
+}
+
+func openAIChatGPTBrowserAllowed(r *http.Request) bool {
+	host := strings.TrimSpace(r.Host)
+	if parsedHost, _, err := net.SplitHostPort(host); err == nil {
+		host = parsedHost
+	}
+	host = strings.Trim(strings.ToLower(host), "[]")
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func exchangeOpenAIChatGPTCode(ctx context.Context, code, redirectURI, verifier string) (llm.ChatGPTTokenResponse, error) {

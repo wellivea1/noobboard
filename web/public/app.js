@@ -386,7 +386,12 @@ async function api(path, options = {}) {
   }
   const response = await fetch(path, { credentials: "same-origin", ...options, headers });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || response.statusText);
+  if (!response.ok) {
+    const error = new Error(data.error || response.statusText);
+    error.status = response.status;
+    error.data = data;
+    throw error;
+  }
   return data;
 }
 
@@ -2393,14 +2398,7 @@ function renderLLMSettings(item, data) {
   const selectedAuthMethod = settings.openai_auth_method || "api_key";
   const browserStatus = node("span", { class: `settings-key-state ${settings.chatgpt_connected ? "set" : ""}`, text: settings.chatgpt_connected ? "Connected" : "Not connected" });
   const browserMessage = node("p", { class: "muted settings-connection-detail", "aria-live": "polite" });
-  const browserConnect = node("button", {
-    type: "button",
-    class: "command",
-    "data-glyph": ">",
-    onclick: () => connectOpenAIChatGPTBrowser(browserMessage, browserConnect),
-    text: settings.chatgpt_connected ? "Reconnect" : "Connect",
-  });
-  const headlessMessage = node("div", { class: "muted settings-connection-detail", "aria-live": "polite", text: "Use this when the server cannot open a browser." });
+  const headlessMessage = node("div", { class: "muted settings-connection-detail", "aria-live": "polite", text: "Use this from phones, LAN devices, or when the browser login is not available." });
   const headlessConnect = node("button", {
     type: "button",
     class: "command",
@@ -2408,9 +2406,16 @@ function renderLLMSettings(item, data) {
     onclick: () => connectOpenAIChatGPTHeadless(headlessMessage, headlessConnect),
     text: "Get code",
   });
+  const browserConnect = node("button", {
+    type: "button",
+    class: "command",
+    "data-glyph": ">",
+    onclick: () => connectOpenAIChatGPTBrowser(browserMessage, browserConnect, headlessMessage, headlessConnect),
+    text: settings.chatgpt_connected ? "Reconnect" : "Connect",
+  });
   const authChoices = [
-    settingChoice(authMethodName, "chatgpt_browser", "ChatGPT Pro/Plus (browser)", "Opens OpenAI login in a browser window.", selectedAuthMethod === "chatgpt_browser", node("div", { class: "settings-choice-action" }, browserStatus, browserConnect)),
-    settingChoice(authMethodName, "chatgpt_headless", "ChatGPT Pro/Plus (headless)", "Shows a login code for another browser or device.", selectedAuthMethod === "chatgpt_headless", node("div", { class: "settings-choice-action" }, headlessConnect)),
+    settingChoice(authMethodName, "chatgpt_browser", "ChatGPT Pro/Plus (browser)", "Requires opening this admin page as localhost on the NoobBoard host.", selectedAuthMethod === "chatgpt_browser", node("div", { class: "settings-choice-action" }, browserStatus, browserConnect)),
+    settingChoice(authMethodName, "chatgpt_headless", "ChatGPT Pro/Plus (code)", "Shows a login code for another browser or device.", selectedAuthMethod === "chatgpt_headless", node("div", { class: "settings-choice-action" }, headlessConnect)),
     settingChoice(authMethodName, "api_key", "API key", "Uses a saved OpenAI API key.", selectedAuthMethod === "api_key"),
   ];
   const openAIModel = settingTextField("OpenAI model", settings.openai_model || "gpt-5");
@@ -2517,7 +2522,7 @@ function settingChoice(name, value, title, description, checked, action = null) 
   return { input, element };
 }
 
-async function connectOpenAIChatGPTBrowser(message, button) {
+async function connectOpenAIChatGPTBrowser(message, button, headlessMessage = null, headlessButton = null) {
   button.disabled = true;
   message.hidden = false;
   message.textContent = "Opening OpenAI login...";
@@ -2532,6 +2537,12 @@ async function connectOpenAIChatGPTBrowser(message, button) {
     message.textContent = "Finish OpenAI login in the new window. This page will update when it connects.";
     await waitForChatGPTConnection(data.poll_id, message);
   } catch (error) {
+    if (error.status === 409 && error.data?.fallback === "chatgpt_headless" && headlessMessage && headlessButton) {
+      message.textContent = "Browser login only works from localhost on the NoobBoard host. Starting code login instead.";
+      headlessMessage.hidden = false;
+      await connectOpenAIChatGPTHeadless(headlessMessage, headlessButton);
+      return;
+    }
     message.textContent = error.message;
     showNotice(error.message, "error");
   } finally {

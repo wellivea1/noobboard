@@ -229,9 +229,23 @@ func TestLLMSettingsChatGPTTokensAreWriteOnlyAndClearable(t *testing.T) {
 	}
 }
 
-func TestOpenAIChatGPTBrowserAuthUsesAdminRequestOrigin(t *testing.T) {
+func TestOpenAIChatGPTBrowserAuthorizeURLUsesRegisteredLoopbackRedirect(t *testing.T) {
+	authURL, err := url.Parse(buildOpenAIChatGPTAuthorizeURL(openAIPKCE{Challenge: "challenge"}, "state", openAIChatGPTRedirectURI()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRedirect := "http://localhost:1455/auth/callback"
+	if got := authURL.Query().Get("redirect_uri"); got != wantRedirect {
+		t.Fatalf("redirect_uri = %q, want %q", got, wantRedirect)
+	}
+	if strings.Contains(authURL.Query().Get("redirect_uri"), "/api/admin/") {
+		t.Fatalf("browser auth redirect_uri used an unregistered admin callback path: %s", authURL.String())
+	}
+}
+
+func TestOpenAIChatGPTBrowserAuthRejectsLANOrigin(t *testing.T) {
 	cfg := config.Defaults()
-	cfg.Database.Path = serverCacheTestPath(t, "llm-chatgpt-browser-origin")
+	cfg.Database.Path = serverCacheTestPath(t, "llm-chatgpt-browser-lan")
 	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
 
 	app := newTestApp(t, cfg)
@@ -245,30 +259,19 @@ func TestOpenAIChatGPTBrowserAuthUsesAdminRequestOrigin(t *testing.T) {
 	req.Header.Set("X-CSRF-Token", csrf)
 	req.AddCookie(cookie)
 	router.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
+	if rec.Code != http.StatusConflict {
 		t.Fatalf("POST /api/admin/settings/llm/openai/browser/start status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 
 	var response struct {
-		AuthURL string `json:"auth_url"`
-		PollID  string `json:"poll_id"`
+		Error    string `json:"error"`
+		Fallback string `json:"fallback"`
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
 		t.Fatal(err)
 	}
-	if response.AuthURL == "" || response.PollID == "" {
-		t.Fatalf("browser auth start response was incomplete: %#v", response)
-	}
-	authURL, err := url.Parse(response.AuthURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantRedirect := "http://192.168.1.50:8787" + openAIChatGPTBrowserCallbackPath
-	if got := authURL.Query().Get("redirect_uri"); got != wantRedirect {
-		t.Fatalf("redirect_uri = %q, want %q", got, wantRedirect)
-	}
-	if strings.Contains(response.AuthURL, "localhost:1455") {
-		t.Fatalf("browser auth URL still uses the old local callback port: %s", response.AuthURL)
+	if response.Fallback != config.OpenAIAuthMethodChatGPTHeadless || !strings.Contains(response.Error, "localhost") {
+		t.Fatalf("LAN browser auth response = %#v", response)
 	}
 }
 
@@ -278,13 +281,12 @@ func TestOpenAIChatGPTBrowserCallbackDoesNotRequireSession(t *testing.T) {
 	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
 
 	app := newTestApp(t, cfg)
-	router := app.Router()
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, openAIChatGPTBrowserCallbackPath, nil)
-	router.ServeHTTP(rec, req)
+	req := httptest.NewRequest(http.MethodGet, openAIChatGPTCallbackPath, nil)
+	app.openAIChatGPTBrowserCallback(rec, req)
 	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("GET %s status = %d, body = %s", openAIChatGPTBrowserCallbackPath, rec.Code, rec.Body.String())
+		t.Fatalf("GET %s status = %d, body = %s", openAIChatGPTCallbackPath, rec.Code, rec.Body.String())
 	}
 	if !strings.Contains(rec.Header().Get("Content-Type"), "text/html") {
 		t.Fatalf("callback content type = %q, want text/html", rec.Header().Get("Content-Type"))
