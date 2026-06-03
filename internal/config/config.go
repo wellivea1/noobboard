@@ -248,6 +248,14 @@ func defaultLLMPolicies() map[string]models.LLMPolicy {
 			MaxLogLines:           80,
 			FailClosedOnRedaction: true,
 			RecipientRole:         models.RoleAdmin,
+			AgentToolsEnabled:     false,
+			AgentMaxToolCalls:     3,
+			AgentToolRules: []models.LLMAgentToolRule{
+				{Tool: "noobboard_current_status", Action: "allow"},
+				{Tool: "noobboard_server_status", Action: "allow"},
+				{Tool: "noobboard_network_status", Action: "allow"},
+				{Tool: "noobboard_app_status", Action: "allow"},
+			},
 		},
 		"general_user_requested": {
 			Name:                  "general_user_requested",
@@ -260,6 +268,8 @@ func defaultLLMPolicies() map[string]models.LLMPolicy {
 			MaxLogLines:           0,
 			FailClosedOnRedaction: true,
 			RecipientRole:         models.RoleGeneralUser,
+			AgentToolsEnabled:     false,
+			AgentMaxToolCalls:     0,
 		},
 		"automatic_incident": {
 			Name:                  "automatic_incident",
@@ -272,6 +282,8 @@ func defaultLLMPolicies() map[string]models.LLMPolicy {
 			MaxLogLines:           20,
 			FailClosedOnRedaction: true,
 			RecipientRole:         models.RoleAdmin,
+			AgentToolsEnabled:     false,
+			AgentMaxToolCalls:     0,
 		},
 		"notification_message": {
 			Name:                  "notification_message",
@@ -284,6 +296,8 @@ func defaultLLMPolicies() map[string]models.LLMPolicy {
 			MaxLogLines:           0,
 			FailClosedOnRedaction: true,
 			RecipientRole:         models.RoleAdmin,
+			AgentToolsEnabled:     false,
+			AgentMaxToolCalls:     0,
 		},
 	}
 }
@@ -379,6 +393,24 @@ func (c Config) Validate() error {
 		}
 		if !policy.FailClosedOnRedaction {
 			return fmt.Errorf("llm policy %s must fail closed on redaction", name)
+		}
+		if policy.AgentToolsEnabled {
+			if policy.RecipientRole != models.RoleAdmin {
+				return fmt.Errorf("llm policy %s cannot enable agent tools for non-admin recipients", name)
+			}
+			if policy.AgentMaxToolCalls <= 0 {
+				return fmt.Errorf("llm policy %s must set agent_max_tool_calls when agent tools are enabled", name)
+			}
+		}
+		for _, rule := range policy.AgentToolRules {
+			if strings.TrimSpace(rule.Tool) == "" {
+				return fmt.Errorf("llm policy %s has an agent tool rule without a tool name", name)
+			}
+			switch strings.TrimSpace(rule.Action) {
+			case "allow", "ask", "deny":
+			default:
+				return fmt.Errorf("llm policy %s has invalid agent tool action %q", name, rule.Action)
+			}
 		}
 	}
 	return nil

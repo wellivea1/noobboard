@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -22,11 +23,13 @@ const (
 )
 
 type Request struct {
-	Mode     Mode
-	Policy   models.LLMPolicy
-	Snapshot models.Snapshot
-	Question string
-	ActorID  string
+	Mode         Mode
+	Policy       models.LLMPolicy
+	Snapshot     models.Snapshot
+	Question     string
+	ActorID      string
+	LiveSnapshot func(context.Context) (models.Snapshot, error)
+	ToolAudit    func(name string, ok bool, err string)
 }
 
 type Client interface {
@@ -74,14 +77,24 @@ func (b ContextBuilder) Build(req Request) (string, error) {
 		}
 	}
 
+	instruction := "Diagnose the server status data. Do not request tools, do not execute actions, and recommend only one allowlisted next action."
+	if req.Policy.AgentToolsEnabled && req.Policy.RecipientRole == models.RoleAdmin {
+		instruction = "Diagnose the server status data. You may call the provided read-only NoobBoard status tools to refresh live status. Do not request or execute mutations, repairs, shell commands, filesystem access, Docker control, Unraid mutations, or UniFi configuration changes. Recommend only one allowlisted next action."
+	}
 	payload := map[string]interface{}{
 		"mode":        req.Mode,
 		"question":    req.Question,
 		"api_report":  buildAPIReport(snapshot),
 		"snapshot":    snapshot,
-		"instruction": "Diagnose the server status data. Do not request tools, do not execute actions, and recommend only one allowlisted next action.",
+		"instruction": instruction,
 	}
 	if req.Policy.RecipientRole != models.RoleAdmin {
+		payload = map[string]interface{}{
+			"mode":        req.Mode,
+			"question":    req.Question,
+			"api_report":  buildGeneralUserAPIReport(snapshot, req.Question),
+			"instruction": "Explain the visible home status in plain English. Do not use technical vocabulary, request tools, execute actions, or recommend anything beyond telling the admin.",
+		}
 		generic, err := genericPayload(payload)
 		if err != nil {
 			return "", err
@@ -190,6 +203,103 @@ type appProbeReport struct {
 	CurrentProbeResult models.ProbeResult    `json:"current_probe_result"`
 }
 
+type generalUserAPIReport struct {
+	GeneratedAt     time.Time             `json:"generated_at"`
+	OverallStatus   models.CurrentStatus  `json:"overall_status"`
+	ServerSummary   string                `json:"server_summary"`
+	IntegrationMode string                `json:"integration_mode,omitempty"`
+	SourceHealth    models.SourceHealth   `json:"source_health"`
+	Unraid          generalUnraidReport   `json:"unraid"`
+	Docker          generalDockerReport   `json:"docker"`
+	UniFi           generalUniFiReport    `json:"unifi"`
+	Probes          generalProbesReport   `json:"probes"`
+	Incidents       []generalIncident     `json:"incidents,omitempty"`
+	Facts           []generalIncidentFact `json:"facts,omitempty"`
+}
+
+type generalUnraidReport struct {
+	NASReachable       bool   `json:"nas_reachable"`
+	UnraidAPIReachable bool   `json:"unraid_api_reachable"`
+	UnraidArrayState   string `json:"unraid_array_state"`
+	UnraidArrayHealthy bool   `json:"unraid_array_healthy"`
+	StorageWarning     bool   `json:"storage_warning"`
+	SourceHealth       string `json:"source_health,omitempty"`
+}
+
+type generalDockerReport struct {
+	ServiceAvailable bool               `json:"docker_service_available"`
+	AppCount         int                `json:"app_count"`
+	IncludedAppCount int                `json:"included_app_count"`
+	OmittedAppCount  int                `json:"omitted_app_count,omitempty"`
+	OnlineAppCount   int                `json:"online_app_count"`
+	DegradedAppCount int                `json:"degraded_app_count"`
+	OfflineAppCount  int                `json:"offline_app_count"`
+	UnknownAppCount  int                `json:"unknown_app_count"`
+	Apps             []generalAppReport `json:"apps"`
+	SourceHealth     string             `json:"source_health,omitempty"`
+}
+
+type generalUniFiReport struct {
+	InternetReachable       bool     `json:"internet_reachable"`
+	DNSOK                   bool     `json:"dns_ok"`
+	RouterReachable         bool     `json:"router_reachable"`
+	UniFiWANUp              bool     `json:"unifi_wan_up"`
+	UniFiGatewayReachable   bool     `json:"unifi_gateway_reachable"`
+	UniFiOfflineDeviceCount int      `json:"unifi_offline_device_count,omitempty"`
+	UniFiFirmwareUpdates    int      `json:"unifi_firmware_updates,omitempty"`
+	UniFiWarnings           []string `json:"unifi_warnings,omitempty"`
+	SourceHealth            string   `json:"source_health,omitempty"`
+}
+
+type generalProbesReport struct {
+	InternetReachable bool                    `json:"internet_reachable"`
+	DNSOK             bool                    `json:"dns_ok"`
+	RouterReachable   bool                    `json:"router_reachable"`
+	NASReachable      bool                    `json:"nas_reachable"`
+	AppProbeResults   []generalAppProbeReport `json:"app_probe_results,omitempty"`
+	SourceHealth      string                  `json:"source_health,omitempty"`
+}
+
+type generalAppReport struct {
+	AppID          string                `json:"app_id"`
+	DisplayName    string                `json:"display_name"`
+	CurrentStatus  models.CurrentStatus  `json:"current_status"`
+	Severity       models.Severity       `json:"severity"`
+	EndpointStatus models.EndpointStatus `json:"endpoint_status,omitempty"`
+	DockerState    models.DockerState    `json:"docker_state,omitempty"`
+	Summary        string                `json:"summary,omitempty"`
+}
+
+type generalAppProbeReport struct {
+	AppID              string               `json:"app_id"`
+	DisplayName        string               `json:"display_name"`
+	CurrentStatus      models.CurrentStatus `json:"current_status"`
+	Severity           models.Severity      `json:"severity"`
+	CurrentProbeResult generalProbeResult   `json:"current_probe_result"`
+}
+
+type generalProbeResult struct {
+	Type      models.ProbeType `json:"type,omitempty"`
+	OK        bool             `json:"ok"`
+	Message   string           `json:"message,omitempty"`
+	LatencyMS int64            `json:"latency_ms,omitempty"`
+}
+
+type generalIncident struct {
+	Type             models.IncidentType  `json:"type"`
+	Severity         models.Severity      `json:"severity"`
+	Status           models.CurrentStatus `json:"status"`
+	Summary          string               `json:"summary"`
+	AffectedServices []string             `json:"affected_services,omitempty"`
+}
+
+type generalIncidentFact struct {
+	Type             models.IncidentType `json:"type"`
+	Severity         models.Severity     `json:"severity"`
+	Summary          string              `json:"summary"`
+	AffectedServices []string            `json:"affected_services,omitempty"`
+}
+
 func buildAPIReport(snapshot models.Snapshot) apiReport {
 	infra := snapshot.Infrastructure
 	report := apiReport{
@@ -278,6 +388,164 @@ func buildAPIReport(snapshot models.Snapshot) apiReport {
 	return report
 }
 
+const generalUserContextMaxApps = 24
+
+func buildGeneralUserAPIReport(snapshot models.Snapshot, question string) generalUserAPIReport {
+	infra := snapshot.Infrastructure
+	apps := prioritizedGeneralUserApps(snapshot.Apps, question, generalUserContextMaxApps)
+	report := generalUserAPIReport{
+		GeneratedAt:     snapshot.GeneratedAt,
+		OverallStatus:   snapshot.OverallStatus,
+		ServerSummary:   snapshot.ServerSummary,
+		IntegrationMode: snapshot.IntegrationMode,
+		SourceHealth:    infra.SourceHealth,
+		Unraid: generalUnraidReport{
+			NASReachable:       infra.NASReachable,
+			UnraidAPIReachable: infra.UnraidAPIReachable,
+			UnraidArrayState:   infra.UnraidArrayState,
+			UnraidArrayHealthy: infra.UnraidArrayHealthy,
+			StorageWarning:     len(infra.StorageWarnings) > 0 || infra.ArrayDiskWarningCount > 0,
+			SourceHealth:       infra.SourceHealth.Unraid,
+		},
+		Docker: generalDockerReport{
+			ServiceAvailable: infra.DockerServiceAvailable,
+			AppCount:         len(snapshot.Apps),
+			IncludedAppCount: len(apps),
+			OmittedAppCount:  maxInt(0, len(snapshot.Apps)-len(apps)),
+			Apps:             make([]generalAppReport, 0, len(apps)),
+			SourceHealth:     infra.SourceHealth.Docker,
+		},
+		UniFi: generalUniFiReport{
+			InternetReachable:       infra.InternetReachable,
+			DNSOK:                   infra.DNSOK,
+			RouterReachable:         infra.RouterReachable,
+			UniFiWANUp:              infra.UniFiWANUp,
+			UniFiGatewayReachable:   infra.UniFiGatewayReachable,
+			UniFiOfflineDeviceCount: infra.UniFiOfflineDeviceCount,
+			UniFiFirmwareUpdates:    infra.UniFiFirmwareUpdates,
+			UniFiWarnings:           append([]string(nil), infra.UniFiWarnings...),
+			SourceHealth:            infra.SourceHealth.UniFi,
+		},
+		Probes: generalProbesReport{
+			InternetReachable: infra.InternetReachable,
+			DNSOK:             infra.DNSOK,
+			RouterReachable:   infra.RouterReachable,
+			NASReachable:      infra.NASReachable,
+			AppProbeResults:   make([]generalAppProbeReport, 0, len(apps)),
+			SourceHealth:      infra.SourceHealth.Probes,
+		},
+		Incidents: make([]generalIncident, 0, len(snapshot.Incidents)),
+		Facts:     make([]generalIncidentFact, 0, len(snapshot.Facts)),
+	}
+	for _, app := range snapshot.Apps {
+		switch app.CurrentStatus {
+		case models.StatusOnline:
+			report.Docker.OnlineAppCount++
+		case models.StatusDegraded:
+			report.Docker.DegradedAppCount++
+		case models.StatusOffline:
+			report.Docker.OfflineAppCount++
+		default:
+			report.Docker.UnknownAppCount++
+		}
+	}
+	for _, app := range apps {
+		report.Docker.Apps = append(report.Docker.Apps, generalAppReport{
+			AppID:          app.AppID,
+			DisplayName:    app.DisplayName,
+			CurrentStatus:  app.CurrentStatus,
+			Severity:       app.Severity,
+			EndpointStatus: app.EndpointStatus,
+			DockerState:    app.DockerState,
+			Summary:        app.ServerSummary,
+		})
+		report.Probes.AppProbeResults = append(report.Probes.AppProbeResults, generalAppProbeReport{
+			AppID:         app.AppID,
+			DisplayName:   app.DisplayName,
+			CurrentStatus: app.CurrentStatus,
+			Severity:      app.Severity,
+			CurrentProbeResult: generalProbeResult{
+				Type:      app.CurrentProbeResult.Type,
+				OK:        app.CurrentProbeResult.OK,
+				Message:   app.CurrentProbeResult.Message,
+				LatencyMS: app.CurrentProbeResult.LatencyMS,
+			},
+		})
+	}
+	for _, incident := range snapshot.Incidents {
+		report.Incidents = append(report.Incidents, generalIncident{
+			Type:             incident.Type,
+			Severity:         incident.Severity,
+			Status:           incident.Status,
+			Summary:          incident.Summary,
+			AffectedServices: compactStringSlice(incident.AffectedServices, 8),
+		})
+	}
+	for _, fact := range snapshot.Facts {
+		report.Facts = append(report.Facts, generalIncidentFact{
+			Type:             fact.Type,
+			Severity:         fact.Severity,
+			Summary:          fact.Summary,
+			AffectedServices: compactStringSlice(fact.AffectedServices, 8),
+		})
+	}
+	return report
+}
+
+func prioritizedGeneralUserApps(apps []models.AppStatus, question string, limit int) []models.AppStatus {
+	if limit <= 0 || len(apps) <= limit {
+		return append([]models.AppStatus(nil), apps...)
+	}
+	type scoredApp struct {
+		app   models.AppStatus
+		score int
+		index int
+	}
+	lowerQuestion := strings.ToLower(question)
+	scored := make([]scoredApp, 0, len(apps))
+	for index, app := range apps {
+		score := 0
+		if app.CurrentStatus != models.StatusOnline {
+			score += 100
+		}
+		if app.Severity != "" && app.Severity != models.SeverityNone {
+			score += 20
+		}
+		for _, name := range []string{app.DisplayName, app.AppID} {
+			name = strings.ToLower(strings.TrimSpace(name))
+			if name != "" && strings.Contains(lowerQuestion, name) {
+				score += 200
+			}
+		}
+		scored = append(scored, scoredApp{app: app, score: score, index: index})
+	}
+	sort.SliceStable(scored, func(i, j int) bool {
+		if scored[i].score == scored[j].score {
+			return scored[i].index < scored[j].index
+		}
+		return scored[i].score > scored[j].score
+	})
+	out := make([]models.AppStatus, 0, limit)
+	for i := 0; i < limit && i < len(scored); i++ {
+		out = append(out, scored[i].app)
+	}
+	return out
+}
+
+func compactStringSlice(values []string, limit int) []string {
+	if limit <= 0 || len(values) <= limit {
+		return append([]string(nil), values...)
+	}
+	return append([]string(nil), values[:limit]...)
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 func genericPayload(payload map[string]interface{}) (map[string]interface{}, error) {
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -318,6 +586,18 @@ func Instructions() string {
 		"Never recommend destructive storage, Unraid array, Docker removal, firewall, VLAN, or filesystem actions.",
 		"Choose recommended_action_id only from the JSON schema enum.",
 		"Return a single JSON object that matches the schema exactly.",
+	}, "\n")
+}
+
+func AgentInstructions() string {
+	return strings.Join([]string{
+		"You are a diagnostic assistant for a local NoobBoard dashboard.",
+		"You receive only sanitized incident facts, status data, policy-approved log excerpts, and optionally read-only NoobBoard status tools.",
+		"You may call the provided NoobBoard tools only to refresh live read-only status.",
+		"Never claim you can repair the system unless a separate explicit mutating tool is provided; no mutating tools are available in this request.",
+		"Never request shell access, filesystem access, raw credentials, Docker control, Unraid mutations, UniFi configuration changes, or arbitrary local/API commands.",
+		"Choose recommended_action_id only from the JSON schema enum.",
+		"Return a single JSON object that matches the schema exactly after any needed tool calls.",
 	}, "\n")
 }
 

@@ -184,6 +184,14 @@ func (a *App) Flush() {
 }
 
 func (a *App) fullSnapshot(ctx context.Context) (models.Snapshot, error) {
+	return a.collectSnapshot(ctx, true)
+}
+
+func (a *App) readOnlySnapshot(ctx context.Context) (models.Snapshot, error) {
+	return a.collectSnapshot(ctx, false)
+}
+
+func (a *App) collectSnapshot(ctx context.Context, processNotifications bool) (models.Snapshot, error) {
 	cfg, collectors := a.runtimeSnapshot()
 	infra, unraidLogs, err := collectors.Unraid.Status(ctx)
 	if err != nil {
@@ -253,7 +261,9 @@ func (a *App) fullSnapshot(ctx context.Context) (models.Snapshot, error) {
 	snapshot.NotificationInfo = notifications.RollupFromPreferences(cfg.Notifications.Enabled, cfg.Notifications.GlobalOptInEnabled, prefs)
 	auditTail, _ := a.deps.Store.AuditTail(50)
 	snapshot.AuditTail = auditTail
-	_ = a.deps.Notifications.ProcessSnapshot(ctx, snapshot)
+	if processNotifications {
+		_ = a.deps.Notifications.ProcessSnapshot(ctx, snapshot)
+	}
 	return snapshot, nil
 }
 
@@ -817,11 +827,19 @@ func (a *App) diagnose(w http.ResponseWriter, r *http.Request, mode llm.Mode, ro
 	}
 	policy.RecipientRole = role
 	diagnosis, err := llmClient.Diagnose(r.Context(), llm.Request{
-		Mode:     mode,
-		Policy:   policy,
-		Snapshot: full,
-		Question: body.Question,
-		ActorID:  mustUser(r).ID,
+		Mode:         mode,
+		Policy:       policy,
+		Snapshot:     full,
+		Question:     body.Question,
+		ActorID:      mustUser(r).ID,
+		LiveSnapshot: a.readOnlySnapshot,
+		ToolAudit: func(name string, ok bool, errText string) {
+			details := map[string]interface{}{"mode": string(mode), "tool": name, "ok": ok}
+			if errText != "" {
+				details["error"] = errText
+			}
+			a.deps.Audit.Record(mustUser(r).ID, "llm.agent_tool", details)
+		},
 	})
 	if err != nil {
 		a.deps.Audit.Record(mustUser(r).ID, "llm.failed", map[string]interface{}{"mode": string(mode), "error": err.Error()})
@@ -1696,10 +1714,53 @@ func normalizeLLMSettings(settings config.LLMConfig) config.LLMConfig {
 	if settings.Timeout == 0 {
 		settings.Timeout = defaults.Timeout
 	}
-	if settings.Policies == nil {
-		settings.Policies = defaults.Policies
-	}
+	settings.Policies = normalizeLLMPolicies(settings.Policies, defaults.Policies)
 	return settings
+}
+
+func normalizeLLMPolicies(policies, defaults map[string]models.LLMPolicy) map[string]models.LLMPolicy {
+	if policies == nil {
+		policies = map[string]models.LLMPolicy{}
+	}
+	out := make(map[string]models.LLMPolicy, len(policies)+len(defaults))
+	for name, fallback := range defaults {
+		policy, ok := policies[name]
+		if !ok {
+			out[name] = fallback
+			continue
+		}
+		out[name] = normalizeLLMPolicy(policy, fallback)
+	}
+	for name, policy := range policies {
+		if _, ok := out[name]; ok {
+			continue
+		}
+		out[name] = normalizeLLMPolicy(policy, models.LLMPolicy{AgentMaxToolCalls: 3})
+	}
+	return out
+}
+
+func normalizeLLMPolicy(policy, fallback models.LLMPolicy) models.LLMPolicy {
+	if policy.Name == "" {
+		policy.Name = fallback.Name
+	}
+	if policy.MaxContextBytes <= 0 {
+		policy.MaxContextBytes = fallback.MaxContextBytes
+	}
+	if policy.AgentMaxToolCalls <= 0 {
+		policy.AgentMaxToolCalls = fallback.AgentMaxToolCalls
+	}
+	if len(policy.AgentToolRules) == 0 && len(fallback.AgentToolRules) > 0 {
+		policy.AgentToolRules = append([]models.LLMAgentToolRule(nil), fallback.AgentToolRules...)
+	}
+	for i := range policy.AgentToolRules {
+		policy.AgentToolRules[i].Tool = strings.TrimSpace(policy.AgentToolRules[i].Tool)
+		policy.AgentToolRules[i].Action = strings.TrimSpace(policy.AgentToolRules[i].Action)
+	}
+	if policy.AgentToolsEnabled && policy.RecipientRole != models.RoleAdmin {
+		policy.AgentToolsEnabled = false
+	}
+	return policy
 }
 
 func chatGPTAuthPresent(settings config.LLMConfig) bool {

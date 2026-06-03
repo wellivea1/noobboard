@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -55,6 +56,104 @@ func TestOpenAIClientUsesResponsesAPIWithStructuredOutput(t *testing.T) {
 	}
 	if diagnosis.RecommendedActionID != "none" || diagnosis.Severity != models.SeverityNone {
 		t.Fatalf("diagnosis = %#v", diagnosis)
+	}
+}
+
+func TestOpenAIClientRunsAllowedReadOnlyAgentTool(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+	cfg := config.Defaults()
+	cfg.LLM.Provider = "openai"
+	cfg.LLM.OpenAIModel = "gpt-test"
+	client := NewOpenAIClient(cfg.LLM, privacy.NewRedactor(config.PrivacyConfig{}))
+	requests := 0
+	client.http = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		requests++
+		var body map[string]interface{}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		switch requests {
+		case 1:
+			tools := body["tools"].([]interface{})
+			if len(tools) == 0 {
+				t.Fatalf("agent-enabled request did not advertise tools: %#v", body["tools"])
+			}
+			return jsonResponse(t, http.StatusOK, map[string]interface{}{
+				"output": []map[string]interface{}{
+					{
+						"type":      "function_call",
+						"id":        "fc_1",
+						"call_id":   "call_1",
+						"name":      "noobboard_network_status",
+						"arguments": `{}`,
+					},
+				},
+			})
+		case 2:
+			input := fmt.Sprint(body["input"])
+			if !strings.Contains(input, "fresh live unifi") {
+				t.Fatalf("second request did not include fresh tool output: %s", input)
+			}
+			return jsonResponse(t, http.StatusOK, map[string]string{"output_text": validDiagnosisJSON(t)})
+		default:
+			t.Fatalf("unexpected extra request %d", requests)
+		}
+		return nil, nil
+	})}
+
+	req := sampleLLMRequest()
+	req.Policy.AgentToolsEnabled = true
+	req.Policy.AgentMaxToolCalls = 2
+	req.Policy.AgentToolRules = []models.LLMAgentToolRule{{Tool: "noobboard_network_status", Action: "allow"}}
+	req.LiveSnapshot = func(context.Context) (models.Snapshot, error) {
+		snapshot := req.Snapshot
+		snapshot.IntegrationMode = "live"
+		snapshot.Infrastructure.SourceHealth.UniFi = "fresh live unifi"
+		snapshot.Infrastructure.UniFiWANUp = true
+		snapshot.Infrastructure.UniFiGatewayReachable = true
+		return snapshot, nil
+	}
+	diagnosis, err := client.Diagnose(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diagnosis.RecommendedActionID != "none" {
+		t.Fatalf("diagnosis = %#v", diagnosis)
+	}
+	if requests != 2 {
+		t.Fatalf("requests = %d, want 2", requests)
+	}
+}
+
+func TestGeneralUserCannotAdvertiseAgentToolsEvenIfPolicyIsMisconfigured(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+	cfg := config.Defaults()
+	cfg.LLM.Provider = "openai"
+	cfg.LLM.OpenAIModel = "gpt-test"
+	client := NewOpenAIClient(cfg.LLM, privacy.NewRedactor(config.PrivacyConfig{}))
+	client.http = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		var body map[string]interface{}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if tools, ok := body["tools"].([]interface{}); !ok || len(tools) != 0 {
+			t.Fatalf("general-user request advertised tools: %#v", body["tools"])
+		}
+		return jsonResponse(t, http.StatusOK, map[string]string{"output_text": validDiagnosisJSON(t)})
+	})}
+	req := sampleLLMRequest()
+	req.Mode = ModeGeneralUserRequested
+	req.Policy.RecipientRole = models.RoleGeneralUser
+	req.Policy.IncludeLogs = false
+	req.Policy.MaxContextBytes = 12000
+	req.Policy.AgentToolsEnabled = true
+	req.Policy.AgentMaxToolCalls = 2
+	req.Policy.AgentToolRules = []models.LLMAgentToolRule{{Tool: "*", Action: "allow"}}
+	req.LiveSnapshot = func(context.Context) (models.Snapshot, error) {
+		return req.Snapshot, nil
+	}
+	if _, err := client.Diagnose(context.Background(), req); err != nil {
+		t.Fatal(err)
 	}
 }
 

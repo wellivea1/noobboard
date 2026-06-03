@@ -1,7 +1,6 @@
 package llm
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -79,32 +78,12 @@ func (c *ChatGPTClient) Diagnose(ctx context.Context, req Request) (Diagnosis, e
 	if err != nil {
 		return Diagnosis{}, err
 	}
-	data, err := openAIResponsesBody(c.model, contextText)
-	if err != nil {
-		return Diagnosis{}, err
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(data))
-	if err != nil {
-		return Diagnosis{}, err
-	}
-	httpReq.Header.Set("Authorization", "Bearer "+accessToken)
-	httpReq.Header.Set("ChatGPT-Account-Id", c.accountID)
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Originator", "noobboard")
-	httpReq.Header.Set("User-Agent", "NoobBoard")
-	resp, err := c.http.Do(httpReq)
-	if err != nil {
-		return Diagnosis{}, err
-	}
-	defer resp.Body.Close()
-	respData, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
-	if err != nil {
-		return Diagnosis{}, err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return Diagnosis{}, fmt.Errorf("chatgpt codex responses api returned %d: %s", resp.StatusCode, string(respData))
-	}
-	return diagnosisFromResponsesBody(respData)
+	headers := http.Header{}
+	headers.Set("Authorization", "Bearer "+accessToken)
+	headers.Set("ChatGPT-Account-Id", c.accountID)
+	headers.Set("Originator", "noobboard")
+	headers.Set("User-Agent", "NoobBoard")
+	return runOpenAIResponsesDiagnosis(ctx, c.http, c.endpoint, headers, c.model, contextText, req, c.builder.redactor, "chatgpt codex responses api")
 }
 
 func (c *ChatGPTClient) ensureAccessToken(ctx context.Context) (string, error) {

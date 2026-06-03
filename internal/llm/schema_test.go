@@ -2,8 +2,10 @@ package llm
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wellivea1/noobboard/internal/adapters/fixture"
 	"github.com/wellivea1/noobboard/internal/config"
@@ -101,6 +103,115 @@ func TestGeneralUserLLMContextDoesNotLeakHiddenAppsOrLogs(t *testing.T) {
 	currentProbe := requireObject(t, probe, "current_probe_result")
 	if _, ok := currentProbe["target"]; ok {
 		t.Fatalf("general probe report leaked target: %#v", currentProbe)
+	}
+}
+
+func TestGeneralUserLLMContextStaysWithinDefaultLimitWithManyApps(t *testing.T) {
+	now := time.Now().UTC()
+	snapshot := models.Snapshot{
+		GeneratedAt:   now,
+		OverallStatus: models.StatusDegraded,
+		ServerSummary: "Some apps are not working.",
+		Infrastructure: models.InfrastructureStatus{
+			InternetReachable:      true,
+			DNSOK:                  true,
+			RouterReachable:        true,
+			NASReachable:           true,
+			UnraidAPIReachable:     true,
+			UnraidArrayState:       "started",
+			UnraidArrayHealthy:     true,
+			DockerServiceAvailable: true,
+			LastCheckedAt:          now,
+			SourceHealth:           models.SourceHealth{Unraid: "live unraid ok", Docker: "live docker ok", UniFi: "live unifi ok", Probes: "live probes ok"},
+		},
+		Visibility:      models.VisibilitySettings{GeneralUserCanUseLLM: true, ShowNASStatusToUsers: true, ShowWANStatusToUsers: true},
+		IntegrationMode: "live",
+	}
+	for i := 0; i < 80; i++ {
+		status := models.StatusOnline
+		severity := models.SeverityNone
+		summary := "Working normally."
+		if i%5 == 0 {
+			status = models.StatusOffline
+			severity = models.SeverityMedium
+			summary = "Not responding."
+		}
+		snapshot.Apps = append(snapshot.Apps, models.AppStatus{
+			AppID:                 fmt.Sprintf("app-%02d", i),
+			DisplayName:           fmt.Sprintf("App %02d", i),
+			ContainerName:         fmt.Sprintf("container-%02d-should-not-leak", i),
+			IconURL:               "https://example.invalid/very/long/icon/path/that/should/not/be/sent/to/the/llm.png",
+			ImageRef:              "registry.example.invalid/private/image:latest",
+			VisibleToGeneralUsers: true,
+			CurrentStatus:         status,
+			Severity:              severity,
+			DockerState:           models.DockerRunning,
+			EndpointStatus:        models.EndpointOK,
+			ServerSummary:         summary,
+			RecentLogs:            []models.LogLine{{Timestamp: now, Source: "secret", Line: strings.Repeat("log line should not leak ", 20)}},
+			CurrentProbeResult: models.ProbeResult{
+				Type:      models.ProbeHTTP,
+				Target:    fmt.Sprintf("https://internal.example.invalid/app-%02d/secret-target", i),
+				OK:        status == models.StatusOnline,
+				Message:   summary,
+				LatencyMS: int64(i),
+				CheckedAt: now,
+			},
+		})
+	}
+
+	builder := NewContextBuilder(privacy.NewRedactor(config.PrivacyConfig{}))
+	contextText, err := builder.Build(Request{
+		Mode: ModeGeneralUserRequested,
+		Policy: models.LLMPolicy{
+			Name:                  "general_user_requested",
+			Enabled:               true,
+			IncludeLogs:           false,
+			PreferIncidentFacts:   true,
+			AllowHiddenAppNames:   false,
+			AllowBlacklistedNames: false,
+			MaxContextBytes:       12000,
+			MaxLogLines:           0,
+			FailClosedOnRedaction: true,
+			RecipientRole:         models.RoleGeneralUser,
+		},
+		Snapshot: snapshot,
+		Question: "Is app-79 working?",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(contextText) > 12000 {
+		t.Fatalf("general user context length = %d, want <= 12000", len(contextText))
+	}
+	for _, leaked := range []string{"snapshot", "recent_logs", "container-", "secret-target", "icon_url", "image_ref"} {
+		if strings.Contains(contextText, leaked) {
+			t.Fatalf("compact general context leaked %q: %s", leaked, contextText)
+		}
+	}
+	payload := decodeContextPayload(t, contextText)
+	apiReport := requireObject(t, payload, "api_report")
+	if apiReport["integration_mode"] != "live" {
+		t.Fatalf("compact context did not preserve live integration mode: %#v", apiReport["integration_mode"])
+	}
+	sourceHealth := requireObject(t, apiReport, "source_health")
+	if sourceHealth["unraid"] != "live unraid ok" || sourceHealth["unifi"] != "live unifi ok" {
+		t.Fatalf("compact context did not preserve live source health: %#v", sourceHealth)
+	}
+	docker := requireObject(t, apiReport, "docker")
+	if got, ok := docker["omitted_app_count"].(float64); !ok || got <= 0 {
+		t.Fatalf("compact context did not report omitted apps: %#v", docker["omitted_app_count"])
+	}
+	apps := requireArray(t, docker, "apps")
+	foundQuestionApp := false
+	for _, item := range apps {
+		app := item.(map[string]interface{})
+		if app["app_id"] == "app-79" {
+			foundQuestionApp = true
+		}
+	}
+	if !foundQuestionApp {
+		t.Fatalf("compact context omitted app mentioned in question: %#v", apps)
 	}
 }
 

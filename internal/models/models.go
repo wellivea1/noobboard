@@ -201,17 +201,25 @@ type RoleVisibility struct {
 }
 
 type LLMPolicy struct {
-	Name                  string   `json:"name"`
-	Enabled               bool     `json:"enabled"`
-	IncludeLogs           bool     `json:"include_logs"`
-	PreferIncidentFacts   bool     `json:"prefer_incident_facts"`
-	AllowedLogSources     []string `json:"allowed_log_sources"`
-	AllowHiddenAppNames   bool     `json:"allow_hidden_app_names"`
-	AllowBlacklistedNames bool     `json:"allow_blacklisted_names"`
-	MaxContextBytes       int      `json:"max_context_bytes"`
-	MaxLogLines           int      `json:"max_log_lines"`
-	FailClosedOnRedaction bool     `json:"fail_closed_on_redaction"`
-	RecipientRole         Role     `json:"recipient_role"`
+	Name                  string             `json:"name"`
+	Enabled               bool               `json:"enabled"`
+	IncludeLogs           bool               `json:"include_logs"`
+	PreferIncidentFacts   bool               `json:"prefer_incident_facts"`
+	AllowedLogSources     []string           `json:"allowed_log_sources"`
+	AllowHiddenAppNames   bool               `json:"allow_hidden_app_names"`
+	AllowBlacklistedNames bool               `json:"allow_blacklisted_names"`
+	MaxContextBytes       int                `json:"max_context_bytes"`
+	MaxLogLines           int                `json:"max_log_lines"`
+	FailClosedOnRedaction bool               `json:"fail_closed_on_redaction"`
+	RecipientRole         Role               `json:"recipient_role"`
+	AgentToolsEnabled     bool               `json:"agent_tools_enabled"`
+	AgentMaxToolCalls     int                `json:"agent_max_tool_calls"`
+	AgentToolRules        []LLMAgentToolRule `json:"agent_tool_rules,omitempty"`
+}
+
+type LLMAgentToolRule struct {
+	Tool   string `json:"tool"`
+	Action string `json:"action"`
 }
 
 type IncidentType string

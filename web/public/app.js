@@ -3032,6 +3032,11 @@ function policyEditor(name, policy) {
   const failClosed = settingToggle("Fail closed", current.fail_closed_on_redaction !== false);
   const maxContext = settingNumberField("Max context bytes", current.max_context_bytes || 8000, { min: 1, step: 1000, inputmode: "numeric" });
   const maxLogs = settingNumberField("Max log lines", current.max_log_lines || 0, { min: 0, step: 1, inputmode: "numeric" });
+  const agentTools = settingToggle("Live API tools", !!current.agent_tools_enabled);
+  const agentMaxCalls = settingNumberField("Max tool calls", current.agent_max_tool_calls || 0, { min: 0, step: 1, inputmode: "numeric" });
+  const canUseTools = (current.recipient_role || meta.recipient) === "admin";
+  agentTools.input.disabled = !canUseTools;
+  agentMaxCalls.input.disabled = !canUseTools;
   const logSources = listEditor("Allowed log sources", current.allowed_log_sources || [], "source");
   return {
     name,
@@ -3049,6 +3054,12 @@ function policyEditor(name, policy) {
         node("div", { class: "settings-toggle-grid" }, includeLogs.element, preferFacts.element, allowHidden.element, allowBlacklisted.element, failClosed.element),
         node("div", { class: "settings-field-grid" }, maxContext.element, maxLogs.element),
         logSources.element,
+        node("section", { class: "settings-subsection" },
+          node("h4", { text: "Agent tools" }),
+          node("p", { class: "muted", text: "Read-only live status tools for admin diagnosis. Requests still use role filtering and redaction." }),
+          node("div", { class: "settings-toggle-grid" }, agentTools.element),
+          node("div", { class: "settings-field-grid" }, agentMaxCalls.element),
+        ),
       ),
     ),
     value: () => ({
@@ -3064,6 +3075,9 @@ function policyEditor(name, policy) {
       max_log_lines: parseInt(maxLogs.input.value, 10) || 0,
       allowed_log_sources: logSources.values(),
       recipient_role: current.recipient_role || "admin",
+      agent_tools_enabled: canUseTools && agentTools.input.checked,
+      agent_max_tool_calls: parseInt(agentMaxCalls.input.value, 10) || current.agent_max_tool_calls || 0,
+      agent_tool_rules: current.agent_tool_rules || [],
     }),
   };
 }
