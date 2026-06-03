@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -125,6 +126,25 @@ func TestOpenAIClientRunsAllowedReadOnlyAgentTool(t *testing.T) {
 	}
 	if requests != 2 {
 		t.Fatalf("requests = %d, want 2", requests)
+	}
+}
+
+func TestOpenAIResponsesUsageLimitErrorIsClassified(t *testing.T) {
+	err := openAIProviderError("openai responses api", http.StatusTooManyRequests, []byte(`{
+		"error": {
+			"code": "insufficient_quota",
+			"message": "You exceeded your current quota, please check your plan and billing details."
+		}
+	}`))
+	if !IsOpenAIUsageLimitError(err) {
+		t.Fatalf("expected usage limit classification for %v", err)
+	}
+	var providerErr *ProviderError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("expected ProviderError, got %T", err)
+	}
+	if providerErr.Code != OpenAIUsageLimitCode {
+		t.Fatalf("ProviderError code = %q, want %q", providerErr.Code, OpenAIUsageLimitCode)
 	}
 }
 

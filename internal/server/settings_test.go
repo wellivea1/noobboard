@@ -123,6 +123,43 @@ func TestDiagnoseRequiresConfiguredLLMProvider(t *testing.T) {
 	}
 }
 
+func TestAdminDiagnoseReportsOpenAIUsageLimit(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "diagnose-openai-usage-limit")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+	cfg.LLM.Provider = "openai"
+	cfg.LLM.OpenAIAuthMethod = config.OpenAIAuthMethodAPIKey
+	cfg.LLM.OpenAIAPIKey = "sk-test-local"
+
+	app := newTestApp(t, cfg)
+	app.settingsMu.Lock()
+	app.deps.LLM = usageLimitLLMClient{}
+	app.settingsMu.Unlock()
+
+	router := app.Router()
+	cookie, csrf := loginAdmin(t, router)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/diagnose", strings.NewReader(`{"question":"what is wrong?"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("POST /api/admin/diagnose status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var response map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response["code"] != llm.OpenAIUsageLimitCode {
+		t.Fatalf("diagnose code = %#v, body = %s", response["code"], rec.Body.String())
+	}
+	if !strings.Contains(strings.ToLower(response["error"]), "usage limit") {
+		t.Fatalf("diagnose error did not report usage limit: %s", rec.Body.String())
+	}
+}
+
 func TestLLMSettingsKeysAreWriteOnly(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Database.Path = serverCacheTestPath(t, "llm-settings-keys")
@@ -1155,6 +1192,17 @@ func (c *recordingLLMClient) Diagnose(_ context.Context, req llm.Request) (llm.D
 		RecommendedActionID: "none",
 		ShouldNotifyAdmin:   false,
 	}, nil
+}
+
+type usageLimitLLMClient struct{}
+
+func (usageLimitLLMClient) Diagnose(context.Context, llm.Request) (llm.Diagnosis, error) {
+	return llm.Diagnosis{}, &llm.ProviderError{
+		Label:      "openai responses api",
+		StatusCode: http.StatusTooManyRequests,
+		Code:       llm.OpenAIUsageLimitCode,
+		Message:    "OpenAI usage limit reached.",
+	}
 }
 
 func newTestApp(t *testing.T, cfg config.Config) *App {

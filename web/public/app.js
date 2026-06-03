@@ -22,6 +22,7 @@ const state = {
   notificationPreferencesLoading: false,
   userDrawerActiveSection: "settings",
   userDrawerLastFocus: null,
+  userView: "status",
   openAIAuthDialog: null,
   chatBusy: {
     diagnostic: false,
@@ -629,7 +630,7 @@ function showDashboard() {
     setActiveTab(state.activeTab);
   } else {
     state.activeTab = "user-home";
-    $("page-title").textContent = "Home status";
+    setCompactView(state.userView || "status");
   }
   renderMonitorRestore();
 }
@@ -637,7 +638,7 @@ function showDashboard() {
 function setActiveTab(tabName) {
   if (!hasAdminSurface()) {
     state.activeTab = "user-home";
-    $("page-title").textContent = "Home status";
+    setCompactView(state.userView || "status");
     return;
   }
   state.activeTab = tabName;
@@ -662,6 +663,31 @@ function setActiveTab(tabName) {
   closeNav();
   if (tabName === "admin") loadAudit();
   if (tabName === "settings") loadSettings();
+}
+
+function setCompactView(view) {
+  if (hasAdminSurface()) return;
+  state.userView = view === "chat" ? "chat" : "status";
+  document.body.dataset.compactView = state.userView;
+  $("page-title").textContent = state.userView === "chat" ? "Ask what's wrong" : "Home status";
+  const statusButton = $("user-status-open");
+  const chatButton = $("user-chat-open");
+  if (statusButton) {
+    statusButton.classList.toggle("active", state.userView === "status");
+    statusButton.setAttribute("aria-selected", String(state.userView === "status"));
+  }
+  if (chatButton) {
+    chatButton.classList.toggle("active", state.userView === "chat");
+    chatButton.setAttribute("aria-selected", String(state.userView === "chat"));
+  }
+  const chatPanel = document.querySelector(".panel.user-chat");
+  if (chatPanel) chatPanel.hidden = state.userView !== "chat";
+  document.querySelectorAll("[data-user-status-view]").forEach((element) => {
+    element.hidden = state.userView !== "status";
+  });
+  if (state.userView === "chat") {
+    $("user-chat-input")?.focus({ preventScroll: true });
+  }
 }
 
 async function refresh() {
@@ -775,10 +801,12 @@ function renderUserHome(snapshot) {
   renderUserHero(hero);
   $("summary").textContent = hero.explanation || hero.headline;
   $("user-primary-actions").dataset.chatAvailable = canChat ? "true" : "false";
-  if ($("user-chat-open")) $("user-chat-open").hidden = !canChat;
   if (userChatPanel) {
-    userChatPanel.hidden = !canChat;
     userChatPanel.dataset.chatAvailable = canChat ? "true" : "false";
+  }
+  if ($("user-chat-open")) {
+    $("user-chat-open").disabled = !canChat;
+    $("user-chat-open").setAttribute("aria-disabled", String(!canChat));
   }
   $("user-chat-input").placeholder = "Ask what's wrong or whether an app is working.";
   $("user-chat-input").disabled = !canChat || state.chatBusy.user;
@@ -790,6 +818,8 @@ function renderUserHome(snapshot) {
     if (!$("user-chat-input").value.trim()) $("user-chat-input").value = "What is wrong right now?";
     resetChatPlaceholder($("user-chat-output"), "Ask what's wrong or whether an app is working.");
   }
+  if (state.userView === "chat" && !canChat) state.userView = "status";
+  setCompactView(state.userView || "status");
   const statusCards = [
     userStatusCard("Overall", snapshot.overall_status || "unknown", compactOverallSummary(snapshot)),
   ];
@@ -1142,6 +1172,9 @@ function setChatControlsBusy(input, button, busy) {
 
 function compactChatErrorMessage(error) {
   const message = String(error?.message || "");
+  if (error?.data?.code === "openai_usage_limit") {
+    return "OpenAI usage limit reached. Tell the admin if you need help right now.";
+  }
   if (error?.status === 403) return "Status chat is not available right now.";
   if (/context|codex|responses api|api key|token|json|model/i.test(message)) {
     return "I could not check that right now. Tell the admin if this keeps happening.";
@@ -1839,6 +1872,7 @@ async function runUserChat() {
 }
 
 function focusUserChat() {
+  setCompactView("chat");
   const panel = document.querySelector(".panel.user-chat");
   if (!panel || panel.hidden) return;
   panel.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
@@ -3453,6 +3487,7 @@ $("quick-diagnose").addEventListener("click", () => {
 $("diagnose").addEventListener("click", diagnose);
 $("diagnostic-question").addEventListener("keydown", (event) => submitOnEnter(event, diagnose));
 $("notify-admin").addEventListener("click", () => notifyAdmin());
+$("user-status-open").addEventListener("click", () => setCompactView("status"));
 $("user-chat-open").addEventListener("click", focusUserChat);
 $("user-chat-send").addEventListener("click", runUserChat);
 $("user-chat-input").addEventListener("keydown", (event) => submitOnEnter(event, runUserChat));

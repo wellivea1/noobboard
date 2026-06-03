@@ -84,28 +84,189 @@ func (b ContextBuilder) Build(req Request) (string, error) {
 	if req.Policy.RecipientRole != models.RoleAdmin {
 		return b.buildGeneralUserContext(snapshot, req)
 	}
-	payload := map[string]interface{}{
-		"mode":        req.Mode,
-		"question":    req.Question,
-		"api_report":  buildAPIReport(snapshot),
-		"snapshot":    snapshot,
-		"instruction": instruction,
+	return b.buildAdminContext(snapshot, req, instruction)
+}
+
+type adminContextLimits struct {
+	IncludeSnapshot  bool
+	IncludeProbeRows bool
+	AppLimit         int
+	IncidentLimit    int
+	FactLimit        int
+	WarningLimit     int
+	LogLineLimit     int
+	SummaryChars     int
+	LogLineChars     int
+}
+
+func (b ContextBuilder) buildAdminContext(snapshot models.Snapshot, req Request, instruction string) (string, error) {
+	profiles := []adminContextLimits{
+		{IncludeSnapshot: true, IncludeProbeRows: true, AppLimit: -1, IncidentLimit: -1, FactLimit: -1, WarningLimit: -1, LogLineLimit: -1},
+		{IncludeSnapshot: false, IncludeProbeRows: true, AppLimit: -1, IncidentLimit: -1, FactLimit: -1, WarningLimit: -1, LogLineLimit: -1},
+		{IncludeSnapshot: false, IncludeProbeRows: true, AppLimit: 80, IncidentLimit: 20, FactLimit: 20, WarningLimit: 20, LogLineLimit: 5, SummaryChars: 600, LogLineChars: 600},
+		{IncludeSnapshot: false, IncludeProbeRows: true, AppLimit: 40, IncidentLimit: 12, FactLimit: 12, WarningLimit: 12, LogLineLimit: 3, SummaryChars: 400, LogLineChars: 400},
+		{IncludeSnapshot: false, IncludeProbeRows: true, AppLimit: 24, IncidentLimit: 8, FactLimit: 8, WarningLimit: 8, LogLineLimit: 1, SummaryChars: 300, LogLineChars: 300},
+		{IncludeSnapshot: false, IncludeProbeRows: true, AppLimit: 16, IncidentLimit: 6, FactLimit: 6, WarningLimit: 6, LogLineLimit: 0, SummaryChars: 220},
+		{IncludeSnapshot: false, IncludeProbeRows: false, AppLimit: 8, IncidentLimit: 4, FactLimit: 4, WarningLimit: 4, LogLineLimit: 0, SummaryChars: 180},
+		{IncludeSnapshot: false, IncludeProbeRows: false, AppLimit: 3, IncidentLimit: 2, FactLimit: 2, WarningLimit: 2, LogLineLimit: 0, SummaryChars: 140},
+		{IncludeSnapshot: false, IncludeProbeRows: false, AppLimit: 0, IncidentLimit: 0, FactLimit: 0, WarningLimit: 0, LogLineLimit: 0, SummaryChars: 100},
 	}
+	lastSize := 0
+	for _, limits := range profiles {
+		compacted := compactAdminSnapshot(snapshot, req.Question, limits)
+		apiReport := buildAPIReport(compacted)
+		setDockerReportCounts(&apiReport.Docker, snapshot.Apps)
+		if !limits.IncludeProbeRows {
+			apiReport.Probes.AppProbeResults = nil
+		}
+		payload := map[string]interface{}{
+			"mode":        req.Mode,
+			"question":    compactText(req.Question, 1000),
+			"api_report":  apiReport,
+			"instruction": instruction,
+		}
+		if limits.IncludeSnapshot {
+			payload["snapshot"] = compacted
+		}
+		data, err := b.encodeContextPayload(payload, req.Policy.FailClosedOnRedaction)
+		if err != nil {
+			return "", err
+		}
+		lastSize = len(data)
+		if lastSize > req.Policy.MaxContextBytes {
+			continue
+		}
+		return string(data), nil
+	}
+	return "", fmt.Errorf("llm context exceeds max_context_bytes: %d > %d", lastSize, req.Policy.MaxContextBytes)
+}
+
+func setDockerReportCounts(report *dockerAPIReport, apps []models.AppStatus) {
+	report.AppCount = len(apps)
+	report.OnlineAppCount = 0
+	report.DegradedAppCount = 0
+	report.OfflineAppCount = 0
+	report.UnknownAppCount = 0
+	for _, app := range apps {
+		switch app.CurrentStatus {
+		case models.StatusOnline:
+			report.OnlineAppCount++
+		case models.StatusDegraded:
+			report.DegradedAppCount++
+		case models.StatusOffline:
+			report.OfflineAppCount++
+		default:
+			report.UnknownAppCount++
+		}
+	}
+}
+
+func (b ContextBuilder) encodeContextPayload(payload map[string]interface{}, failClosed bool) ([]byte, error) {
 	data, err := json.Marshal(payload)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	result := b.redactor.RedactString(string(data))
-	if result.Changed && req.Policy.FailClosedOnRedaction {
+	if result.Changed && failClosed {
 		data = []byte(result.Text)
 	}
-	if len(data) > req.Policy.MaxContextBytes {
-		return "", fmt.Errorf("llm context exceeds max_context_bytes: %d > %d", len(data), req.Policy.MaxContextBytes)
-	}
 	if strings.Contains(string(data), "replace_me") {
-		return "", errors.New("placeholder secret reached llm context")
+		return nil, errors.New("placeholder secret reached llm context")
 	}
-	return string(data), nil
+	return data, nil
+}
+
+func compactAdminSnapshot(snapshot models.Snapshot, question string, limits adminContextLimits) models.Snapshot {
+	out := snapshot
+	out.ServerSummary = compactText(out.ServerSummary, limits.SummaryChars)
+	out.AdminSummary = compactText(out.AdminSummary, limits.SummaryChars)
+	out.AuditTail = nil
+	out.LLMPolicies = nil
+	out.Infrastructure.StorageWarnings = compactStringSlice(out.Infrastructure.StorageWarnings, limits.WarningLimit)
+	out.Infrastructure.UniFiWarnings = compactStringSlice(out.Infrastructure.UniFiWarnings, limits.WarningLimit)
+	out.Apps = prioritizedAdminApps(snapshot.Apps, question, limits.AppLimit)
+	for i := range out.Apps {
+		out.Apps[i].ServerSummary = compactText(out.Apps[i].ServerSummary, limits.SummaryChars)
+		out.Apps[i].AdminSummary = compactText(out.Apps[i].AdminSummary, limits.SummaryChars)
+		out.Apps[i].CurrentProbeResult.Message = compactText(out.Apps[i].CurrentProbeResult.Message, limits.SummaryChars)
+		out.Apps[i].RecentLogs = compactLogLines(out.Apps[i].RecentLogs, limits.LogLineLimit, limits.LogLineChars)
+	}
+	out.Incidents = compactIncidents(out.Incidents, limits.IncidentLimit)
+	for i := range out.Incidents {
+		out.Incidents[i].Summary = compactText(out.Incidents[i].Summary, limits.SummaryChars)
+		out.Incidents[i].AdminSummary = compactText(out.Incidents[i].AdminSummary, limits.SummaryChars)
+		out.Incidents[i].AffectedServices = compactStringSlice(out.Incidents[i].AffectedServices, limits.WarningLimit)
+		out.Incidents[i].Evidence = compactStringSlice(out.Incidents[i].Evidence, limits.WarningLimit)
+	}
+	out.Facts = compactFacts(out.Facts, limits.FactLimit)
+	for i := range out.Facts {
+		out.Facts[i].Summary = compactText(out.Facts[i].Summary, limits.SummaryChars)
+		out.Facts[i].Evidence = compactStringSlice(out.Facts[i].Evidence, limits.WarningLimit)
+		out.Facts[i].AffectedServices = compactStringSlice(out.Facts[i].AffectedServices, limits.WarningLimit)
+	}
+	return out
+}
+
+func prioritizedAdminApps(apps []models.AppStatus, question string, limit int) []models.AppStatus {
+	if limit < 0 || len(apps) <= limit {
+		return append([]models.AppStatus(nil), apps...)
+	}
+	if limit == 0 {
+		return nil
+	}
+	type scoredApp struct {
+		app   models.AppStatus
+		score int
+		index int
+	}
+	lowerQuestion := strings.ToLower(question)
+	scored := make([]scoredApp, 0, len(apps))
+	for index, app := range apps {
+		score := 0
+		if app.CurrentStatus != models.StatusOnline {
+			score += 100
+		}
+		if app.Severity != "" && app.Severity != models.SeverityNone {
+			score += 20
+		}
+		for _, name := range []string{app.DisplayName, app.AppID, app.ContainerName} {
+			name = strings.ToLower(strings.TrimSpace(name))
+			if name != "" && strings.Contains(lowerQuestion, name) {
+				score += 200
+			}
+		}
+		scored = append(scored, scoredApp{app: app, score: score, index: index})
+	}
+	sort.SliceStable(scored, func(i, j int) bool {
+		if scored[i].score == scored[j].score {
+			return scored[i].index < scored[j].index
+		}
+		return scored[i].score > scored[j].score
+	})
+	out := make([]models.AppStatus, 0, limit)
+	for i := 0; i < limit && i < len(scored); i++ {
+		out = append(out, scored[i].app)
+	}
+	return out
+}
+
+func compactLogLines(values []models.LogLine, lineLimit, charLimit int) []models.LogLine {
+	if lineLimit < 0 && charLimit <= 0 {
+		return append([]models.LogLine(nil), values...)
+	}
+	if lineLimit == 0 {
+		return nil
+	}
+	if lineLimit > 0 && len(values) > lineLimit {
+		values = values[:lineLimit]
+	}
+	out := append([]models.LogLine(nil), values...)
+	if charLimit > 0 {
+		for i := range out {
+			out[i].Line = compactText(out[i].Line, charLimit)
+		}
+	}
+	return out
 }
 
 type generalUserContextLimits struct {
@@ -593,21 +754,21 @@ func compactStringSlice(values []string, limit int) []string {
 }
 
 func compactIncidents(values []models.Incident, limit int) []models.Incident {
-	if limit <= 0 {
-		return nil
-	}
-	if len(values) <= limit {
+	if limit < 0 || len(values) <= limit {
 		return append([]models.Incident(nil), values...)
+	}
+	if limit == 0 {
+		return nil
 	}
 	return append([]models.Incident(nil), values[:limit]...)
 }
 
 func compactFacts(values []models.IncidentFact, limit int) []models.IncidentFact {
-	if limit <= 0 {
-		return nil
-	}
-	if len(values) <= limit {
+	if limit < 0 || len(values) <= limit {
 		return append([]models.IncidentFact(nil), values...)
+	}
+	if limit == 0 {
+		return nil
 	}
 	return append([]models.IncidentFact(nil), values[:limit]...)
 }

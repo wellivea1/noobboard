@@ -21,11 +21,13 @@ When `NOOBBOARD_LLM_PROVIDER=openai`, either `openai_auth_method=api_key` with `
 
 For OpenAI, the provider remains `openai`; `openai_auth_method` selects API key, ChatGPT browser login, or ChatGPT headless login. Settings reads return only booleans such as `openai_api_key_set` and `chatgpt_connected`; raw API keys, refresh tokens, access tokens, and account ids are never returned.
 
+If OpenAI reports quota, billing, rate-limit, or usage-limit exhaustion, diagnose endpoints return HTTP `429` with `code=openai_usage_limit` and a plain message so the admin or compact chat UI can report the account limit clearly.
+
 The LLM never receives raw credentials, unrestricted logs, arbitrary files, shell access, Docker control, Unraid mutations, UniFi configuration mutation, or repair tools.
 
 ChatGPT connector tokens are credentials. They are admin-only, audited on connect/clear, and must not be displayed, logged, sent to notifications, or included in LLM context.
 
-Every diagnosis request collects a fresh NoobBoard snapshot from the configured collectors before building LLM context. In `live` or `mixed` integration mode, that means the LLM receives current read-only Unraid, UniFi, Docker, and probe status fields that pass role visibility and redaction. The compact/general-user context stays bounded by sending a concise API report with source health and selected visible apps instead of the full raw snapshot; if verbose live status would exceed the policy byte limit, NoobBoard progressively reduces selected app/fact/warning detail while preserving valid JSON and prioritizing apps named in the user's question.
+Every diagnosis request collects a fresh NoobBoard snapshot from the configured collectors before building LLM context. In `live` or `mixed` integration mode, that means the LLM receives current read-only Unraid, UniFi, Docker, and probe status fields that pass role visibility and redaction. Context stays bounded by preserving valid JSON and progressively reducing duplicate or lower-priority detail before failing. Admin context first drops the duplicate raw snapshot, then shrinks selected app/log/fact/warning detail while keeping original app status counts. Compact/general-user context always uses a concise API report with source health and selected visible apps, prioritizing apps named in the user's question.
 
 Admin-requested diagnosis can optionally enable read-only agent tools for live status lookups. The browser/headless ChatGPT connector does not grant those tools by itself; it only supplies credentials. Tool access is controlled by `LLMPolicy.agent_tools_enabled`, `agent_max_tool_calls`, and `agent_tool_rules`, is denied for non-admin recipients, and is limited to these read-only tools:
 

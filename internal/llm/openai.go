@@ -9,11 +9,46 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/wellivea1/noobboard/internal/config"
 	"github.com/wellivea1/noobboard/internal/privacy"
 )
+
+const OpenAIUsageLimitCode = "openai_usage_limit"
+
+type ProviderError struct {
+	Label      string
+	StatusCode int
+	Code       string
+	Message    string
+	Body       string
+}
+
+func (e *ProviderError) Error() string {
+	if e.Message != "" {
+		return fmt.Sprintf("%s returned %d: %s", e.Label, e.StatusCode, e.Message)
+	}
+	return fmt.Sprintf("%s returned %d: %s", e.Label, e.StatusCode, e.Body)
+}
+
+func IsOpenAIUsageLimitError(err error) bool {
+	var providerErr *ProviderError
+	if !errors.As(err, &providerErr) {
+		return false
+	}
+	if providerErr.Code == OpenAIUsageLimitCode {
+		return true
+	}
+	text := strings.ToLower(providerErr.Message + " " + providerErr.Body)
+	return providerErr.StatusCode == http.StatusTooManyRequests &&
+		(strings.Contains(text, "usage limit") ||
+			strings.Contains(text, "rate limit") ||
+			strings.Contains(text, "quota") ||
+			strings.Contains(text, "billing") ||
+			strings.Contains(text, "too many requests"))
+}
 
 type OpenAIClient struct {
 	apiKey  string
@@ -196,9 +231,69 @@ func postOpenAIResponses(ctx context.Context, client *http.Client, endpoint stri
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, fmt.Errorf("%s returned %d: %s", label, resp.StatusCode, string(respData))
+		return nil, openAIProviderError(label, resp.StatusCode, respData)
 	}
 	return respData, nil
+}
+
+func openAIProviderError(label string, statusCode int, respData []byte) error {
+	body := string(respData)
+	code, message := openAIErrorCodeAndMessage(respData)
+	err := &ProviderError{
+		Label:      label,
+		StatusCode: statusCode,
+		Code:       code,
+		Message:    message,
+		Body:       body,
+	}
+	if isOpenAIUsageLimitStatus(statusCode, code, message, body) {
+		err.Code = OpenAIUsageLimitCode
+		if err.Message == "" {
+			err.Message = "OpenAI usage limit reached."
+		}
+	}
+	return err
+}
+
+func openAIErrorCodeAndMessage(respData []byte) (string, string) {
+	var body map[string]interface{}
+	if err := json.Unmarshal(respData, &body); err != nil {
+		return "", ""
+	}
+	code := stringFromMap(body, "code")
+	message := stringFromMap(body, "message")
+	if detail := stringFromMap(body, "detail"); message == "" {
+		message = detail
+	}
+	if nested, ok := body["error"].(map[string]interface{}); ok {
+		if value := stringFromMap(nested, "code"); value != "" {
+			code = value
+		}
+		if value := stringFromMap(nested, "message"); value != "" {
+			message = value
+		}
+	}
+	return code, message
+}
+
+func stringFromMap(values map[string]interface{}, key string) string {
+	value, _ := values[key].(string)
+	return strings.TrimSpace(value)
+}
+
+func isOpenAIUsageLimitStatus(statusCode int, code, message, body string) bool {
+	text := strings.ToLower(code + " " + message + " " + body)
+	if strings.Contains(text, "insufficient_quota") ||
+		strings.Contains(text, "usage limit") ||
+		strings.Contains(text, "billing") ||
+		strings.Contains(text, "quota") {
+		return true
+	}
+	return statusCode == http.StatusTooManyRequests &&
+		(strings.Contains(text, "rate_limit") ||
+			strings.Contains(text, "rate limit") ||
+			strings.Contains(text, "too many requests") ||
+			strings.Contains(text, "limit"))
 }
 
 func diagnosisFromResponsesBody(respData []byte) (Diagnosis, error) {
