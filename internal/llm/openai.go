@@ -22,6 +22,10 @@ type OpenAIClient struct {
 	builder ContextBuilder
 }
 
+type openAIResponsesOptions struct {
+	ReasoningEffort string
+}
+
 func NewOpenAIClient(cfg config.LLMConfig, redactor *privacy.Redactor) OpenAIClient {
 	timeout := cfg.Timeout
 	if timeout == 0 {
@@ -45,14 +49,14 @@ func (c OpenAIClient) Diagnose(ctx context.Context, req Request) (Diagnosis, err
 	}
 	headers := http.Header{}
 	headers.Set("Authorization", "Bearer "+c.apiKey)
-	return runOpenAIResponsesDiagnosis(ctx, c.http, "https://api.openai.com/v1/responses", headers, c.model, contextText, req, c.builder.redactor, "openai responses api")
+	return runOpenAIResponsesDiagnosis(ctx, c.http, "https://api.openai.com/v1/responses", headers, c.model, contextText, req, c.builder.redactor, "openai responses api", openAIResponsesOptions{})
 }
 
 func openAIResponsesBody(model, contextText string) ([]byte, error) {
-	return openAIResponsesBodyWithInput(model, BuildPrompt(contextText), []interface{}{})
+	return openAIResponsesBodyWithInput(model, BuildPrompt(contextText), []interface{}{}, openAIResponsesOptions{})
 }
 
-func openAIResponsesBodyWithInput(model string, input interface{}, tools []interface{}) ([]byte, error) {
+func openAIResponsesBodyWithInput(model string, input interface{}, tools []interface{}, opts openAIResponsesOptions) ([]byte, error) {
 	instructions := Instructions()
 	if len(tools) > 0 {
 		instructions = AgentInstructions()
@@ -71,10 +75,13 @@ func openAIResponsesBodyWithInput(model string, input interface{}, tools []inter
 			},
 		},
 	}
+	if opts.ReasoningEffort != "" {
+		body["reasoning"] = map[string]interface{}{"effort": opts.ReasoningEffort}
+	}
 	return json.Marshal(body)
 }
 
-func runOpenAIResponsesDiagnosis(ctx context.Context, client *http.Client, endpoint string, headers http.Header, model, contextText string, req Request, redactor *privacy.Redactor, label string) (Diagnosis, error) {
+func runOpenAIResponsesDiagnosis(ctx context.Context, client *http.Client, endpoint string, headers http.Header, model, contextText string, req Request, redactor *privacy.Redactor, label string, opts openAIResponsesOptions) (Diagnosis, error) {
 	agentTools := agentToolsForRequest(req, redactor)
 	toolDefinitions := openAIToolDefinitions(agentTools)
 	input := interface{}(BuildPrompt(contextText))
@@ -92,7 +99,7 @@ func runOpenAIResponsesDiagnosis(ctx context.Context, client *http.Client, endpo
 	}
 	toolCallsUsed := 0
 	for {
-		data, err := openAIResponsesBodyWithInput(model, input, toolDefinitions)
+		data, err := openAIResponsesBodyWithInput(model, input, toolDefinitions, opts)
 		if err != nil {
 			return Diagnosis{}, err
 		}

@@ -2711,6 +2711,7 @@ function renderLLMSettings(item, data) {
     node("div", { class: "settings-choice-list" }, authChoices.map((choice) => choice.element)),
     browserMessage,
     headlessMessage,
+    node("p", { class: "muted", text: "API-key mode uses this model directly. ChatGPT login uses Codex-compatible models; unsupported values are sent as gpt-5.5 with high reasoning." }),
     node("div", { class: "settings-field-grid" }, openAIModel.element),
     apiKeyBlock,
     clearChatGPT.element,
