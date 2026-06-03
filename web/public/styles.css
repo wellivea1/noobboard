@@ -4588,7 +4588,7 @@ body.compact-view[data-compact-view="chat"] .user-view-tabs {
 body.compact-view[data-compact-view="chat"] .panel.user-chat {
   display: grid;
   flex: 1 1 auto;
-  grid-template-columns: minmax(0, 1fr) 76px;
+  grid-template-columns: minmax(0, 1fr) 64px;
   grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 0;
   min-height: 0;
@@ -4662,23 +4662,30 @@ body.compact-view[data-compact-view="chat"] .panel.user-chat textarea {
 body.compact-view[data-compact-view="chat"] .panel.user-chat .button-row {
   grid-column: 2;
   grid-row: 3;
-  align-self: stretch;
+  align-self: end;
   margin: 10px 10px 10px 8px;
 }
 
+/* Icon-only send key: a square arrow button aligned to the textarea, no text label. */
 body.compact-view[data-compact-view="chat"] .panel.user-chat .button-row button,
 body.compact-view[data-compact-view="chat"] #user-chat-send {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 100%;
+  min-width: 44px;
   height: 52px;
   min-height: 52px;
-  padding: 0 8px;
+  padding: 0;
   border-radius: 6px;
-  font-size: 0.86rem;
-  font-weight: 760;
+  font-size: 0;
 }
 
 body.compact-view[data-compact-view="chat"] #user-chat-send::before {
-  margin-right: 2px;
+  margin: 0;
+  width: auto;
+  height: auto;
+  font-size: 1.3rem;
 }
 
 body.compact-view[data-compact-view="chat"] .panel.user-chat[data-chat-available="false"] {
@@ -4724,24 +4731,4 @@ body.compact-view[data-compact-view="chat"] .panel.user-chat[data-chat-available
   .topbar-actions {
     justify-content: flex-start;
   }
-}
-
-/* Compact "Ask what's wrong" send button: earlier overlapping rules left it ~58px wide, so
-   the "Ask" label wrapped mid-word to "As / k". Give it a comfortable, fixed tap target that
-   never shrinks or wraps, and let the textarea take the remaining width of the input row. */
-body.compact-view .panel.user-chat .button-row {
-  flex: 0 0 auto;
-  align-items: stretch;
-}
-
-body.compact-view #user-chat-send {
-  width: auto;
-  min-width: 76px;
-  flex: 0 0 auto;
-  padding: 0 14px;
-  white-space: nowrap;
-}
-
-body.compact-view #user-chat-send::before {
-  margin-right: 5px;
 }
