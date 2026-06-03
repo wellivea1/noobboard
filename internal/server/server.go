@@ -844,6 +844,13 @@ func (a *App) diagnose(w http.ResponseWriter, r *http.Request, mode llm.Mode, ro
 	})
 	if err != nil {
 		a.deps.Audit.Record(mustUser(r).ID, "llm.failed", map[string]interface{}{"mode": string(mode), "error": err.Error()})
+		if llm.IsOpenAIUsageLimitError(err) {
+			writeJSON(w, http.StatusTooManyRequests, map[string]string{
+				"error": "OpenAI usage limit reached. Wait for the limit to reset or check the OpenAI plan in LLM settings.",
+				"code":  llm.OpenAIUsageLimitCode,
+			})
+			return
+		}
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}

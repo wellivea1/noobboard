@@ -371,6 +371,126 @@ func TestAdminLLMContextRedactsSecretsInAllowedLogs(t *testing.T) {
 	}
 }
 
+func TestAdminLLMContextCompactsVerboseLiveStatus(t *testing.T) {
+	now := time.Now().UTC()
+	snapshot := models.Snapshot{
+		GeneratedAt:   now,
+		OverallStatus: models.StatusOffline,
+		ServerSummary: strings.Repeat("Several monitored apps are not responding. ", 60),
+		AdminSummary:  strings.Repeat("Admin details include verbose collector observations. ", 60),
+		Infrastructure: models.InfrastructureStatus{
+			InternetReachable:      true,
+			DNSOK:                  true,
+			RouterReachable:        true,
+			NASReachable:           true,
+			UnraidAPIReachable:     true,
+			UnraidArrayState:       "started",
+			UnraidArrayHealthy:     true,
+			DockerServiceAvailable: true,
+			UniFiWANUp:             true,
+			UniFiGatewayReachable:  true,
+			StorageWarnings:        []string{strings.Repeat("Verbose storage warning. ", 90)},
+			UniFiWarnings:          []string{strings.Repeat("Verbose network warning. ", 90)},
+			SourceHealth:           models.SourceHealth{Unraid: "live", Docker: "live", UniFi: "live", Probes: "live"},
+		},
+		Visibility:      models.VisibilitySettings{GeneralUserCanUseLLM: true, ShowNASStatusToUsers: true, ShowWANStatusToUsers: true},
+		IntegrationMode: "live",
+	}
+	for i := 0; i < 100; i++ {
+		status := models.StatusOnline
+		severity := models.SeverityNone
+		if i%6 == 0 {
+			status = models.StatusOffline
+			severity = models.SeverityHigh
+		}
+		snapshot.Apps = append(snapshot.Apps, models.AppStatus{
+			AppID:                 fmt.Sprintf("app-%02d", i),
+			DisplayName:           fmt.Sprintf("Admin App %02d", i),
+			ContainerName:         fmt.Sprintf("container-%02d", i),
+			VisibleToGeneralUsers: true,
+			CurrentStatus:         status,
+			Severity:              severity,
+			DockerState:           models.DockerRunning,
+			EndpointStatus:        models.EndpointOK,
+			ServerSummary:         strings.Repeat(fmt.Sprintf("Verbose server summary for app %02d. ", i), 35),
+			AdminSummary:          strings.Repeat(fmt.Sprintf("Verbose admin summary for app %02d. ", i), 35),
+			RecentLogs: []models.LogLine{
+				{Timestamp: now, Source: "container", Line: strings.Repeat("long safe log line ", 80)},
+				{Timestamp: now, Source: "container", Line: strings.Repeat("another long safe log line ", 80)},
+			},
+			CurrentProbeResult: models.ProbeResult{
+				Type:      models.ProbeHTTP,
+				Target:    fmt.Sprintf("https://example.invalid/admin-app-%02d", i),
+				OK:        status == models.StatusOnline,
+				Message:   strings.Repeat("Verbose probe output. ", 40),
+				LatencyMS: int64(i),
+				CheckedAt: now,
+			},
+		})
+	}
+	for i := 0; i < 30; i++ {
+		snapshot.Incidents = append(snapshot.Incidents, models.Incident{
+			ID:               fmt.Sprintf("incident-%02d", i),
+			Type:             models.IncidentAppDown,
+			Severity:         models.SeverityHigh,
+			Status:           models.StatusOffline,
+			Summary:          strings.Repeat("Verbose incident summary. ", 30),
+			AdminSummary:     strings.Repeat("Verbose admin incident detail. ", 30),
+			AffectedServices: []string{fmt.Sprintf("Admin App %02d", i), "another service"},
+			Evidence:         []string{strings.Repeat("Verbose evidence. ", 30)},
+			StartedAt:        now,
+			UpdatedAt:        now,
+		})
+		snapshot.Facts = append(snapshot.Facts, models.IncidentFact{
+			ID:               fmt.Sprintf("fact-%02d", i),
+			Type:             models.IncidentAppDown,
+			Severity:         models.SeverityHigh,
+			Summary:          strings.Repeat("Verbose diagnostic fact. ", 30),
+			Evidence:         []string{strings.Repeat("Verbose fact evidence. ", 30)},
+			AffectedServices: []string{fmt.Sprintf("Admin App %02d", i)},
+			CreatedAt:        now,
+			VisibleToUsers:   true,
+		})
+	}
+
+	builder := NewContextBuilder(privacy.NewRedactor(config.PrivacyConfig{}))
+	contextText, err := builder.Build(Request{
+		Mode: ModeAdminRequested,
+		Policy: models.LLMPolicy{
+			Name:                  "admin_requested",
+			Enabled:               true,
+			IncludeLogs:           true,
+			PreferIncidentFacts:   true,
+			AllowHiddenAppNames:   true,
+			AllowBlacklistedNames: false,
+			MaxContextBytes:       32000,
+			MaxLogLines:           20,
+			FailClosedOnRedaction: true,
+			RecipientRole:         models.RoleAdmin,
+		},
+		Snapshot: snapshot,
+		Question: "What is wrong with container-57?",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(contextText) > 32000 {
+		t.Fatalf("admin context length = %d, want <= 32000", len(contextText))
+	}
+	if !json.Valid([]byte(contextText)) {
+		t.Fatalf("context should stay valid JSON: %s", contextText)
+	}
+	if !strings.Contains(contextText, "container-57") {
+		t.Fatalf("compacted admin context omitted app mentioned in question: %s", contextText)
+	}
+	payload := decodeContextPayload(t, contextText)
+	apiReport := requireObject(t, payload, "api_report")
+	docker := requireObject(t, apiReport, "docker")
+	if got, ok := docker["app_count"].(float64); !ok || got != 100 {
+		t.Fatalf("compacted admin context did not preserve app count: %#v", docker["app_count"])
+	}
+}
+
 func TestContextBuilderFailsClosedInsteadOfReturningTruncatedJSON(t *testing.T) {
 	snapshot, err := fixture.LoadSnapshot("../../fixtures", "all_systems_online")
 	if err != nil {
