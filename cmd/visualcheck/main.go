@@ -56,6 +56,8 @@ type screenshots struct {
 	MobileAdmin        string `json:"mobileAdmin"`
 	MobileSettings     string `json:"mobileSettings"`
 	MobileUserHome     string `json:"mobileUserHome"`
+	MobileUserDrawer   string `json:"mobileUserDrawer"`
+	MobileUserSettings string `json:"mobileUserSettings"`
 }
 
 type flags struct {
@@ -86,6 +88,17 @@ type flags struct {
 	UserAppCardCount        int      `json:"userAppCardCount,omitempty"`
 	UserAppLogoCount        int      `json:"userAppLogoCount,omitempty"`
 	UserChatVisible         bool     `json:"userChatVisible,omitempty"`
+	UserMenuToggleVisible   bool     `json:"userMenuToggleVisible,omitempty"`
+	UserDrawerOpen          bool     `json:"userDrawerOpen,omitempty"`
+	UserDrawerHidden        bool     `json:"userDrawerHidden,omitempty"`
+	UserDrawerFocusReturned bool     `json:"userDrawerFocusReturned,omitempty"`
+	UserDrawerBodyUnlocked  bool     `json:"userDrawerBodyUnlocked,omitempty"`
+	DrawerBannedTermCount   int      `json:"drawerBannedTermCount,omitempty"`
+	DrawerSmallTargetCount  int      `json:"drawerSmallTouchTargetCount,omitempty"`
+	DrawerAdminControlCount int      `json:"drawerAdminControlCount,omitempty"`
+	DrawerNotificationRows  int      `json:"drawerNotificationRows,omitempty"`
+	DrawerEmptyStateVisible bool     `json:"drawerEmptyStateVisible,omitempty"`
+	DrawerSignOutVisible    bool     `json:"drawerSignOutVisible,omitempty"`
 	BannedTermCount         int      `json:"bannedTermCount,omitempty"`
 	IconOnlyPrimaryActions  int      `json:"iconOnlyPrimaryActionCount,omitempty"`
 	AdminTabsVisible        bool     `json:"adminTabsVisible,omitempty"`
@@ -449,6 +462,22 @@ func run(opts options) (visualResult, error) {
 	if err := captureScreenshot(cdp, result.Screenshots.MobileUserHome); err != nil {
 		return result, err
 	}
+	mobileUserDrawer, err := evalFlags(cdp, userDrawerOpenExpression)
+	if err != nil {
+		return result, err
+	}
+	result.Screenshots.MobileUserDrawer = filepath.Join(cache, "visual-mobile-user-drawer-"+runID+".png")
+	if err := captureScreenshot(cdp, result.Screenshots.MobileUserDrawer); err != nil {
+		return result, err
+	}
+	result.Screenshots.MobileUserSettings = filepath.Join(cache, "visual-mobile-user-settings-"+runID+".png")
+	if err := captureScreenshot(cdp, result.Screenshots.MobileUserSettings); err != nil {
+		return result, err
+	}
+	mobileUserDrawerClose, err := evalFlags(cdp, userDrawerCloseExpression)
+	if err != nil {
+		return result, err
+	}
 
 	result.Flags = map[string]flags{
 		"overview":          overview,
@@ -468,8 +497,10 @@ func run(opts options) (visualResult, error) {
 		"mobileAdmin":       mobileAdmin,
 		"mobileSettings":    mobileSettings,
 		"mobileUserHome":    mobileUserHome,
+		"mobileUserDrawer":  mobileUserDrawer,
+		"mobileDrawerClose": mobileUserDrawerClose,
 	}
-	if err := assertVisualFlags(overview, serverFlags, router, apps, incidents, diagnostics, admin, settings, monitorCustomization, mobileOverview, mobileRouter, mobileApps, mobileIncidents, mobileDiagnostics, mobileAdmin, mobileSettings, mobileUserHome); err != nil {
+	if err := assertVisualFlags(overview, serverFlags, router, apps, incidents, diagnostics, admin, settings, monitorCustomization, mobileOverview, mobileRouter, mobileApps, mobileIncidents, mobileDiagnostics, mobileAdmin, mobileSettings, mobileUserHome, mobileUserDrawer, mobileUserDrawerClose); err != nil {
 		return result, err
 	}
 
@@ -600,7 +631,7 @@ func captureScreenshot(cdp *cdpClient, path string) error {
 	return os.WriteFile(path, data, 0o644)
 }
 
-func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, admin, settings, customization, mobileOverview, mobileRouter, mobileApps, mobileIncidents, mobileDiagnostics, mobileAdmin, mobileSettings, mobileUserHome flags) error {
+func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, admin, settings, customization, mobileOverview, mobileRouter, mobileApps, mobileIncidents, mobileDiagnostics, mobileAdmin, mobileSettings, mobileUserHome, mobileUserDrawer, mobileUserDrawerClose flags) error {
 	var failures []string
 	if !overview.DashboardVisible {
 		failures = append(failures, "dashboard was not visible after login")
@@ -671,6 +702,9 @@ func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, a
 	if mobileSettings.SettingsMenuButtonCount < 6 || mobileSettings.VisibleSettingsSections != 1 {
 		failures = append(failures, "mobile settings submenu did not render correctly")
 	}
+	if mobileOverview.UserMenuToggleVisible || mobileAdmin.UserMenuToggleVisible || mobileSettings.UserMenuToggleVisible {
+		failures = append(failures, "compact user menu was visible on admin mobile screens")
+	}
 	if mobileSettings.BodyHorizontalOverflow || mobileSettings.ButtonTextOverflow {
 		failures = append(failures, "mobile settings layout overflow detected")
 	}
@@ -737,6 +771,9 @@ func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, a
 	if !mobileUserHome.UserHomeVisible {
 		failures = append(failures, "general user simplified home was not visible")
 	}
+	if !mobileUserHome.UserMenuToggleVisible {
+		failures = append(failures, "general user menu trigger was not visible")
+	}
 	if mobileUserHome.AdminTabsVisible {
 		failures = append(failures, "general user can see detailed admin tabs")
 	}
@@ -766,6 +803,27 @@ func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, a
 	}
 	if mobileUserHome.ElementBoundsOverflow {
 		failures = append(failures, "general user mobile component bounds overflow detected: "+mobileUserHome.ElementBoundsOffender)
+	}
+	if !mobileUserDrawer.UserDrawerOpen {
+		failures = append(failures, "general user settings drawer did not open")
+	}
+	if mobileUserDrawer.DrawerBannedTermCount != 0 {
+		failures = append(failures, "general user settings drawer leaked technical terms")
+	}
+	if mobileUserDrawer.DrawerSmallTargetCount != 0 {
+		failures = append(failures, "general user settings drawer has touch targets below 44px")
+	}
+	if mobileUserDrawer.DrawerAdminControlCount != 0 {
+		failures = append(failures, "general user settings drawer exposed admin controls")
+	}
+	if mobileUserDrawer.DrawerNotificationRows < 1 && !mobileUserDrawer.DrawerEmptyStateVisible {
+		failures = append(failures, "general user settings drawer did not render notification rows or empty state")
+	}
+	if !mobileUserDrawer.DrawerSignOutVisible {
+		failures = append(failures, "general user settings drawer did not render sign out")
+	}
+	if !mobileUserDrawerClose.UserDrawerHidden || !mobileUserDrawerClose.UserDrawerFocusReturned || !mobileUserDrawerClose.UserDrawerBodyUnlocked {
+		failures = append(failures, "general user settings drawer did not close cleanly with focus/body restored")
 	}
 	if len(failures) > 0 {
 		return errors.New(strings.Join(failures, "; "))
@@ -1173,6 +1231,86 @@ const generalUserExpression = `(async () => {
   };
 })()`
 
+const userDrawerOpenExpression = `(async () => {
+  const toggle = document.querySelector('#user-menu-toggle');
+  if (toggle && !visibleElement(toggle)) {
+    return {
+      userMenuToggleVisible: false,
+      userDrawerOpen: false,
+      bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
+      buttonTextOverflow: hasButtonTextOverflow(),
+      elementBoundsOverflow: componentBoundsOverflow(),
+      elementBoundsOffender: componentBoundsOffender()
+    };
+  }
+  toggle?.click();
+  const started = Date.now();
+  while ((!document.body.classList.contains('user-menu-open') || document.querySelector('#user-drawer')?.hidden) && Date.now() - started < 5000) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  const listStarted = Date.now();
+  while (document.querySelector('#user-drawer .user-settings-loading') && Date.now() - listStarted < 5000) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  const drawer = document.querySelector('#user-drawer');
+  if (!drawer) {
+    return {
+      userMenuToggleVisible: !!toggle && visibleElement(toggle),
+      userDrawerOpen: false,
+      bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
+      buttonTextOverflow: hasButtonTextOverflow(),
+      elementBoundsOverflow: componentBoundsOverflow(),
+      elementBoundsOffender: componentBoundsOffender()
+    };
+  }
+  const drawerText = visibleCompactText(drawer);
+  const bannedMatches = drawerText.match(/\b(container|docker|unraid|array|parity|endpoint|graphql|probe|wan|lan|api|ssh|telemetry|smart|syslog|filesystem|cache pool|gateway|https|dns|unifi)\b/gi) || [];
+  const visibleControls = [...drawer.querySelectorAll('button,input,textarea,select')]
+    .filter((element) => visibleElement(element));
+  const smallDrawerTargets = visibleControls.filter((element) => {
+    const rect = element.getBoundingClientRect();
+    return Math.round(rect.width) < 44 || Math.round(rect.height) < 44;
+  });
+  return {
+    userMenuToggleVisible: !!toggle && visibleElement(toggle),
+    userDrawerOpen: !!(drawer && !drawer.hidden && visibleElement(drawer) && toggle?.getAttribute('aria-expanded') === 'true'),
+    drawerBannedTermCount: bannedMatches.length,
+    drawerSmallTouchTargetCount: smallDrawerTargets.length,
+    drawerAdminControlCount: drawer.querySelectorAll('[data-admin-only], [data-admin-detail]').length,
+    drawerNotificationRows: drawer.querySelectorAll('.user-notification-row').length,
+    drawerEmptyStateVisible: !!drawer.querySelector('.user-settings-empty') && visibleElement(drawer.querySelector('.user-settings-empty')),
+    drawerSignOutVisible: !!drawer.querySelector('#user-drawer-logout') && visibleElement(drawer.querySelector('#user-drawer-logout')),
+    bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
+    buttonTextOverflow: hasButtonTextOverflow(),
+    elementBoundsOverflow: componentBoundsOverflow(),
+    elementBoundsOffender: componentBoundsOffender()
+  };
+})()`
+
+const userDrawerCloseExpression = `(async () => {
+  const toggle = document.querySelector('#user-menu-toggle');
+  const drawer = document.querySelector('#user-drawer');
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  const started = Date.now();
+  while (document.body.classList.contains('user-menu-open') && Date.now() - started < 5000) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  const hiddenStarted = Date.now();
+  while (drawer && !drawer.hidden && Date.now() - hiddenStarted < 5000) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  const shell = document.querySelector('.shell');
+  return {
+    userDrawerHidden: !!(drawer && drawer.hidden && toggle?.getAttribute('aria-expanded') === 'false'),
+    userDrawerFocusReturned: document.activeElement === toggle,
+    userDrawerBodyUnlocked: !document.body.classList.contains('user-menu-open') && !(shell && shell.inert) && (!shell || shell.getAttribute('aria-hidden') !== 'true'),
+    bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
+    buttonTextOverflow: hasButtonTextOverflow(),
+    elementBoundsOverflow: componentBoundsOverflow(),
+    elementBoundsOffender: componentBoundsOffender()
+  };
+})()`
+
 const auditMobileShellExpression = `async function auditMobileShell() {
   const visibleControls = [...document.querySelectorAll('button,input,textarea,select')]
     .filter((element) => element.getClientRects().length && getComputedStyle(element).visibility !== 'hidden' && getComputedStyle(element).display !== 'none');
@@ -1196,6 +1334,7 @@ const auditMobileShellExpression = `async function auditMobileShell() {
     manifestIconCount: Array.isArray(manifest.icons) ? manifest.icons.length : 0,
     smallTouchTargetCount: smallTouchTargets.length,
     smallTouchTargets,
+    userMenuToggleVisible: !!document.querySelector('#user-menu-toggle') && visibleElement(document.querySelector('#user-menu-toggle')),
     sourcePillText: document.querySelector('#source-pill')?.textContent || '',
     detailSectionCount: document.querySelectorAll('.detail-section').length,
     assistantOverlapCount: assistantControlOverlapCount(),

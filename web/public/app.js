@@ -16,6 +16,11 @@ const state = {
   roleUsersOriginal: [],
   selectedRole: "",
   auditEntries: [],
+  notificationPreferences: new Map(),
+  notificationPreferencesLoaded: false,
+  notificationPreferencesLoading: false,
+  userDrawerActiveSection: "settings",
+  userDrawerLastFocus: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -30,6 +35,9 @@ const SETTINGS_ENDPOINTS = [
   { title: "LLM", section: "llm", path: "/api/admin/settings/llm" },
   { title: "Integrations", section: "integrations", path: "/api/admin/settings/integrations" },
   { title: "Notifications", section: "notifications", path: "/api/admin/settings/notifications" },
+];
+const compactDrawerSections = [
+  { id: "settings", label: "Settings", glyph: "\u2699", render: renderCompactSettings },
 ];
 const BUILTIN_APP_ICON_RULES = [
   { icon: "media-server", label: "media server", patterns: ["emby", "jellyfin", "plex"] },
@@ -181,6 +189,103 @@ function closeNav() {
   $("nav-backdrop").hidden = true;
 }
 
+function openUserMenu() {
+  if (!document.body.classList.contains("compact-view")) return;
+  clearTimeout(closeUserMenu.hideTimer);
+  const drawer = $("user-drawer");
+  const backdrop = $("user-drawer-backdrop");
+  const trigger = $("user-menu-toggle");
+  if (!drawer || !backdrop || !trigger) return;
+  state.userDrawerLastFocus = document.activeElement instanceof HTMLElement ? document.activeElement : trigger;
+  renderUserDrawer();
+  drawer.hidden = false;
+  backdrop.hidden = false;
+  trigger.setAttribute("aria-expanded", "true");
+  document.body.classList.add("user-menu-open");
+  const closeButton = $("user-drawer-close");
+  closeButton?.focus({ preventScroll: true });
+  lockUserMenuBackground(true);
+  if (!state.notificationPreferencesLoaded && !state.notificationPreferencesLoading) {
+    loadCompactNotificationPreferences();
+  }
+}
+
+function closeUserMenu(options = {}) {
+  const { returnFocus = true } = options;
+  const drawer = $("user-drawer");
+  const backdrop = $("user-drawer-backdrop");
+  const trigger = $("user-menu-toggle");
+  if (!drawer || !backdrop || !trigger) return;
+  document.body.classList.remove("user-menu-open");
+  trigger.setAttribute("aria-expanded", "false");
+  lockUserMenuBackground(false);
+  const finish = () => {
+    if (!document.body.classList.contains("user-menu-open")) {
+      drawer.hidden = true;
+      backdrop.hidden = true;
+    }
+  };
+  clearTimeout(closeUserMenu.hideTimer);
+  closeUserMenu.hideTimer = setTimeout(finish, prefersReducedMotion() ? 0 : 210);
+  if (returnFocus) {
+    // Return focus to the control that opened the drawer (the hamburger). A tap/programmatic
+    // open can leave document.activeElement on <body>, so prefer the trigger explicitly.
+    const target = trigger?.isConnected ? trigger : (state.userDrawerLastFocus?.isConnected ? state.userDrawerLastFocus : null);
+    target?.focus?.({ preventScroll: true });
+  }
+}
+
+function lockUserMenuBackground(locked) {
+  const shell = document.querySelector(".shell");
+  if (!shell) return;
+  if (locked) {
+    shell.inert = true;
+    shell.setAttribute("aria-hidden", "true");
+    return;
+  }
+  shell.inert = false;
+  shell.removeAttribute("aria-hidden");
+}
+
+function prefersReducedMotion() {
+  return window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
+}
+
+function isUserMenuOpen() {
+  const drawer = $("user-drawer");
+  return !!(drawer && document.body.classList.contains("user-menu-open") && !drawer.hidden);
+}
+
+function drawerFocusableElements() {
+  const drawer = $("user-drawer");
+  if (!drawer || drawer.hidden) return [];
+  return [...drawer.querySelectorAll("a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),summary,[tabindex]:not([tabindex='-1'])")]
+    .filter((element) => element.getClientRects().length && getComputedStyle(element).visibility !== "hidden");
+}
+
+function handleUserDrawerKeydown(event) {
+  if (!isUserMenuOpen()) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeUserMenu();
+    return;
+  }
+  if (event.key !== "Tab") return;
+  const focusable = drawerFocusableElements();
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+    return;
+  }
+  if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
 function visibleMonitor(id, element) {
   if (!element || state.hiddenMonitors.has(id)) return null;
   element.dataset.monitorId = id;
@@ -323,6 +428,7 @@ function showDashboard() {
   document.body.classList.toggle("compact-site", isCompactSite());
   document.body.classList.toggle("admin-view", admin);
   document.body.classList.toggle("compact-view", !admin);
+  if (admin) closeUserMenu({ returnFocus: false });
   $("login").hidden = true;
   $("dashboard").hidden = false;
   $("role-pill").textContent = state.user.role.replace("_", " ");
@@ -336,6 +442,7 @@ function showDashboard() {
   $("refresh").textContent = admin ? "Refresh" : "Check again";
   $("refresh").setAttribute("aria-label", admin ? "Refresh status" : "Check again");
   $("logout").setAttribute("aria-label", "Sign out");
+  $("user-menu-toggle").setAttribute("aria-expanded", "false");
   if (admin) {
     setActiveTab(state.activeTab);
   } else {
@@ -376,6 +483,14 @@ function setActiveTab(tabName) {
 }
 
 async function refresh() {
+  if (refresh.inFlight) return;
+  refresh.inFlight = true;
+  const button = $("refresh");
+  const startedAt = Date.now();
+  if (button) {
+    button.classList.add("is-refreshing");
+    button.setAttribute("aria-busy", "true");
+  }
   try {
     const snapshot = await api("/api/status/summary");
     state.snapshot = snapshot;
@@ -385,6 +500,19 @@ async function refresh() {
     renderMonitorRestore();
   } catch (error) {
     showNotice(error.message, "error");
+  } finally {
+    // Keep the spinner visible long enough to read, even on a fast LAN.
+    const minSpinMs = 500;
+    const remaining = minSpinMs - (Date.now() - startedAt);
+    const stop = () => {
+      refresh.inFlight = false;
+      if (button) {
+        button.classList.remove("is-refreshing");
+        button.removeAttribute("aria-busy");
+      }
+    };
+    if (remaining > 0) setTimeout(stop, remaining);
+    else stop();
   }
 }
 
@@ -493,9 +621,172 @@ function renderUserHome(snapshot) {
   $("user-app-count").textContent = `${apps.length} app${apps.length === 1 ? "" : "s"}`;
   if (!apps.length) {
     $("user-apps").replaceChildren(node("div", { class: "empty", text: "No selected apps are visible right now." }));
+    if (isUserMenuOpen()) renderUserDrawer();
     return;
   }
   $("user-apps").replaceChildren(...apps.map(renderUserAppCard));
+  if (isUserMenuOpen()) renderUserDrawer();
+}
+
+function renderUserDrawer() {
+  const drawer = $("user-drawer");
+  const body = $("user-drawer-body");
+  const title = $("user-drawer-title");
+  if (!drawer || !body || !title) return;
+  const active = compactDrawerSections.find((section) => section.id === state.userDrawerActiveSection) || compactDrawerSections[0];
+  state.userDrawerActiveSection = active?.id || "";
+  title.textContent = compactDrawerSections.length === 1 ? (active?.label || "Settings") : "Menu";
+  if (!active) {
+    body.replaceChildren();
+    return;
+  }
+  if (compactDrawerSections.length === 1) {
+    const content = node("div", { class: "user-drawer-content", "data-drawer-section": active.id });
+    active.render(content);
+    body.replaceChildren(content);
+    return;
+  }
+  const nav = node("nav", { class: "user-drawer-nav", "aria-label": "Menu" },
+    compactDrawerSections.map((section) => node("button", {
+      type: "button",
+      class: section.id === active.id ? "active" : "",
+      "aria-current": section.id === active.id ? "page" : null,
+      onclick: () => {
+        state.userDrawerActiveSection = section.id;
+        renderUserDrawer();
+      },
+    },
+      node("span", { "aria-hidden": "true", text: section.glyph }),
+      node("span", { text: section.label }),
+    )),
+  );
+  const content = node("div", { class: "user-drawer-content", "data-drawer-section": active.id });
+  active.render(content);
+  body.replaceChildren(nav, content);
+}
+
+function renderCompactSettings(container) {
+  const apps = state.snapshot?.apps || [];
+  const notificationSection = node("section", { class: "user-settings-section" },
+    node("h3", { text: "Notifications" }),
+    node("p", { class: "user-settings-intro", text: "Get a heads-up when something stops working." }),
+    renderCompactNotificationList(apps),
+  );
+  const displayName = state.user?.display_name || state.user?.username || "this account";
+  const accountSection = node("section", { class: "user-settings-section" },
+    node("h3", { text: "Account" }),
+    node("p", { class: "user-account-line" },
+      document.createTextNode("Signed in as "),
+      node("strong", { text: displayName }),
+    ),
+    node("button", {
+      id: "user-drawer-logout",
+      type: "button",
+      class: "command user-signout",
+      "data-glyph": "x",
+      onclick: () => {
+        closeUserMenu({ returnFocus: false });
+        logout();
+      },
+      text: "Sign out",
+    }),
+  );
+  container.replaceChildren(notificationSection, accountSection);
+}
+
+function renderCompactNotificationList(apps) {
+  if (!apps.length) {
+    return node("div", { class: "user-notification-list" },
+      node("p", { class: "empty user-settings-empty", text: "No apps to notify about yet." }),
+    );
+  }
+  const rows = apps.map((app, index) => renderCompactNotificationRow(app, index));
+  return node("div", { class: "user-notification-list" },
+    state.notificationPreferencesLoading ? node("p", { class: "user-settings-loading", text: "Loading settings..." }) : null,
+    ...rows,
+  );
+}
+
+function renderCompactNotificationRow(app, index) {
+  const appID = String(app.app_id || "").trim();
+  const appName = appDisplayName(app);
+  const pref = state.notificationPreferences.get(appID);
+  const enabled = !!(pref?.notify_on_down || pref?.notify_on_recovery);
+  const inputID = `user-notify-${index}`;
+  const input = node("input", {
+    id: inputID,
+    type: "checkbox",
+    "aria-label": `Tell me if ${appName} has a problem`,
+  });
+  input.checked = enabled;
+  input.disabled = !appID || state.notificationPreferencesLoading;
+  const stateText = node("span", { class: "user-switch-state", text: enabled ? "On" : "Off" });
+  const row = node("div", { class: "user-notification-row" },
+    node("label", { class: "user-notification-label", for: inputID },
+      renderAppLogo(app),
+      node("span", { class: "user-notification-copy" },
+        document.createTextNode("Tell me if "),
+        node("span", { "data-app-name": "", text: appName }),
+        document.createTextNode(" has a problem"),
+      ),
+      node("span", { class: "user-switch" },
+        input,
+        node("span", { class: "user-switch-track", "aria-hidden": "true" },
+          node("span", { class: "user-switch-knob" }),
+          stateText,
+        ),
+      ),
+    ),
+    node("p", { class: "user-settings-error", role: "alert" }),
+  );
+  input.addEventListener("change", () => updateCompactNotificationPreference(app, input, row, stateText));
+  return row;
+}
+
+async function loadCompactNotificationPreferences() {
+  state.notificationPreferencesLoading = true;
+  if (isUserMenuOpen()) renderUserDrawer();
+  try {
+    const prefs = await api("/api/user/notification-preferences");
+    state.notificationPreferences = new Map((Array.isArray(prefs) ? prefs : []).map((pref) => [String(pref.app_id || ""), pref]));
+    state.notificationPreferencesLoaded = true;
+  } catch (error) {
+    showNotice(error.message, "error");
+  } finally {
+    state.notificationPreferencesLoading = false;
+    if (isUserMenuOpen()) renderUserDrawer();
+  }
+}
+
+async function updateCompactNotificationPreference(app, input, row, stateText) {
+  const appID = String(app.app_id || "").trim();
+  if (!appID) return;
+  const enabled = input.checked;
+  const previous = !enabled;
+  const error = row.querySelector(".user-settings-error");
+  input.disabled = true;
+  row.dataset.saving = "true";
+  if (error) error.textContent = "";
+  setCompactSwitchState(input, stateText, enabled);
+  try {
+    const saved = await api("/api/user/notification-preferences", {
+      method: "POST",
+      body: JSON.stringify({ app_id: appID, notify_on_down: enabled, notify_on_recovery: enabled }),
+    });
+    state.notificationPreferences.set(appID, saved);
+  } catch {
+    input.checked = previous;
+    setCompactSwitchState(input, stateText, previous);
+    if (error) error.textContent = "Couldn't save that \u2014 try again.";
+  } finally {
+    input.disabled = false;
+    delete row.dataset.saving;
+  }
+}
+
+function setCompactSwitchState(input, stateText, enabled) {
+  input.checked = enabled;
+  if (stateText) stateText.textContent = enabled ? "On" : "Off";
 }
 
 function renderUserHero(hero) {
@@ -1301,10 +1592,12 @@ async function setAppIcon(app) {
 
 async function savePreference(appID) {
   try {
-    await api("/api/user/notification-preferences", {
+    const saved = await api("/api/user/notification-preferences", {
       method: "POST",
       body: JSON.stringify({ app_id: appID, notify_on_down: true, notify_on_recovery: true }),
     });
+    state.notificationPreferences.set(String(appID || ""), saved);
+    state.notificationPreferencesLoaded = true;
     showNotice("Notification preference saved.");
     await refresh();
   } catch (error) {
@@ -2641,6 +2934,9 @@ $("restore-monitors").addEventListener("click", restoreMonitors);
 $("nav-toggle").addEventListener("click", openNav);
 $("nav-close").addEventListener("click", closeNav);
 $("nav-backdrop").addEventListener("click", closeNav);
+$("user-menu-toggle").addEventListener("click", openUserMenu);
+$("user-drawer-close").addEventListener("click", () => closeUserMenu());
+$("user-drawer-backdrop").addEventListener("click", () => closeUserMenu());
 $("assistant-toggle").addEventListener("click", () => {
   $("assistant-panel").hidden = !$("assistant-panel").hidden;
 });
@@ -2665,6 +2961,7 @@ document.addEventListener("keydown", (event) => {
   event.preventDefault();
   setActiveTab(jump.dataset.tabJump);
 });
+document.addEventListener("keydown", handleUserDrawerKeydown);
 $("app-search").addEventListener("input", (event) => {
   state.appSearch = event.target.value;
   renderApps(state.snapshot?.apps || []);
