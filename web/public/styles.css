@@ -2210,14 +2210,21 @@ button.command.app-control:focus-visible {
 .role-editor,
 .user-editor,
 .role-editor-head,
+.management-sidebar,
+.management-sidebar-head,
+.management-list,
 .role-stat-strip,
 .role-member-list,
 .role-app-list,
 .user-list,
 .user-management-grid,
+.user-detail,
+.user-detail-head,
 .user-form-head,
 .user-form,
 .user-form-panel,
+.user-form-actions,
+.role-detail-actions,
 .role-options,
 .role-permission-section,
 .role-member-section,
@@ -2257,12 +2264,50 @@ button.command.app-control:focus-visible {
   min-width: 0;
 }
 
-.role-sidebar {
+.user-management-grid {
   display: grid;
-  align-content: start;
+  grid-template-columns: minmax(230px, 280px) minmax(0, 1fr);
   min-width: 0;
+}
+
+.role-sidebar {
+  min-width: 0;
+}
+
+.role-sidebar,
+.user-list {
   border-right: 1px solid var(--border-soft);
+}
+
+.management-sidebar {
+  align-content: start;
+  gap: 0;
+  min-width: 0;
   background: transparent;
+}
+
+.management-sidebar-head {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  padding: 12px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.management-sidebar-head h3,
+.user-detail-head h3 {
+  margin: 0;
+}
+
+.management-sidebar-head p,
+.user-detail-head p {
+  margin: 2px 0 0;
+}
+
+.management-list {
+  align-content: start;
+  gap: 0;
+  min-width: 0;
 }
 
 .role-nav-item {
@@ -2282,6 +2327,12 @@ button.command.app-control:focus-visible {
 
 .role-nav-item.active,
 .role-nav-item[aria-pressed="true"] {
+  border-left-color: var(--accent-strong);
+  background: rgba(199, 215, 230, 0.08);
+}
+
+.user-row.active,
+.user-row[aria-pressed="true"] {
   border-left-color: var(--accent-strong);
   background: rgba(199, 215, 230, 0.08);
 }
@@ -2324,6 +2375,7 @@ button.command.app-control:focus-visible {
 }
 
 .role-detail-head,
+.user-detail-head,
 .role-options,
 .role-app-toggle,
 .user-row {
@@ -2335,6 +2387,27 @@ button.command.app-control:focus-visible {
 .role-detail-head {
   justify-content: space-between;
   align-items: flex-start;
+}
+
+.role-detail-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.role-default-field {
+  display: grid;
+  gap: 4px;
+  min-width: 150px;
+}
+
+.role-default-field span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-transform: uppercase;
 }
 
 .role-name-field {
@@ -2611,30 +2684,31 @@ button.command.app-control:focus-visible {
   padding: 9px;
 }
 
-.user-management-grid {
-  grid-template-columns: minmax(260px, 0.82fr) minmax(0, 1.18fr);
-  gap: 0;
-  align-items: start;
-}
-
 .user-list {
   gap: 0;
-  padding: 10px;
-  border-right: 1px solid var(--border-soft);
 }
 
+.user-detail,
 .user-form-panel {
   gap: 10px;
   padding: 14px 16px 16px;
 }
 
+.user-detail-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+
 .user-row {
   justify-content: space-between;
   width: 100%;
-  border: 0;
-  border-bottom: 1px solid var(--border-soft);
+  min-height: 56px;
+  border-width: 0 0 1px 4px;
+  border-color: transparent transparent var(--border-soft) transparent;
   border-radius: 0;
-  padding: 9px 2px;
+  padding: 8px 12px 8px 8px;
   text-align: left;
   background: transparent;
   box-shadow: none;
@@ -2647,6 +2721,10 @@ button.command.app-control:focus-visible {
 .user-row:hover,
 .user-row:focus-visible {
   background: rgba(255, 255, 255, 0.03);
+}
+
+.user-row.disabled {
+  opacity: 0.74;
 }
 
 .user-row-main {
@@ -2696,8 +2774,13 @@ button.command.app-control:focus-visible {
 }
 
 .user-form .toggle-line,
-.user-form button {
+.user-form-actions {
   grid-column: 1 / -1;
+}
+
+.user-form-actions {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .diagnostic-output {
@@ -3128,19 +3211,22 @@ body.compact-view .assistant-toggle {
     grid-template-columns: 1fr;
   }
 
+  .role-sidebar,
   .user-list {
     border-right: 0;
     border-bottom: 1px solid var(--border-soft);
   }
 
-  .role-sidebar {
+  .management-list {
     grid-auto-flow: column;
     grid-auto-columns: minmax(180px, 1fr);
     overflow-x: auto;
-    border-right: 0;
-    border-bottom: 1px solid var(--border-soft);
     scrollbar-width: thin;
     -webkit-overflow-scrolling: touch;
+  }
+
+  .user-list .management-list {
+    grid-auto-columns: minmax(210px, 1fr);
   }
 
   .role-nav-item {
@@ -3148,8 +3234,19 @@ body.compact-view .assistant-toggle {
     border-bottom-color: transparent;
   }
 
+  .user-row {
+    border-width: 0 0 4px 0;
+    border-bottom-color: transparent;
+  }
+
   .role-nav-item.active,
   .role-nav-item[aria-pressed="true"] {
+    border-left-color: transparent;
+    border-bottom-color: var(--accent-strong);
+  }
+
+  .user-row.active,
+  .user-row[aria-pressed="true"] {
     border-left-color: transparent;
     border-bottom-color: var(--accent-strong);
   }
@@ -3636,6 +3733,21 @@ body.compact-view .assistant-toggle {
     align-items: flex-start;
   }
 
+  .role-detail-actions,
+  .user-detail-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .role-detail-actions {
+    justify-content: flex-start;
+    width: 100%;
+  }
+
+  .role-default-field {
+    min-width: 0;
+  }
+
   .role-editor-head,
   .role-stat-strip {
     grid-template-columns: 1fr;
@@ -3688,6 +3800,10 @@ body.compact-view .assistant-toggle {
 
   .user-form {
     grid-template-columns: 1fr;
+  }
+
+  .user-form-actions {
+    justify-content: flex-start;
   }
 
   .assistant-dock {

@@ -15,6 +15,7 @@ const state = {
   roleUsers: [],
   roleUsersOriginal: [],
   selectedRole: "",
+  selectedUser: "",
   auditEntries: [],
   notificationPreferences: new Map(),
   notificationPreferencesLoaded: false,
@@ -29,6 +30,7 @@ const MONITOR_STORAGE_KEY = "noobboard.hiddenMonitors.v1";
 const OVERVIEW_ORDER_STORAGE_KEY = "noobboard.overviewOrder.v1";
 const OVERVIEW_MONITOR_IDS = ["overview.overall", "overview.server", "overview.router", "overview.apps"];
 const SITE_MODE = String(window.__NOOBBOARD_SITE_MODE__ || window.__HSD_SITE_MODE__ || "admin").toLowerCase() === "compact" ? "compact" : "admin";
+const NEW_USER_KEY = "__new_user__";
 const SETTINGS_ENDPOINTS = [
   { title: "Visibility", section: "visibility", path: "/api/admin/settings/visibility" },
   { title: "Blacklist", section: "blacklist", path: "/api/admin/settings/blacklist" },
@@ -1955,31 +1957,32 @@ function renderRoleSettings() {
   }
   const selectedRole = roles.find((role) => role.role === state.selectedRole) || roles[0];
   const roleControls = node("section", { class: "role-editor" },
-    node("div", { class: "role-editor-head" },
-      node("div", {},
-        node("h3", { text: "Access Roles" }),
-        node("p", { class: "muted", text: `${roles.length} role${roles.length === 1 ? "" : "s"} configured` }),
-      ),
-      node("label", {},
-        "Default role",
-        node("select", {
-          onchange: (event) => {
-            visibility.default_role = event.target.value;
-          },
-        }, roles.map((role) => node("option", {
-          value: role.role,
-          selected: role.role === visibility.default_role,
-          text: role.display_name || role.role,
-        }))),
-      ),
-    ),
     node("div", { class: "role-workspace" },
-      node("nav", { class: "role-sidebar", "aria-label": "Roles" }, roles.map((role) => roleNavItem(role, visibility.default_role))),
-      renderRoleDetail(selectedRole, visibility.default_role, roles),
+      renderRoleSidebar(roles, visibility.default_role),
+      renderRoleDetail(selectedRole, visibility.default_role, roles, visibility),
     ),
   );
   const userControls = renderUserManagement(roles);
   $("role-settings").replaceChildren(roleControls, userControls);
+}
+
+function renderRoleSidebar(roles, defaultRole) {
+  return node("aside", { class: "role-sidebar management-sidebar" },
+    node("div", { class: "management-sidebar-head" },
+      node("div", {},
+        node("h3", { text: "Roles" }),
+        node("p", { class: "muted", text: `${roles.length} configured` }),
+      ),
+      node("button", {
+        type: "button",
+        class: "command",
+        "data-glyph": "+",
+        onclick: addRole,
+        text: "Create role",
+      }),
+    ),
+    node("nav", { class: "management-list", "aria-label": "Roles" }, roles.map((role) => roleNavItem(role, defaultRole))),
+  );
 }
 
 function roleNavItem(role, defaultRole) {
@@ -2005,7 +2008,7 @@ function roleNavItem(role, defaultRole) {
   );
 }
 
-function renderRoleDetail(role, defaultRole, roles) {
+function renderRoleDetail(role, defaultRole, roles, visibility) {
   const visibleCount = visibleRoleAppCount(role);
   const members = usersForRole(role.role);
   const hiddenCount = Math.max(0, state.roleApps.length - visibleCount);
@@ -2015,7 +2018,29 @@ function renderRoleDetail(role, defaultRole, roles) {
         node("h3", { text: role.display_name || role.role }),
         node("p", { class: "muted", text: role.role }),
       ),
-      role.role === defaultRole ? node("span", { class: "role-badge", text: "Default" }) : null,
+      node("div", { class: "role-detail-actions" },
+        role.role === defaultRole ? node("span", { class: "role-badge", text: "Default" }) : null,
+        node("label", { class: "role-default-field" },
+          node("span", { text: "Default role" }),
+          node("select", {
+            onchange: (event) => {
+              visibility.default_role = event.target.value;
+              renderRoleSettings();
+            },
+          }, roles.map((item) => node("option", {
+            value: item.role,
+            selected: item.role === defaultRole,
+            text: item.display_name || item.role,
+          }))),
+        ),
+        node("button", {
+          type: "button",
+          class: "primary command",
+          "data-glyph": "v",
+          onclick: saveRoles,
+          text: "Save roles",
+        }),
+      ),
     ),
     node("label", { class: "role-name-field" },
       "Display name",
@@ -2206,56 +2231,113 @@ function updateRoleApp(role, appID, visible) {
 
 function renderUserManagement(roles) {
   const userRoles = accountRoles(roles);
-  const username = node("input", { placeholder: "Username", autocomplete: "off" });
-  const displayName = node("input", { placeholder: "Display name", autocomplete: "off" });
-  const password = node("input", { placeholder: "Password for new/reset", type: "password", autocomplete: "new-password" });
-  const roleSelect = node("select", {}, userRoles.map((role) => node("option", { value: role.role, text: role.display_name || role.role })));
-  const disabled = node("input", { type: "checkbox" });
+  ensureSelectedUser();
+  const selected = state.roleUsers.find((user) => user.username === state.selectedUser);
+  const creating = state.selectedUser === NEW_USER_KEY || !selected;
   return node("section", { class: "user-editor" },
-    node("div", { class: "section-head" },
+    node("div", { class: "user-management-grid" },
+      renderUserSidebar(userRoles),
+      renderUserDetail(creating ? null : selected, userRoles),
+    ),
+  );
+}
+
+function ensureSelectedUser() {
+  if (state.selectedUser === NEW_USER_KEY) return;
+  if (state.roleUsers.some((user) => user.username === state.selectedUser)) return;
+  state.selectedUser = state.roleUsers[0]?.username || NEW_USER_KEY;
+}
+
+function renderUserSidebar(userRoles) {
+  return node("aside", { class: "user-list management-sidebar" },
+    node("div", { class: "management-sidebar-head" },
       node("div", {},
         node("h3", { text: "User Accounts" }),
-        node("p", { class: "muted", text: "Create users, reset passwords, or disable accounts." }),
+        node("p", { class: "muted", text: `${state.roleUsers.length} user${state.roleUsers.length === 1 ? "" : "s"}` }),
       ),
-      node("span", { class: "muted", text: `${state.roleUsers.length} user${state.roleUsers.length === 1 ? "" : "s"}` }),
-    ),
-    node("div", { class: "user-management-grid" },
-      node("div", { class: "user-list" }, state.roleUsers.map((user) => node("button", {
+      node("button", {
         type: "button",
-        class: "user-row",
+        class: `command${state.selectedUser === NEW_USER_KEY ? " active" : ""}`,
+        "data-glyph": "+",
         onclick: () => {
-          username.value = user.username;
-          displayName.value = user.display_name || "";
-          roleSelect.value = user.role;
-          disabled.checked = !!user.disabled;
-          password.value = "";
+          state.selectedUser = NEW_USER_KEY;
+          renderRoleSettings();
         },
-      },
-        node("span", { class: "user-row-main" },
-          node("strong", { text: user.display_name || user.username }),
-          node("small", { text: user.username }),
-        ),
-        node("span", { class: `user-role ${user.disabled ? "disabled" : ""}`, text: user.disabled ? "Disabled" : roleDisplayName(userRoles, user.role) }),
-      ))),
-      node("div", { class: "user-form-panel" },
-        node("div", { class: "user-form-head" },
-          node("h4", { text: "Create or edit user" }),
-          node("p", { class: "muted", text: "Saving an existing username updates that account." }),
-        ),
-        node("div", { class: "user-form" },
-          node("label", {}, "Username", username),
-          node("label", {}, "Display name", displayName),
-          node("label", {}, "Role", roleSelect),
-          node("label", {}, "Password", password),
-          node("label", { class: "toggle-line" }, disabled, "Disabled"),
-          node("button", {
-            type: "button",
-            class: "command",
-            "data-glyph": "v",
-            onclick: () => saveUser({ username, displayName, roleSelect, password, disabled }),
-            text: "Save user",
-          }),
-        ),
+        text: "Create user",
+      }),
+    ),
+    node("nav", { class: "management-list", "aria-label": "User accounts" },
+      state.roleUsers.length ? state.roleUsers.map((user) => userNavItem(user, userRoles)) : node("div", { class: "empty inline-empty", text: "No users yet." }),
+    ),
+  );
+}
+
+function userNavItem(user, userRoles) {
+  const active = user.username === state.selectedUser;
+  return node("button", {
+    type: "button",
+    class: `user-row${active ? " active" : ""}${user.disabled ? " disabled" : ""}`,
+    "aria-pressed": String(active),
+    onclick: () => {
+      state.selectedUser = user.username;
+      renderRoleSettings();
+    },
+  },
+    node("span", { class: "user-row-main" },
+      node("strong", { text: user.display_name || user.username }),
+      node("small", { text: user.username }),
+    ),
+    node("span", { class: `user-role ${user.disabled ? "disabled" : ""}`, text: user.disabled ? "Disabled" : roleDisplayName(userRoles, user.role) }),
+  );
+}
+
+function renderUserDetail(user, userRoles) {
+  const creating = !user;
+  const defaultRole = state.roleVisibility?.default_role === "admin" ? "general_user" : (state.roleVisibility?.default_role || "general_user");
+  const username = node("input", {
+    value: user?.username || "",
+    placeholder: "username",
+    autocomplete: "off",
+    disabled: !creating,
+  });
+  const displayName = node("input", {
+    value: user?.display_name || "",
+    placeholder: "Display name",
+    autocomplete: "off",
+  });
+  const roleSelect = node("select", {}, userRoles.map((role) => node("option", {
+    value: role.role,
+    selected: role.role === (user?.role || defaultRole),
+    text: role.display_name || role.role,
+  })));
+  const password = node("input", {
+    placeholder: creating ? "Required for new user" : "Leave blank to keep password",
+    type: "password",
+    autocomplete: "new-password",
+  });
+  const disabled = node("input", { type: "checkbox", checked: !!user?.disabled });
+  return node("article", { class: "user-detail" },
+    node("header", { class: "user-detail-head" },
+      node("div", {},
+        node("h3", { text: creating ? "Create User" : (user.display_name || user.username) }),
+        node("p", { class: "muted", text: creating ? "Add a named account for the admin panel or compact app." : user.username }),
+      ),
+      creating ? null : node("span", { class: `user-role ${user.disabled ? "disabled" : ""}`, text: user.disabled ? "Disabled" : roleDisplayName(userRoles, user.role) }),
+    ),
+    node("div", { class: "user-form" },
+      node("label", {}, "Username", username),
+      node("label", {}, "Display name", displayName),
+      node("label", {}, "Role", roleSelect),
+      node("label", {}, creating ? "Password" : "New password", password),
+      node("label", { class: "toggle-line" }, disabled, "Disabled"),
+      node("div", { class: "user-form-actions" },
+        node("button", {
+          type: "button",
+          class: "primary command",
+          "data-glyph": "v",
+          onclick: () => saveUser({ username, displayName, roleSelect, password, disabled, creating }),
+          text: creating ? "Create user" : "Save changes",
+        }),
       ),
     ),
   );
@@ -2282,11 +2364,22 @@ async function saveRoles() {
 }
 
 async function saveUser(fields) {
+  const username = fields.username.value.trim();
+  if (!username) {
+    showNotice("Username is required.", "error");
+    fields.username.focus();
+    return;
+  }
+  if (fields.creating && !fields.password.value) {
+    showNotice("Password is required for a new user.", "error");
+    fields.password.focus();
+    return;
+  }
   try {
     const saved = await api("/api/admin/users", {
       method: "POST",
       body: JSON.stringify({
-        username: fields.username.value.trim(),
+        username,
         display_name: fields.displayName.value.trim(),
         role: fields.roleSelect.value,
         password: fields.password.value,
@@ -2294,6 +2387,7 @@ async function saveUser(fields) {
       }),
     });
     fields.password.value = "";
+    state.selectedUser = saved.username || username;
     showNotice(`${saved.username} saved.`);
     await loadRoleSettings();
   } catch (error) {
@@ -3321,8 +3415,6 @@ $("assistant-toggle").addEventListener("click", () => {
 });
 $("assistant-send").addEventListener("click", runAssistantChat);
 $("assistant-notify").addEventListener("click", () => notifyAdmin($("assistant-input").value || "A standard user reported a problem."));
-$("add-role").addEventListener("click", addRole);
-$("save-roles").addEventListener("click", saveRoles);
 $("logout").addEventListener("click", logout);
 $("tabs").addEventListener("click", (event) => {
   const tab = event.target.closest("[data-tab]");
