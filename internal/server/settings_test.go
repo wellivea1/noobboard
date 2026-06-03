@@ -293,6 +293,70 @@ func TestOpenAIChatGPTBrowserCallbackDoesNotRequireSession(t *testing.T) {
 	}
 }
 
+func TestUserDiagnoseAsAdminUsesCompactLLMRecipientRole(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "compact-diagnose-admin-role")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+	cfg.LLM.Provider = "openai"
+	cfg.LLM.OpenAIAuthMethod = config.OpenAIAuthMethodAPIKey
+	cfg.LLM.OpenAIAPIKey = "sk-test-local"
+	cfg.Visibility.DefaultRole = models.RoleGeneralUser
+	cfg.Visibility.GeneralUserCanUseLLM = true
+
+	app := newTestApp(t, cfg)
+	client := &recordingLLMClient{redactor: app.deps.Redactor}
+	app.settingsMu.Lock()
+	app.deps.LLM = client
+	app.settingsMu.Unlock()
+
+	router := app.Router()
+	cookie, csrf := loginAdmin(t, router)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/user/diagnose", strings.NewReader(`{"question":"What is wrong with Emby?"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/user/diagnose status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if client.request.Policy.RecipientRole != models.RoleGeneralUser {
+		t.Fatalf("compact diagnosis recipient role = %q, want %q", client.request.Policy.RecipientRole, models.RoleGeneralUser)
+	}
+	if client.request.Mode != llm.ModeGeneralUserRequested {
+		t.Fatalf("compact diagnosis mode = %q, want %q", client.request.Mode, llm.ModeGeneralUserRequested)
+	}
+	if client.contextText == "" {
+		t.Fatal("recording LLM client did not build context")
+	}
+	if strings.Contains(client.contextText, `"snapshot"`) {
+		t.Fatalf("compact diagnosis used admin snapshot payload: %s", client.contextText)
+	}
+}
+
+func TestCompactDiagnosisRoleDownscopesAdmin(t *testing.T) {
+	tests := []struct {
+		name        string
+		actorRole   models.Role
+		defaultRole models.Role
+		want        models.Role
+	}{
+		{name: "admin becomes general user when default is unset", actorRole: models.RoleAdmin, want: models.RoleGeneralUser},
+		{name: "admin cannot inherit admin compact default", actorRole: models.RoleAdmin, defaultRole: models.RoleAdmin, want: models.RoleGeneralUser},
+		{name: "admin inherits non-admin compact default", actorRole: models.RoleAdmin, defaultRole: "family", want: "family"},
+		{name: "non-admin role is preserved", actorRole: "family", defaultRole: models.RoleGeneralUser, want: "family"},
+		{name: "empty role fails closed to general user", want: models.RoleGeneralUser},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := compactDiagnosisRole(tt.actorRole, tt.defaultRole); got != tt.want {
+				t.Fatalf("compactDiagnosisRole(%q, %q) = %q, want %q", tt.actorRole, tt.defaultRole, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestIntegrationSettingsPersistAndHideKeys(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Database.Path = serverCacheTestPath(t, "integration-settings")
@@ -1061,6 +1125,36 @@ type failingUniFiCollector struct{}
 
 func (failingUniFiCollector) Status(context.Context) (models.InfrastructureStatus, error) {
 	return models.InfrastructureStatus{}, errors.New("unifi unavailable")
+}
+
+type recordingLLMClient struct {
+	redactor    *privacy.Redactor
+	request     llm.Request
+	contextText string
+}
+
+func (c *recordingLLMClient) Diagnose(_ context.Context, req llm.Request) (llm.Diagnosis, error) {
+	c.request = req
+	redactor := c.redactor
+	if redactor == nil {
+		redactor = privacy.NewRedactor(config.PrivacyConfig{})
+	}
+	contextText, err := llm.NewContextBuilder(redactor).Build(req)
+	if err != nil {
+		return llm.Diagnosis{}, err
+	}
+	c.contextText = contextText
+	return llm.Diagnosis{
+		Severity:            models.SeverityNone,
+		Confidence:          0.98,
+		IncidentType:        models.IncidentUnknown,
+		Diagnosis:           "No problem found.",
+		Evidence:            []string{"Compact diagnosis request completed."},
+		GeneralUserSummary:  "Everything visible looks normal.",
+		AdminMessage:        "Compact diagnosis request completed.",
+		RecommendedActionID: "none",
+		ShouldNotifyAdmin:   false,
+	}, nil
 }
 
 func newTestApp(t *testing.T, cfg config.Config) *App {

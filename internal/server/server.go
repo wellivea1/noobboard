@@ -780,8 +780,9 @@ func (a *App) adminDiagnose(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) userDiagnose(w http.ResponseWriter, r *http.Request) {
 	a.settingsMu.RLock()
-	role := mustUser(r).Role
-	allowed := roleCanUseLLM(a.deps.Config.Visibility, role)
+	visibility := a.deps.Config.Visibility
+	role := compactDiagnosisRole(mustUser(r).Role, visibility.DefaultRole)
+	allowed := roleCanUseLLM(visibility, role)
 	a.settingsMu.RUnlock()
 	if !allowed {
 		writeError(w, http.StatusForbidden, errors.New("status chat is disabled for this role"))
@@ -1810,6 +1811,19 @@ func roleCanUseLLM(settings models.VisibilitySettings, role models.Role) bool {
 		}
 	}
 	return settings.GeneralUserCanUseLLM
+}
+
+func compactDiagnosisRole(actorRole, defaultRole models.Role) models.Role {
+	if actorRole == "" {
+		return models.RoleGeneralUser
+	}
+	if actorRole != models.RoleAdmin {
+		return actorRole
+	}
+	if defaultRole == "" || defaultRole == models.RoleAdmin {
+		return models.RoleGeneralUser
+	}
+	return defaultRole
 }
 
 func compactStrings(values []string) []string {
