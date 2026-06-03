@@ -40,6 +40,9 @@ func TestOpenAIClientUsesResponsesAPIWithStructuredOutput(t *testing.T) {
 		if _, ok := body["store"]; ok {
 			t.Fatalf("OpenAI API-key request should not set store by default: %#v", body["store"])
 		}
+		if _, ok := body["stream"]; ok {
+			t.Fatalf("OpenAI API-key request should not set stream by default: %#v", body["stream"])
+		}
 		if tools, ok := body["tools"].([]interface{}); !ok || len(tools) != 0 {
 			t.Fatalf("OpenAI tools should default to empty, got %#v", body["tools"])
 		}
@@ -145,6 +148,23 @@ func TestOpenAIResponsesUsageLimitErrorIsClassified(t *testing.T) {
 	}
 	if providerErr.Code != OpenAIUsageLimitCode {
 		t.Fatalf("ProviderError code = %q, want %q", providerErr.Code, OpenAIUsageLimitCode)
+	}
+}
+
+func TestOpenAIResponsesStreamUsageLimitErrorIsClassified(t *testing.T) {
+	_, err := normalizeOpenAIResponsesStream([]byte(strings.Join([]string{
+		"event: response.failed",
+		`data: {"type":"response.failed","response":{"error":{"code":"rate_limit_exceeded","message":"Usage limit reached. Try again later."}}}`,
+		"",
+	}, "\n")), "chatgpt codex responses api")
+	if err == nil {
+		t.Fatal("expected streamed usage limit error")
+	}
+	if !IsOpenAIUsageLimitError(err) {
+		t.Fatalf("expected usage limit classification for %v", err)
+	}
+	if !strings.Contains(err.Error(), "stream error") {
+		t.Fatalf("stream error was not labeled clearly: %v", err)
 	}
 }
 
@@ -308,6 +328,9 @@ func TestChatGPTConnectorUsesCodexResponsesEndpoint(t *testing.T) {
 		if store, ok := body["store"].(bool); !ok || store {
 			t.Fatalf("ChatGPT Codex store = %#v, want false", body["store"])
 		}
+		if stream, ok := body["stream"].(bool); !ok || !stream {
+			t.Fatalf("ChatGPT Codex stream = %#v, want true", body["stream"])
+		}
 		include, ok := body["include"].([]interface{})
 		if !ok || len(include) != 1 || include[0] != "reasoning.encrypted_content" {
 			t.Fatalf("ChatGPT Codex include = %#v", body["include"])
@@ -323,7 +346,12 @@ func TestChatGPTConnectorUsesCodexResponsesEndpoint(t *testing.T) {
 		if content, _ := message["content"].(string); !strings.Contains(content, "Sanitized diagnostic context") {
 			t.Fatalf("ChatGPT Codex input content did not include prompt: %s", content)
 		}
-		return jsonResponse(t, http.StatusOK, map[string]string{"output_text": validDiagnosisJSON(t)})
+		return streamResponse(t,
+			map[string]interface{}{
+				"type":  "response.output_text.delta",
+				"delta": validDiagnosisJSON(t),
+			},
+		)
 	})}
 	if _, err := client.Diagnose(context.Background(), sampleLLMRequest()); err != nil {
 		t.Fatal(err)
@@ -349,6 +377,9 @@ func TestChatGPTConnectorRunsAllowedReadOnlyAgentToolStateless(t *testing.T) {
 		if store, ok := body["store"].(bool); !ok || store {
 			t.Fatalf("ChatGPT Codex request %d store = %#v, want false", requests, body["store"])
 		}
+		if stream, ok := body["stream"].(bool); !ok || !stream {
+			t.Fatalf("ChatGPT Codex request %d stream = %#v, want true", requests, body["stream"])
+		}
 		include, ok := body["include"].([]interface{})
 		if !ok || len(include) != 1 || include[0] != "reasoning.encrypted_content" {
 			t.Fatalf("ChatGPT Codex request %d include = %#v", requests, body["include"])
@@ -359,16 +390,16 @@ func TestChatGPTConnectorRunsAllowedReadOnlyAgentToolStateless(t *testing.T) {
 			if len(tools) == 0 {
 				t.Fatalf("agent-enabled ChatGPT request did not advertise tools: %#v", body["tools"])
 			}
-			return jsonResponse(t, http.StatusOK, map[string]interface{}{
-				"output": []map[string]interface{}{
-					{
-						"type":      "function_call",
-						"id":        "fc_1",
-						"call_id":   "call_1",
-						"name":      "noobboard_network_status",
-						"arguments": `{}`,
-					},
-				},
+			call := map[string]interface{}{
+				"type":      "function_call",
+				"id":        "fc_1",
+				"call_id":   "call_1",
+				"name":      "noobboard_network_status",
+				"arguments": `{}`,
+			}
+			return streamResponse(t, map[string]interface{}{
+				"type": "response.output_item.done",
+				"item": call,
 			})
 		case 2:
 			input, ok := body["input"].([]interface{})
@@ -385,7 +416,14 @@ func TestChatGPTConnectorRunsAllowedReadOnlyAgentToolStateless(t *testing.T) {
 			if !strings.Contains(inputText, "fresh live unifi") {
 				t.Fatalf("second request did not include fresh tool output: %s", inputText)
 			}
-			return jsonResponse(t, http.StatusOK, map[string]string{"output_text": validDiagnosisJSON(t)})
+			return streamResponse(t,
+				map[string]interface{}{
+					"type": "response.completed",
+					"response": map[string]interface{}{
+						"output_text": validDiagnosisJSON(t),
+					},
+				},
+			)
 		default:
 			t.Fatalf("unexpected extra request %d", requests)
 		}
@@ -477,6 +515,32 @@ func jsonResponse(t *testing.T, status int, value interface{}) (*http.Response, 
 		StatusCode: status,
 		Header:     make(http.Header),
 		Body:       io.NopCloser(strings.NewReader(string(data))),
+	}, nil
+}
+
+func streamResponse(t *testing.T, events ...map[string]interface{}) (*http.Response, error) {
+	t.Helper()
+	var body strings.Builder
+	for _, event := range events {
+		eventType, _ := event["type"].(string)
+		if eventType != "" {
+			body.WriteString("event: ")
+			body.WriteString(eventType)
+			body.WriteString("\n")
+		}
+		data, err := json.Marshal(event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body.WriteString("data: ")
+		body.Write(data)
+		body.WriteString("\n\n")
+	}
+	body.WriteString("data: [DONE]\n\n")
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(body.String())),
 	}, nil
 }
 

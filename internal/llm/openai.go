@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -27,10 +28,16 @@ type ProviderError struct {
 }
 
 func (e *ProviderError) Error() string {
-	if e.Message != "" {
-		return fmt.Sprintf("%s returned %d: %s", e.Label, e.StatusCode, e.Message)
+	prefix := e.Label
+	if e.StatusCode > 0 {
+		prefix = fmt.Sprintf("%s returned %d", e.Label, e.StatusCode)
+	} else {
+		prefix = e.Label + " stream error"
 	}
-	return fmt.Sprintf("%s returned %d: %s", e.Label, e.StatusCode, e.Body)
+	if e.Message != "" {
+		return fmt.Sprintf("%s: %s", prefix, e.Message)
+	}
+	return fmt.Sprintf("%s: %s", prefix, e.Body)
 }
 
 func IsOpenAIUsageLimitError(err error) bool {
@@ -62,6 +69,7 @@ type openAIResponsesOptions struct {
 	IncludeEncryptedReasoning bool
 	InputAsList               bool
 	StoreFalse                bool
+	Stream                    bool
 }
 
 func NewOpenAIClient(cfg config.LLMConfig, redactor *privacy.Redactor) OpenAIClient {
@@ -123,6 +131,9 @@ func openAIResponsesBodyWithInput(model string, input interface{}, tools []inter
 	if opts.StoreFalse {
 		body["store"] = false
 	}
+	if opts.Stream {
+		body["stream"] = true
+	}
 	return json.Marshal(body)
 }
 
@@ -173,7 +184,7 @@ func runOpenAIResponsesDiagnosis(ctx context.Context, client *http.Client, endpo
 		if err != nil {
 			return Diagnosis{}, err
 		}
-		respData, err := postOpenAIResponses(ctx, client, endpoint, headers, data, label)
+		respData, err := postOpenAIResponses(ctx, client, endpoint, headers, data, label, opts)
 		if err != nil {
 			return Diagnosis{}, err
 		}
@@ -210,7 +221,7 @@ func runOpenAIResponsesDiagnosis(ctx context.Context, client *http.Client, endpo
 	}
 }
 
-func postOpenAIResponses(ctx context.Context, client *http.Client, endpoint string, headers http.Header, data []byte, label string) ([]byte, error) {
+func postOpenAIResponses(ctx context.Context, client *http.Client, endpoint string, headers http.Header, data []byte, label string, opts openAIResponsesOptions) ([]byte, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(data))
 	if err != nil {
 		return nil, err
@@ -233,7 +244,125 @@ func postOpenAIResponses(ctx context.Context, client *http.Client, endpoint stri
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return nil, openAIProviderError(label, resp.StatusCode, respData)
 	}
+	if opts.Stream {
+		return normalizeOpenAIResponsesStream(respData, label)
+	}
 	return respData, nil
+}
+
+func normalizeOpenAIResponsesStream(respData []byte, label string) ([]byte, error) {
+	trimmed := bytes.TrimSpace(respData)
+	if len(trimmed) == 0 {
+		return nil, errors.New("empty OpenAI response stream")
+	}
+	if trimmed[0] == '{' || trimmed[0] == '[' {
+		return respData, nil
+	}
+	scanner := bufio.NewScanner(bytes.NewReader(respData))
+	scanner.Buffer(make([]byte, 0, 64*1024), 2<<20)
+	var eventName string
+	var dataLines []string
+	acc := openAIStreamAccumulator{}
+	flush := func() error {
+		if len(dataLines) == 0 {
+			eventName = ""
+			return nil
+		}
+		payload := strings.TrimSpace(strings.Join(dataLines, "\n"))
+		event := eventName
+		eventName = ""
+		dataLines = nil
+		if payload == "" || payload == "[DONE]" {
+			return nil
+		}
+		return acc.add(event, []byte(payload), label)
+	}
+	for scanner.Scan() {
+		line := strings.TrimSuffix(scanner.Text(), "\r")
+		if line == "" {
+			if err := flush(); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if strings.HasPrefix(line, ":") {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(line, "event:"):
+			eventName = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+		case strings.HasPrefix(line, "data:"):
+			dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	if err := flush(); err != nil {
+		return nil, err
+	}
+	return acc.body()
+}
+
+type openAIStreamAccumulator struct {
+	output       []interface{}
+	outputText   strings.Builder
+	completed    map[string]interface{}
+	completedSet bool
+}
+
+func (a *openAIStreamAccumulator) add(eventName string, payload []byte, label string) error {
+	var event map[string]interface{}
+	if err := json.Unmarshal(payload, &event); err != nil {
+		return err
+	}
+	eventType := strings.TrimSpace(fmt.Sprint(event["type"]))
+	if eventType == "" {
+		eventType = eventName
+	}
+	if eventType == "error" || strings.HasSuffix(eventType, ".failed") {
+		return openAIProviderError(label, 0, payload)
+	}
+	if errorValue, ok := event["error"]; ok && errorValue != nil {
+		return openAIProviderError(label, 0, payload)
+	}
+	if response, ok := event["response"].(map[string]interface{}); ok {
+		a.completed = response
+		a.completedSet = true
+	}
+	if delta, ok := event["delta"].(string); ok && strings.Contains(eventType, "output_text.delta") {
+		a.outputText.WriteString(delta)
+	}
+	if text, ok := event["text"].(string); ok && strings.Contains(eventType, "output_text.done") && a.outputText.Len() == 0 {
+		a.outputText.WriteString(text)
+	}
+	if item, ok := event["item"].(map[string]interface{}); ok && strings.Contains(eventType, "output_item.done") {
+		a.output = append(a.output, item)
+	}
+	return nil
+}
+
+func (a *openAIStreamAccumulator) body() ([]byte, error) {
+	if a.completedSet {
+		if value, ok := a.completed["output_text"].(string); (!ok || strings.TrimSpace(value) == "") && a.outputText.Len() > 0 {
+			a.completed["output_text"] = a.outputText.String()
+		}
+		if value, ok := a.completed["output"].([]interface{}); (!ok || len(value) == 0) && len(a.output) > 0 {
+			a.completed["output"] = a.output
+		}
+		return json.Marshal(a.completed)
+	}
+	body := map[string]interface{}{}
+	if a.outputText.Len() > 0 {
+		body["output_text"] = a.outputText.String()
+	}
+	if len(a.output) > 0 {
+		body["output"] = a.output
+	}
+	if len(body) == 0 {
+		return nil, errors.New("no OpenAI response data found in response stream")
+	}
+	return json.Marshal(body)
 }
 
 func openAIProviderError(label string, statusCode int, respData []byte) error {
@@ -273,6 +402,16 @@ func openAIErrorCodeAndMessage(respData []byte) (string, string) {
 			message = value
 		}
 	}
+	if response, ok := body["response"].(map[string]interface{}); ok {
+		if nested, ok := response["error"].(map[string]interface{}); ok {
+			if value := stringFromMap(nested, "code"); value != "" {
+				code = value
+			}
+			if value := stringFromMap(nested, "message"); value != "" {
+				message = value
+			}
+		}
+	}
 	return code, message
 }
 
@@ -286,7 +425,10 @@ func isOpenAIUsageLimitStatus(statusCode int, code, message, body string) bool {
 	if strings.Contains(text, "insufficient_quota") ||
 		strings.Contains(text, "usage limit") ||
 		strings.Contains(text, "billing") ||
-		strings.Contains(text, "quota") {
+		strings.Contains(text, "quota") ||
+		strings.Contains(text, "rate_limit") ||
+		strings.Contains(text, "rate limit") ||
+		strings.Contains(text, "too many requests") {
 		return true
 	}
 	return statusCode == http.StatusTooManyRequests &&
