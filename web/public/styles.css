@@ -567,6 +567,13 @@ label {
   min-width: 0;
 }
 
+/* The page title must never break mid-word (it inherits overflow-wrap: anywhere from a
+   container). Break only at spaces so a tight column wraps "System overview" cleanly. */
+.title-block h1 {
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
 .nav-toggle {
   grid-area: nav;
   align-self: center;
@@ -4699,5 +4706,22 @@ body.compact-view[data-compact-view="chat"] .panel.user-chat[data-chat-available
 
   body {
     min-height: 100dvh;
+  }
+}
+
+/* Intermediate desktop range (sidebar visible, but not enough room for title beside the
+   action buttons). Stack the actions below the title so the title keeps full width and
+   never gets squeezed into a mid-word-wrapping column. Above this range the 3-column topbar
+   has room; below 861px the mobile topbar layout already stacks the actions. */
+@media (min-width: 861px) and (max-width: 1200px) {
+  .topbar {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "title"
+      "actions";
+  }
+
+  .topbar-actions {
+    justify-content: flex-start;
   }
 }
