@@ -36,6 +36,9 @@ func TestOpenAIClientUsesResponsesAPIWithStructuredOutput(t *testing.T) {
 		if body["model"] != "gpt-test" {
 			t.Fatalf("model = %#v", body["model"])
 		}
+		if _, ok := body["store"]; ok {
+			t.Fatalf("OpenAI API-key request should not set store by default: %#v", body["store"])
+		}
 		if tools, ok := body["tools"].([]interface{}); !ok || len(tools) != 0 {
 			t.Fatalf("OpenAI tools should default to empty, got %#v", body["tools"])
 		}
@@ -278,6 +281,9 @@ func TestChatGPTConnectorUsesCodexResponsesEndpoint(t *testing.T) {
 		reasoning, ok := body["reasoning"].(map[string]interface{})
 		if !ok || reasoning["effort"] != ChatGPTCodexReasoningHigh {
 			t.Fatalf("reasoning = %#v", body["reasoning"])
+		}
+		if store, ok := body["store"].(bool); !ok || store {
+			t.Fatalf("ChatGPT Codex store = %#v, want false", body["store"])
 		}
 		input, ok := body["input"].([]interface{})
 		if !ok || len(input) != 1 {

@@ -96,6 +96,7 @@ func (c *ChatGPTClient) Diagnose(ctx context.Context, req Request) (Diagnosis, e
 	return runOpenAIResponsesDiagnosis(ctx, c.http, c.endpoint, headers, c.model, contextText, req, c.builder.redactor, "chatgpt codex responses api", openAIResponsesOptions{
 		ReasoningEffort: ChatGPTCodexReasoningHigh,
 		InputAsList:     true,
+		StoreFalse:      true,
 	})
 }
 

@@ -25,6 +25,7 @@ type OpenAIClient struct {
 type openAIResponsesOptions struct {
 	ReasoningEffort string
 	InputAsList     bool
+	StoreFalse      bool
 }
 
 func NewOpenAIClient(cfg config.LLMConfig, redactor *privacy.Redactor) OpenAIClient {
@@ -78,6 +79,9 @@ func openAIResponsesBodyWithInput(model string, input interface{}, tools []inter
 	}
 	if opts.ReasoningEffort != "" {
 		body["reasoning"] = map[string]interface{}{"effort": opts.ReasoningEffort}
+	}
+	if opts.StoreFalse {
+		body["store"] = false
 	}
 	return json.Marshal(body)
 }
