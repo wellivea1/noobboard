@@ -15,6 +15,7 @@ const state = {
   roleUsers: [],
   roleUsersOriginal: [],
   selectedRole: "",
+  auditEntries: [],
 };
 
 const $ = (id) => document.getElementById(id);
@@ -368,6 +369,7 @@ function setActiveTab(tabName) {
     settings: "Runtime settings",
   };
   $("page-title").textContent = titles[tabName] || "System overview";
+  renderPageSubtitle();
   closeNav();
   if (tabName === "admin") loadAudit();
   if (tabName === "settings") loadSettings();
@@ -377,13 +379,29 @@ async function refresh() {
   try {
     const snapshot = await api("/api/status/summary");
     state.snapshot = snapshot;
-    $("summary").textContent = snapshot.server_summary || "Status loaded.";
     renderSourcePill(snapshot);
     renderSnapshot(snapshot);
+    renderPageSubtitle();
     renderMonitorRestore();
   } catch (error) {
     showNotice(error.message, "error");
   }
+}
+
+function renderPageSubtitle() {
+  if (!hasAdminSurface()) return;
+  const snapshot = state.snapshot || {};
+  const copy = {
+    overview: snapshot.server_summary || "Current status, incidents, and diagnostic facts.",
+    server: "Storage, service, and collector health for the server.",
+    router: "Internet, DNS, router, and UniFi health.",
+    apps: "Search visible apps, review metadata, and use admin-only controls.",
+    incidents: "Current incidents and the facts behind them.",
+    diagnostics: "Ask the configured diagnosis provider for a structured explanation.",
+    admin: "Audit events and a collapsed debug snapshot for troubleshooting.",
+    settings: "Configure roles, visibility, integrations, providers, and notifications.",
+  };
+  $("summary").textContent = copy[state.activeTab] || "Status loaded.";
 }
 
 function renderSourcePill(snapshot) {
@@ -424,6 +442,10 @@ function renderSnapshot(snapshot) {
 function syncAssistant(snapshot) {
   const available = diagnosticsAvailable(snapshot);
   const canChat = available && (hasAdminSurface() || canUseCompactChat(snapshot));
+  const dock = $("assistant-dock");
+  dock.hidden = !canChat;
+  document.body.classList.toggle("assistant-available", canChat && hasAdminSurface());
+  if (!canChat) $("assistant-panel").hidden = true;
   $("assistant-input").disabled = !canChat;
   $("assistant-send").disabled = !canChat;
   if (!canChat) {
@@ -909,7 +931,7 @@ function statusListRow(id, label, value, note) {
         node("p", { class: "status-note", text: note || "" }),
       ),
     ),
-    statusValueNeedsText(value) ? node("span", { class: "status-value", text: value }) : null,
+    node("span", { class: "status-value", text: value || "unknown" }),
   ));
 }
 
@@ -970,8 +992,27 @@ function renderIncidentCard(incident) {
       node("span", { class: `severity ${incident.severity || "none"}`, text: incident.severity || "none" }),
     ),
     incident.affected_services?.length ? node("p", { text: `Affected services: ${incident.affected_services.join(", ")}` }) : null,
-    incident.evidence?.length ? node("p", { class: "muted", text: `Evidence: ${incident.evidence.join("; ")}` }) : null,
+    incident.evidence?.length ? evidenceChips(incident.evidence) : null,
   );
+}
+
+function evidenceChips(evidence) {
+  const chips = [];
+  for (const item of evidence || []) {
+    const parts = String(item || "").split(/\s+/).filter(Boolean);
+    for (const part of parts) {
+      const index = part.indexOf("=");
+      if (index <= 0) {
+        chips.push(["Evidence", part]);
+      } else {
+        chips.push([part.slice(0, index), part.slice(index + 1)]);
+      }
+    }
+  }
+  return node("div", { class: "evidence-chips" }, chips.map(([label, value]) => node("span", { class: "evidence-chip" },
+    node("strong", { text: label }),
+    node("span", { text: value || "unknown" }),
+  )));
 }
 
 function renderIncidentSummaryRow(incident) {
@@ -1089,6 +1130,7 @@ function appControlButton(app, action, label, disabled) {
     disabled,
     onclick: (event) => {
       event.preventDefault();
+      if (["restart", "stop"].includes(action) && !confirm(`${label} ${app.display_name || app.app_id}?`)) return;
       runAppAction(app, action, event.currentTarget);
     },
   }, controlIcon(action));
@@ -1337,10 +1379,60 @@ async function loadAudit() {
   if (!hasAdminSurface()) return;
   try {
     const data = await api("/api/admin/audit");
-    $("audit-output").textContent = JSON.stringify(data, null, 2);
+    state.auditEntries = Array.isArray(data) ? [...data].sort((a, b) => String(b.time || "").localeCompare(String(a.time || ""))) : [];
+    renderAuditTable();
   } catch (error) {
-    $("audit-output").textContent = error.message;
+    state.auditEntries = [];
+    $("audit-row-count").textContent = "0 events";
+    $("audit-output").replaceChildren(node("div", { class: "empty", text: error.message }));
   }
+}
+
+function renderAuditTable() {
+  const filter = String($("audit-filter")?.value || "").trim().toLowerCase();
+  const entries = state.auditEntries.filter((entry) => auditEntryText(entry).includes(filter));
+  $("audit-row-count").textContent = `${entries.length} event${entries.length === 1 ? "" : "s"}`;
+  if (!entries.length) {
+    $("audit-output").replaceChildren(node("div", { class: "empty", text: filter ? "No audit events match the filter." : "No audit events recorded." }));
+    return;
+  }
+  $("audit-output").replaceChildren(node("table", { class: "audit-table" },
+    node("thead", {},
+      node("tr", {},
+        node("th", { text: "Time" }),
+        node("th", { text: "Actor" }),
+        node("th", { text: "Action" }),
+        node("th", { text: "Details" }),
+        node("th", { text: "Redacted" }),
+      ),
+    ),
+    node("tbody", {}, entries.map((entry) => node("tr", {},
+      node("td", { text: formatTime(entry.time) }),
+      node("td", { text: entry.actor || "unknown" }),
+      node("td", { text: entry.action || "unknown" }),
+      node("td", {}, auditDetails(entry.details)),
+      node("td", {}, node("span", { class: `severity ${entry.redacted ? "medium" : "none"}`, text: entry.redacted ? "Yes" : "No" })),
+    ))),
+  ));
+}
+
+function auditEntryText(entry) {
+  return [entry.time, entry.actor, entry.action, JSON.stringify(entry.details || {})].join(" ").toLowerCase();
+}
+
+function auditDetails(details) {
+  const entries = Object.entries(details || {});
+  if (!entries.length) return node("span", { class: "muted", text: "No details" });
+  return node("div", { class: "audit-detail-chips" }, entries.map(([key, value]) => node("span", { class: "audit-chip" },
+    node("strong", { text: key }),
+    node("span", { text: formatAuditValue(value) }),
+  )));
+}
+
+function formatAuditValue(value) {
+  if (value === null || value === undefined) return "empty";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
 }
 
 async function loadSettings() {
@@ -2276,6 +2368,7 @@ function compactList(values) {
 
 function policyEditor(name, policy) {
   const current = clone(policy || {});
+  const meta = policyMeta(name);
   const enabled = settingToggle("Enabled", current.enabled !== false);
   const includeLogs = settingToggle("Include logs", !!current.include_logs);
   const preferFacts = settingToggle("Prefer facts", current.prefer_incident_facts !== false);
@@ -2289,9 +2382,13 @@ function policyEditor(name, policy) {
     name,
     element: node("details", { class: "settings-policy", open: name === "admin_requested" },
       node("summary", {},
-        node("span", { text: policyDisplayName(name) }),
-        node("small", { text: current.recipient_role || "admin" }),
+        node("span", {},
+          node("strong", { text: meta.title }),
+          node("small", { text: meta.description }),
+        ),
+        node("small", { text: `Recipient: ${current.recipient_role || meta.recipient}` }),
       ),
+      node("p", { class: "muted", text: "Advanced context and redaction tuning." }),
       node("div", { class: "settings-toggle-grid" }, enabled.element, includeLogs.element, preferFacts.element, allowHidden.element, allowBlacklisted.element, failClosed.element),
       node("div", { class: "settings-field-grid" }, maxContext.element, maxLogs.element),
       logSources.element,
@@ -2311,6 +2408,27 @@ function policyEditor(name, policy) {
       recipient_role: current.recipient_role || "admin",
     }),
   };
+}
+
+function policyMeta(name) {
+  const values = {
+    admin_requested: {
+      title: "Admin-requested diagnosis",
+      description: "Used when the technical owner asks from the Diagnostics tab.",
+      recipient: "admin",
+    },
+    general_user_requested: {
+      title: "General-user diagnosis",
+      description: "Used for the compact app chat with role-scoped context.",
+      recipient: "general user",
+    },
+    automatic_incident: {
+      title: "Automatic incident summary",
+      description: "Reserved for background incident explanation and notifications.",
+      recipient: "admin",
+    },
+  };
+  return values[name] || { title: policyDisplayName(name), description: "Custom diagnosis policy.", recipient: "admin" };
 }
 
 function policyDisplayName(name) {
@@ -2503,7 +2621,6 @@ $("login-form").addEventListener("submit", login);
 $("refresh").addEventListener("click", refresh);
 $("quick-diagnose").addEventListener("click", () => {
   setActiveTab("diagnostics");
-  diagnose();
 });
 $("diagnose").addEventListener("click", diagnose);
 $("notify-admin").addEventListener("click", () => notifyAdmin());
@@ -2511,6 +2628,7 @@ $("user-chat-open").addEventListener("click", focusUserChat);
 $("user-chat-send").addEventListener("click", runUserChat);
 $("user-notify-admin").addEventListener("click", () => notifyAdmin("A standard user reported a problem."));
 $("audit-refresh").addEventListener("click", loadAudit);
+$("audit-filter").addEventListener("input", renderAuditTable);
 $("settings-refresh").addEventListener("click", loadSettings);
 $("settings-menu").addEventListener("click", (event) => {
   const button = event.target.closest("[data-settings-section]");

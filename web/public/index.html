@@ -52,7 +52,7 @@
           <span id="role-pill" class="pill">offline</span>
           <span id="source-pill" class="pill source-pill" hidden></span>
           <button id="refresh" class="command" data-glyph="&#8635;" type="button">Refresh</button>
-          <button id="quick-diagnose" class="command" data-glyph="?" type="button" data-admin-detail>Diagnose</button>
+          <button id="quick-diagnose" class="command" data-glyph="?" type="button" data-admin-detail>Diagnostics</button>
           <button id="restore-monitors" class="command" data-glyph="+" type="button" data-admin-detail hidden>Restore monitors</button>
           <button id="logout" class="command" data-glyph="x" type="button">Sign out</button>
         </div>
@@ -196,11 +196,20 @@
               <h2>Audit Log</h2>
               <button id="audit-refresh" type="button" class="command" data-glyph="&#8635;">Reload</button>
             </div>
-            <pre id="audit-output"></pre>
+            <label class="search-label audit-filter">
+              Filter audit log
+              <input id="audit-filter" placeholder="Actor, action, or detail">
+            </label>
+            <div class="audit-table-meta">
+              <span id="audit-row-count" class="muted">0 events</span>
+            </div>
+            <div id="audit-output" class="audit-table-wrap"></div>
           </section>
           <section class="panel">
-            <h2>Raw Admin Snapshot</h2>
-            <pre id="admin-output"></pre>
+            <details class="debug-disclosure">
+              <summary>Developer / debug snapshot</summary>
+              <pre id="admin-output"></pre>
+            </details>
           </section>
         </div>
       </section>
@@ -211,6 +220,7 @@
           <button id="settings-refresh" type="button" class="command" data-glyph="&#8635;">Reload</button>
         </div>
         <div class="settings-workspace">
+          <div class="settings-menu-head">Settings sections</div>
           <nav id="settings-menu" class="settings-menu" aria-label="Settings sections">
             <button type="button" data-settings-section="roles" class="active">Role Access</button>
             <button type="button" data-settings-section="visibility">Visibility</button>
