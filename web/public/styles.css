@@ -190,6 +190,21 @@ button.command[data-glyph="v"]::before {
   content: "\2713";
 }
 
+/* Spin the glyph while a refresh/reload is in flight; stops when the class is removed. */
+@keyframes nb-spin {
+  to { transform: rotate(360deg); }
+}
+
+button.command.is-refreshing[data-glyph]::before {
+  animation: nb-spin 0.8s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button.command.is-refreshing[data-glyph]::before {
+    animation: none;
+  }
+}
+
 .nav-toggle {
   width: var(--control-height-touch);
   min-width: var(--control-height-touch);
@@ -3836,7 +3851,11 @@ body.user-menu-open .user-drawer {
   line-height: 1.12;
 }
 
-.user-drawer-head .monitor-hide {
+.user-drawer-head button.command.monitor-hide {
+  /* Override the base `.monitor-hide { display:none }` so the drawer's close (×) is visible. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 44px;
   min-width: 44px;
   min-height: 44px;

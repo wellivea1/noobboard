@@ -228,7 +228,9 @@ function closeUserMenu(options = {}) {
   clearTimeout(closeUserMenu.hideTimer);
   closeUserMenu.hideTimer = setTimeout(finish, prefersReducedMotion() ? 0 : 210);
   if (returnFocus) {
-    const target = state.userDrawerLastFocus?.isConnected ? state.userDrawerLastFocus : trigger;
+    // Return focus to the control that opened the drawer (the hamburger). A tap/programmatic
+    // open can leave document.activeElement on <body>, so prefer the trigger explicitly.
+    const target = trigger?.isConnected ? trigger : (state.userDrawerLastFocus?.isConnected ? state.userDrawerLastFocus : null);
     target?.focus?.({ preventScroll: true });
   }
 }
@@ -481,6 +483,14 @@ function setActiveTab(tabName) {
 }
 
 async function refresh() {
+  if (refresh.inFlight) return;
+  refresh.inFlight = true;
+  const button = $("refresh");
+  const startedAt = Date.now();
+  if (button) {
+    button.classList.add("is-refreshing");
+    button.setAttribute("aria-busy", "true");
+  }
   try {
     const snapshot = await api("/api/status/summary");
     state.snapshot = snapshot;
@@ -490,6 +500,19 @@ async function refresh() {
     renderMonitorRestore();
   } catch (error) {
     showNotice(error.message, "error");
+  } finally {
+    // Keep the spinner visible long enough to read, even on a fast LAN.
+    const minSpinMs = 500;
+    const remaining = minSpinMs - (Date.now() - startedAt);
+    const stop = () => {
+      refresh.inFlight = false;
+      if (button) {
+        button.classList.remove("is-refreshing");
+        button.removeAttribute("aria-busy");
+      }
+    };
+    if (remaining > 0) setTimeout(stop, remaining);
+    else stop();
   }
 }
 
