@@ -1029,7 +1029,10 @@ button.command.monitor-hide {
 .diagnostics-grid,
 .admin-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  /* Single column: the audit log is the primary content and needs full width so all table
+     columns (incl. Details/Redacted) are visible without horizontal scroll; the collapsed
+     debug snapshot stacks full-width below it. */
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-4);
 }
 
