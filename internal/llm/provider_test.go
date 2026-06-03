@@ -271,6 +271,9 @@ func TestChatGPTConnectorUsesCodexResponsesEndpoint(t *testing.T) {
 		if got := req.Header.Get("ChatGPT-Account-Id"); got != "account-123" {
 			t.Fatalf("ChatGPT-Account-Id header = %q", got)
 		}
+		if got := req.Header.Get("Session-Id"); !strings.HasPrefix(got, "noobboard-") {
+			t.Fatalf("Session-Id header = %q", got)
+		}
 		var body map[string]interface{}
 		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 			t.Fatal(err)
@@ -284,6 +287,10 @@ func TestChatGPTConnectorUsesCodexResponsesEndpoint(t *testing.T) {
 		}
 		if store, ok := body["store"].(bool); !ok || store {
 			t.Fatalf("ChatGPT Codex store = %#v, want false", body["store"])
+		}
+		include, ok := body["include"].([]interface{})
+		if !ok || len(include) != 1 || include[0] != "reasoning.encrypted_content" {
+			t.Fatalf("ChatGPT Codex include = %#v", body["include"])
 		}
 		input, ok := body["input"].([]interface{})
 		if !ok || len(input) != 1 {
@@ -300,6 +307,92 @@ func TestChatGPTConnectorUsesCodexResponsesEndpoint(t *testing.T) {
 	})}
 	if _, err := client.Diagnose(context.Background(), sampleLLMRequest()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestChatGPTConnectorRunsAllowedReadOnlyAgentToolStateless(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.LLM.Provider = "openai"
+	cfg.LLM.OpenAIAuthMethod = config.OpenAIAuthMethodChatGPTHeadless
+	cfg.LLM.ChatGPTRefreshToken = "refresh-token"
+	cfg.LLM.ChatGPTAccessToken = "access-token"
+	cfg.LLM.ChatGPTAccountID = "account-123"
+	cfg.LLM.ChatGPTTokenExpiresAt = time.Now().UTC().Add(time.Hour)
+	client := NewChatGPTClient(cfg.LLM, privacy.NewRedactor(config.PrivacyConfig{}))
+	requests := 0
+	client.http = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		requests++
+		var body map[string]interface{}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if store, ok := body["store"].(bool); !ok || store {
+			t.Fatalf("ChatGPT Codex request %d store = %#v, want false", requests, body["store"])
+		}
+		include, ok := body["include"].([]interface{})
+		if !ok || len(include) != 1 || include[0] != "reasoning.encrypted_content" {
+			t.Fatalf("ChatGPT Codex request %d include = %#v", requests, body["include"])
+		}
+		switch requests {
+		case 1:
+			tools := body["tools"].([]interface{})
+			if len(tools) == 0 {
+				t.Fatalf("agent-enabled ChatGPT request did not advertise tools: %#v", body["tools"])
+			}
+			return jsonResponse(t, http.StatusOK, map[string]interface{}{
+				"output": []map[string]interface{}{
+					{
+						"type":      "function_call",
+						"id":        "fc_1",
+						"call_id":   "call_1",
+						"name":      "noobboard_network_status",
+						"arguments": `{}`,
+					},
+				},
+			})
+		case 2:
+			input, ok := body["input"].([]interface{})
+			if !ok {
+				t.Fatalf("second request input = %#v", body["input"])
+			}
+			for _, item := range input {
+				object, ok := item.(map[string]interface{})
+				if ok && object["id"] == "fc_1" {
+					t.Fatalf("second request kept stored response id: %#v", object)
+				}
+			}
+			inputText := fmt.Sprint(input)
+			if !strings.Contains(inputText, "fresh live unifi") {
+				t.Fatalf("second request did not include fresh tool output: %s", inputText)
+			}
+			return jsonResponse(t, http.StatusOK, map[string]string{"output_text": validDiagnosisJSON(t)})
+		default:
+			t.Fatalf("unexpected extra request %d", requests)
+		}
+		return nil, nil
+	})}
+
+	req := sampleLLMRequest()
+	req.Policy.AgentToolsEnabled = true
+	req.Policy.AgentMaxToolCalls = 2
+	req.Policy.AgentToolRules = []models.LLMAgentToolRule{{Tool: "noobboard_network_status", Action: "allow"}}
+	req.LiveSnapshot = func(context.Context) (models.Snapshot, error) {
+		snapshot := req.Snapshot
+		snapshot.IntegrationMode = "live"
+		snapshot.Infrastructure.SourceHealth.UniFi = "fresh live unifi"
+		snapshot.Infrastructure.UniFiWANUp = true
+		snapshot.Infrastructure.UniFiGatewayReachable = true
+		return snapshot, nil
+	}
+	diagnosis, err := client.Diagnose(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diagnosis.RecommendedActionID != "none" {
+		t.Fatalf("diagnosis = %#v", diagnosis)
+	}
+	if requests != 2 {
+		t.Fatalf("requests = %d, want 2", requests)
 	}
 }
 

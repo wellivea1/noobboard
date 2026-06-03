@@ -23,9 +23,10 @@ type OpenAIClient struct {
 }
 
 type openAIResponsesOptions struct {
-	ReasoningEffort string
-	InputAsList     bool
-	StoreFalse      bool
+	ReasoningEffort           string
+	IncludeEncryptedReasoning bool
+	InputAsList               bool
+	StoreFalse                bool
 }
 
 func NewOpenAIClient(cfg config.LLMConfig, redactor *privacy.Redactor) OpenAIClient {
@@ -63,6 +64,7 @@ func openAIResponsesBodyWithInput(model string, input interface{}, tools []inter
 	if len(tools) > 0 {
 		instructions = AgentInstructions()
 	}
+	input = responsesInputWithoutIDs(input)
 	body := map[string]interface{}{
 		"model":        model,
 		"instructions": instructions,
@@ -80,10 +82,37 @@ func openAIResponsesBodyWithInput(model string, input interface{}, tools []inter
 	if opts.ReasoningEffort != "" {
 		body["reasoning"] = map[string]interface{}{"effort": opts.ReasoningEffort}
 	}
+	if opts.IncludeEncryptedReasoning {
+		body["include"] = []string{"reasoning.encrypted_content"}
+	}
 	if opts.StoreFalse {
 		body["store"] = false
 	}
 	return json.Marshal(body)
+}
+
+func responsesInputWithoutIDs(input interface{}) interface{} {
+	items, ok := input.([]interface{})
+	if !ok {
+		return input
+	}
+	cleaned := make([]interface{}, 0, len(items))
+	for _, item := range items {
+		object, ok := item.(map[string]interface{})
+		if !ok {
+			cleaned = append(cleaned, item)
+			continue
+		}
+		copyObject := make(map[string]interface{}, len(object))
+		for key, value := range object {
+			if key == "id" {
+				continue
+			}
+			copyObject[key] = value
+		}
+		cleaned = append(cleaned, copyObject)
+	}
+	return cleaned
 }
 
 func runOpenAIResponsesDiagnosis(ctx context.Context, client *http.Client, endpoint string, headers http.Header, model, contextText string, req Request, redactor *privacy.Redactor, label string, opts openAIResponsesOptions) (Diagnosis, error) {

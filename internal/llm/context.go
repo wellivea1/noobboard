@@ -81,25 +81,15 @@ func (b ContextBuilder) Build(req Request) (string, error) {
 	if req.Policy.AgentToolsEnabled && req.Policy.RecipientRole == models.RoleAdmin {
 		instruction = "Diagnose the server status data. You may call the provided read-only NoobBoard status tools to refresh live status. Do not request or execute mutations, repairs, shell commands, filesystem access, Docker control, Unraid mutations, or UniFi configuration changes. Recommend only one allowlisted next action."
 	}
+	if req.Policy.RecipientRole != models.RoleAdmin {
+		return b.buildGeneralUserContext(snapshot, req)
+	}
 	payload := map[string]interface{}{
 		"mode":        req.Mode,
 		"question":    req.Question,
 		"api_report":  buildAPIReport(snapshot),
 		"snapshot":    snapshot,
 		"instruction": instruction,
-	}
-	if req.Policy.RecipientRole != models.RoleAdmin {
-		payload = map[string]interface{}{
-			"mode":        req.Mode,
-			"question":    req.Question,
-			"api_report":  buildGeneralUserAPIReport(snapshot, req.Question),
-			"instruction": "Explain the visible home status in plain English. Do not use technical vocabulary, request tools, execute actions, or recommend anything beyond telling the admin.",
-		}
-		generic, err := genericPayload(payload)
-		if err != nil {
-			return "", err
-		}
-		payload = stripGeneralUserOnlyFields(generic).(map[string]interface{})
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -116,6 +106,64 @@ func (b ContextBuilder) Build(req Request) (string, error) {
 		return "", errors.New("placeholder secret reached llm context")
 	}
 	return string(data), nil
+}
+
+type generalUserContextLimits struct {
+	AppLimit          int
+	IncidentLimit     int
+	FactLimit         int
+	WarningLimit      int
+	AffectedLimit     int
+	SummaryChars      int
+	ProbeMessageChars int
+	IncludeProbeRows  bool
+}
+
+func (b ContextBuilder) buildGeneralUserContext(snapshot models.Snapshot, req Request) (string, error) {
+	profiles := []generalUserContextLimits{
+		{AppLimit: 24, IncidentLimit: 8, FactLimit: 8, WarningLimit: 8, AffectedLimit: 8, SummaryChars: 220, ProbeMessageChars: 140, IncludeProbeRows: true},
+		{AppLimit: 16, IncidentLimit: 6, FactLimit: 6, WarningLimit: 6, AffectedLimit: 6, SummaryChars: 180, ProbeMessageChars: 100, IncludeProbeRows: true},
+		{AppLimit: 10, IncidentLimit: 4, FactLimit: 4, WarningLimit: 4, AffectedLimit: 4, SummaryChars: 150, ProbeMessageChars: 80, IncludeProbeRows: true},
+		{AppLimit: 8, IncidentLimit: 3, FactLimit: 3, WarningLimit: 3, AffectedLimit: 3, SummaryChars: 140, ProbeMessageChars: 0, IncludeProbeRows: false},
+		{AppLimit: 5, IncidentLimit: 2, FactLimit: 2, WarningLimit: 2, AffectedLimit: 2, SummaryChars: 120, ProbeMessageChars: 0, IncludeProbeRows: false},
+		{AppLimit: 3, IncidentLimit: 1, FactLimit: 1, WarningLimit: 1, AffectedLimit: 1, SummaryChars: 100, ProbeMessageChars: 0, IncludeProbeRows: false},
+		{AppLimit: 1, IncidentLimit: 0, FactLimit: 0, WarningLimit: 0, AffectedLimit: 0, SummaryChars: 80, ProbeMessageChars: 0, IncludeProbeRows: false},
+		{AppLimit: 0, IncidentLimit: 0, FactLimit: 0, WarningLimit: 0, AffectedLimit: 0, SummaryChars: 60, ProbeMessageChars: 0, IncludeProbeRows: false},
+	}
+	lastSize := 0
+	for _, limits := range profiles {
+		payload := map[string]interface{}{
+			"mode":        req.Mode,
+			"question":    compactText(req.Question, 500),
+			"api_report":  buildGeneralUserAPIReport(snapshot, req.Question, limits),
+			"instruction": "Explain the visible home status in plain English. Do not use technical vocabulary, request tools, execute actions, or recommend anything beyond telling the admin.",
+		}
+		generic, err := genericPayload(payload)
+		if err != nil {
+			return "", err
+		}
+		stripped, ok := stripGeneralUserOnlyFields(generic).(map[string]interface{})
+		if !ok {
+			return "", errors.New("general user llm context was not an object")
+		}
+		data, err := json.Marshal(stripped)
+		if err != nil {
+			return "", err
+		}
+		result := b.redactor.RedactString(string(data))
+		if result.Changed && req.Policy.FailClosedOnRedaction {
+			data = []byte(result.Text)
+		}
+		lastSize = len(data)
+		if lastSize > req.Policy.MaxContextBytes {
+			continue
+		}
+		if strings.Contains(string(data), "replace_me") {
+			return "", errors.New("placeholder secret reached llm context")
+		}
+		return string(data), nil
+	}
+	return "", fmt.Errorf("llm context exceeds max_context_bytes: %d > %d", lastSize, req.Policy.MaxContextBytes)
 }
 
 type apiReport struct {
@@ -388,15 +436,13 @@ func buildAPIReport(snapshot models.Snapshot) apiReport {
 	return report
 }
 
-const generalUserContextMaxApps = 24
-
-func buildGeneralUserAPIReport(snapshot models.Snapshot, question string) generalUserAPIReport {
+func buildGeneralUserAPIReport(snapshot models.Snapshot, question string, limits generalUserContextLimits) generalUserAPIReport {
 	infra := snapshot.Infrastructure
-	apps := prioritizedGeneralUserApps(snapshot.Apps, question, generalUserContextMaxApps)
+	apps := prioritizedGeneralUserApps(snapshot.Apps, question, limits.AppLimit)
 	report := generalUserAPIReport{
 		GeneratedAt:     snapshot.GeneratedAt,
 		OverallStatus:   snapshot.OverallStatus,
-		ServerSummary:   snapshot.ServerSummary,
+		ServerSummary:   compactText(snapshot.ServerSummary, limits.SummaryChars),
 		IntegrationMode: snapshot.IntegrationMode,
 		SourceHealth:    infra.SourceHealth,
 		Unraid: generalUnraidReport{
@@ -423,7 +469,7 @@ func buildGeneralUserAPIReport(snapshot models.Snapshot, question string) genera
 			UniFiGatewayReachable:   infra.UniFiGatewayReachable,
 			UniFiOfflineDeviceCount: infra.UniFiOfflineDeviceCount,
 			UniFiFirmwareUpdates:    infra.UniFiFirmwareUpdates,
-			UniFiWarnings:           append([]string(nil), infra.UniFiWarnings...),
+			UniFiWarnings:           compactStringSlice(infra.UniFiWarnings, limits.WarningLimit),
 			SourceHealth:            infra.SourceHealth.UniFi,
 		},
 		Probes: generalProbesReport{
@@ -431,7 +477,6 @@ func buildGeneralUserAPIReport(snapshot models.Snapshot, question string) genera
 			DNSOK:             infra.DNSOK,
 			RouterReachable:   infra.RouterReachable,
 			NASReachable:      infra.NASReachable,
-			AppProbeResults:   make([]generalAppProbeReport, 0, len(apps)),
 			SourceHealth:      infra.SourceHealth.Probes,
 		},
 		Incidents: make([]generalIncident, 0, len(snapshot.Incidents)),
@@ -457,43 +502,48 @@ func buildGeneralUserAPIReport(snapshot models.Snapshot, question string) genera
 			Severity:       app.Severity,
 			EndpointStatus: app.EndpointStatus,
 			DockerState:    app.DockerState,
-			Summary:        app.ServerSummary,
+			Summary:        compactText(app.ServerSummary, limits.SummaryChars),
 		})
-		report.Probes.AppProbeResults = append(report.Probes.AppProbeResults, generalAppProbeReport{
-			AppID:         app.AppID,
-			DisplayName:   app.DisplayName,
-			CurrentStatus: app.CurrentStatus,
-			Severity:      app.Severity,
-			CurrentProbeResult: generalProbeResult{
-				Type:      app.CurrentProbeResult.Type,
-				OK:        app.CurrentProbeResult.OK,
-				Message:   app.CurrentProbeResult.Message,
-				LatencyMS: app.CurrentProbeResult.LatencyMS,
-			},
-		})
+		if limits.IncludeProbeRows {
+			report.Probes.AppProbeResults = append(report.Probes.AppProbeResults, generalAppProbeReport{
+				AppID:         app.AppID,
+				DisplayName:   app.DisplayName,
+				CurrentStatus: app.CurrentStatus,
+				Severity:      app.Severity,
+				CurrentProbeResult: generalProbeResult{
+					Type:      app.CurrentProbeResult.Type,
+					OK:        app.CurrentProbeResult.OK,
+					Message:   compactText(app.CurrentProbeResult.Message, limits.ProbeMessageChars),
+					LatencyMS: app.CurrentProbeResult.LatencyMS,
+				},
+			})
+		}
 	}
-	for _, incident := range snapshot.Incidents {
+	for _, incident := range compactIncidents(snapshot.Incidents, limits.IncidentLimit) {
 		report.Incidents = append(report.Incidents, generalIncident{
 			Type:             incident.Type,
 			Severity:         incident.Severity,
 			Status:           incident.Status,
-			Summary:          incident.Summary,
-			AffectedServices: compactStringSlice(incident.AffectedServices, 8),
+			Summary:          compactText(incident.Summary, limits.SummaryChars),
+			AffectedServices: compactStringSlice(incident.AffectedServices, limits.AffectedLimit),
 		})
 	}
-	for _, fact := range snapshot.Facts {
+	for _, fact := range compactFacts(snapshot.Facts, limits.FactLimit) {
 		report.Facts = append(report.Facts, generalIncidentFact{
 			Type:             fact.Type,
 			Severity:         fact.Severity,
-			Summary:          fact.Summary,
-			AffectedServices: compactStringSlice(fact.AffectedServices, 8),
+			Summary:          compactText(fact.Summary, limits.SummaryChars),
+			AffectedServices: compactStringSlice(fact.AffectedServices, limits.AffectedLimit),
 		})
 	}
 	return report
 }
 
 func prioritizedGeneralUserApps(apps []models.AppStatus, question string, limit int) []models.AppStatus {
-	if limit <= 0 || len(apps) <= limit {
+	if limit <= 0 {
+		return nil
+	}
+	if len(apps) <= limit {
 		return append([]models.AppStatus(nil), apps...)
 	}
 	type scoredApp struct {
@@ -534,9 +584,47 @@ func prioritizedGeneralUserApps(apps []models.AppStatus, question string, limit 
 
 func compactStringSlice(values []string, limit int) []string {
 	if limit <= 0 || len(values) <= limit {
+		if limit == 0 {
+			return nil
+		}
 		return append([]string(nil), values...)
 	}
 	return append([]string(nil), values[:limit]...)
+}
+
+func compactIncidents(values []models.Incident, limit int) []models.Incident {
+	if limit <= 0 {
+		return nil
+	}
+	if len(values) <= limit {
+		return append([]models.Incident(nil), values...)
+	}
+	return append([]models.Incident(nil), values[:limit]...)
+}
+
+func compactFacts(values []models.IncidentFact, limit int) []models.IncidentFact {
+	if limit <= 0 {
+		return nil
+	}
+	if len(values) <= limit {
+		return append([]models.IncidentFact(nil), values...)
+	}
+	return append([]models.IncidentFact(nil), values[:limit]...)
+}
+
+func compactText(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if limit <= 0 || len(value) <= limit {
+		return value
+	}
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	if limit <= 3 {
+		return string(runes[:limit])
+	}
+	return strings.TrimSpace(string(runes[:limit-3])) + "..."
 }
 
 func maxInt(a, b int) int {
