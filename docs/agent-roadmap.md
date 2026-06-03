@@ -361,6 +361,18 @@ lands** — those docs currently state the LLM has no repair tools or Docker con
 
 ---
 
+## Workstream D — Admin panel polish
+
+**Status:** `in-progress` (review written → `docs/ux-admin.md`; implementation not started)
+**Goal:** Targeted fixes to the admin surface (port `8787`). The admin panel is allowed to be
+dense/technical, so this is a punch-list, not a redesign. Top items from the review: the
+floating chat overlaps interactive controls; three overlapping diagnosis entry points; the
+Admin tab is raw-JSON (turn the audit log into a filterable table); the overall-status string
+is repeated as a subtitle on every tab; mobile header crowding/truncation. Full prioritized
+findings, acceptance criteria, harness additions, and file pointers are in **`docs/ux-admin.md`**.
+
+---
+
 ## Suggested sequencing
 
 The product review's headline guidance: **freeze backend scope, fix the compact UX, and make
