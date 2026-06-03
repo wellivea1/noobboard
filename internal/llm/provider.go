@@ -17,11 +17,14 @@ type DisabledClient struct {
 func NewClient(cfg config.LLMConfig, redactor *privacy.Redactor) Client {
 	switch cfg.Provider {
 	case "openai":
+		if openAIAuthMethod(cfg) != config.OpenAIAuthMethodAPIKey {
+			return NewChatGPTClient(cfg, redactor)
+		}
 		return NewOpenAIClient(cfg, redactor)
 	case "anthropic":
 		return NewAnthropicClient(cfg, redactor)
 	default:
-		return DisabledClient{reason: `llm provider is disabled; set NOOBBOARD_LLM_PROVIDER to "openai" or "anthropic" and configure the matching API key`}
+		return DisabledClient{reason: `llm provider is disabled; set NOOBBOARD_LLM_PROVIDER to "openai" or "anthropic" and configure the matching API key or ChatGPT connector`}
 	}
 }
 
@@ -31,12 +34,28 @@ func ProviderAvailable(cfg config.LLMConfig) bool {
 	}
 	switch cfg.Provider {
 	case "openai":
+		if openAIAuthMethod(cfg) != config.OpenAIAuthMethodAPIKey {
+			return chatGPTAuthAvailable(cfg)
+		}
 		return firstConfigured(cfg.OpenAIAPIKey, os.Getenv("OPENAI_API_KEY")) != ""
 	case "anthropic":
 		return firstConfigured(cfg.AnthropicAPIKey, os.Getenv("ANTHROPIC_API_KEY")) != ""
 	default:
 		return false
 	}
+}
+
+func openAIAuthMethod(cfg config.LLMConfig) string {
+	method := strings.TrimSpace(cfg.OpenAIAuthMethod)
+	if method == "" {
+		return config.OpenAIAuthMethodAPIKey
+	}
+	return method
+}
+
+func chatGPTAuthAvailable(cfg config.LLMConfig) bool {
+	return firstConfigured(cfg.ChatGPTRefreshToken, os.Getenv("NOOBBOARD_CHATGPT_REFRESH_TOKEN"), os.Getenv("CHATGPT_REFRESH_TOKEN")) != "" &&
+		firstConfigured(cfg.ChatGPTAccountID, os.Getenv("NOOBBOARD_CHATGPT_ACCOUNT_ID"), os.Getenv("CHATGPT_ACCOUNT_ID")) != ""
 }
 
 func firstConfigured(values ...string) string {

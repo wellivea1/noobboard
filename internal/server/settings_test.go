@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -174,6 +175,188 @@ func TestLLMSettingsKeysAreWriteOnly(t *testing.T) {
 	}
 }
 
+func TestLLMSettingsChatGPTTokensAreWriteOnlyAndClearable(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "llm-chatgpt-settings")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+	cfg.LLM.Provider = "openai"
+	cfg.LLM.OpenAIAuthMethod = config.OpenAIAuthMethodChatGPTBrowser
+	cfg.LLM.ChatGPTRefreshToken = "refresh-local-test"
+	cfg.LLM.ChatGPTAccessToken = "access-local-test"
+	cfg.LLM.ChatGPTAccountID = "account-local-test"
+	cfg.LLM.ChatGPTTokenExpiresAt = time.Now().UTC().Add(time.Hour)
+
+	app := newTestApp(t, cfg)
+	router := app.Router()
+	cookie, csrf := loginAdmin(t, router)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/settings/llm", nil)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/admin/settings/llm status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	responseBody := rec.Body.String()
+	for _, secret := range []string{"refresh-local-test", "access-local-test", "account-local-test"} {
+		if strings.Contains(responseBody, secret) {
+			t.Fatalf("llm settings response exposed ChatGPT secret/account value: %s", responseBody)
+		}
+	}
+	if !strings.Contains(responseBody, `"chatgpt_connected":true`) || !strings.Contains(responseBody, `"chatgpt_account_id_set":true`) {
+		t.Fatalf("llm settings response did not report ChatGPT connection state: %s", responseBody)
+	}
+
+	rec = httptest.NewRecorder()
+	body := `{"provider":"openai","openai_auth_method":"api_key","clear_chatgpt_auth":true}`
+	req = httptest.NewRequest(http.MethodPost, "/api/admin/settings/llm", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/admin/settings/llm status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	stored, ok, err := app.deps.Store.RuntimeSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("runtime settings were not saved")
+	}
+	if stored.LLM.ChatGPTRefreshToken != "" || stored.LLM.ChatGPTAccessToken != "" || stored.LLM.ChatGPTAccountID != "" {
+		t.Fatalf("ChatGPT auth was not cleared: %#v", stored.LLM)
+	}
+}
+
+func TestOpenAIChatGPTBrowserAuthorizeURLUsesRegisteredLoopbackRedirect(t *testing.T) {
+	authURL, err := url.Parse(buildOpenAIChatGPTAuthorizeURL(openAIPKCE{Challenge: "challenge"}, "state", openAIChatGPTRedirectURI()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRedirect := "http://localhost:1455/auth/callback"
+	if got := authURL.Query().Get("redirect_uri"); got != wantRedirect {
+		t.Fatalf("redirect_uri = %q, want %q", got, wantRedirect)
+	}
+	if strings.Contains(authURL.Query().Get("redirect_uri"), "/api/admin/") {
+		t.Fatalf("browser auth redirect_uri used an unregistered admin callback path: %s", authURL.String())
+	}
+}
+
+func TestOpenAIChatGPTBrowserAuthRejectsLANOrigin(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "llm-chatgpt-browser-lan")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+
+	app := newTestApp(t, cfg)
+	router := app.Router()
+	cookie, csrf := loginAdmin(t, router)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/settings/llm/openai/browser/start", strings.NewReader(`{}`))
+	req.Host = "192.168.1.50:8787"
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("POST /api/admin/settings/llm/openai/browser/start status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	var response struct {
+		Error    string `json:"error"`
+		Fallback string `json:"fallback"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Fallback != config.OpenAIAuthMethodChatGPTHeadless || !strings.Contains(response.Error, "localhost") {
+		t.Fatalf("LAN browser auth response = %#v", response)
+	}
+}
+
+func TestOpenAIChatGPTBrowserCallbackDoesNotRequireSession(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "llm-chatgpt-browser-callback")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+
+	app := newTestApp(t, cfg)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, openAIChatGPTCallbackPath, nil)
+	app.openAIChatGPTBrowserCallback(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("GET %s status = %d, body = %s", openAIChatGPTCallbackPath, rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Header().Get("Content-Type"), "text/html") {
+		t.Fatalf("callback content type = %q, want text/html", rec.Header().Get("Content-Type"))
+	}
+}
+
+func TestUserDiagnoseAsAdminUsesCompactLLMRecipientRole(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "compact-diagnose-admin-role")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+	cfg.LLM.Provider = "openai"
+	cfg.LLM.OpenAIAuthMethod = config.OpenAIAuthMethodAPIKey
+	cfg.LLM.OpenAIAPIKey = "sk-test-local"
+	cfg.Visibility.DefaultRole = models.RoleGeneralUser
+	cfg.Visibility.GeneralUserCanUseLLM = true
+
+	app := newTestApp(t, cfg)
+	client := &recordingLLMClient{redactor: app.deps.Redactor}
+	app.settingsMu.Lock()
+	app.deps.LLM = client
+	app.settingsMu.Unlock()
+
+	router := app.Router()
+	cookie, csrf := loginAdmin(t, router)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/user/diagnose", strings.NewReader(`{"question":"What is wrong with Emby?"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/user/diagnose status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if client.request.Policy.RecipientRole != models.RoleGeneralUser {
+		t.Fatalf("compact diagnosis recipient role = %q, want %q", client.request.Policy.RecipientRole, models.RoleGeneralUser)
+	}
+	if client.request.Mode != llm.ModeGeneralUserRequested {
+		t.Fatalf("compact diagnosis mode = %q, want %q", client.request.Mode, llm.ModeGeneralUserRequested)
+	}
+	if client.contextText == "" {
+		t.Fatal("recording LLM client did not build context")
+	}
+	if strings.Contains(client.contextText, `"snapshot"`) {
+		t.Fatalf("compact diagnosis used admin snapshot payload: %s", client.contextText)
+	}
+}
+
+func TestCompactDiagnosisRoleDownscopesAdmin(t *testing.T) {
+	tests := []struct {
+		name        string
+		actorRole   models.Role
+		defaultRole models.Role
+		want        models.Role
+	}{
+		{name: "admin becomes general user when default is unset", actorRole: models.RoleAdmin, want: models.RoleGeneralUser},
+		{name: "admin cannot inherit admin compact default", actorRole: models.RoleAdmin, defaultRole: models.RoleAdmin, want: models.RoleGeneralUser},
+		{name: "admin inherits non-admin compact default", actorRole: models.RoleAdmin, defaultRole: "family", want: "family"},
+		{name: "non-admin role is preserved", actorRole: "family", defaultRole: models.RoleGeneralUser, want: "family"},
+		{name: "empty role fails closed to general user", want: models.RoleGeneralUser},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := compactDiagnosisRole(tt.actorRole, tt.defaultRole); got != tt.want {
+				t.Fatalf("compactDiagnosisRole(%q, %q) = %q, want %q", tt.actorRole, tt.defaultRole, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestIntegrationSettingsPersistAndHideKeys(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Database.Path = serverCacheTestPath(t, "integration-settings")
@@ -285,6 +468,9 @@ func TestCompactRouterExcludesAdminAPI(t *testing.T) {
 		{method: http.MethodGet, path: "/api/admin/status/full"},
 		{method: http.MethodPost, path: "/api/admin/apps/emby/action", body: `{"action":"restart"}`},
 		{method: http.MethodGet, path: "/api/admin/settings/integrations"},
+		{method: http.MethodPost, path: "/api/admin/settings/llm/openai/browser/start", body: `{}`},
+		{method: http.MethodGet, path: "/api/admin/settings/llm/openai/browser/callback?code=test&state=test"},
+		{method: http.MethodPost, path: "/api/admin/settings/llm/openai/browser/finish", body: `{"poll_id":"test"}`},
 	}
 	for _, tc := range adminCases {
 		rec := httptest.NewRecorder()
@@ -939,6 +1125,36 @@ type failingUniFiCollector struct{}
 
 func (failingUniFiCollector) Status(context.Context) (models.InfrastructureStatus, error) {
 	return models.InfrastructureStatus{}, errors.New("unifi unavailable")
+}
+
+type recordingLLMClient struct {
+	redactor    *privacy.Redactor
+	request     llm.Request
+	contextText string
+}
+
+func (c *recordingLLMClient) Diagnose(_ context.Context, req llm.Request) (llm.Diagnosis, error) {
+	c.request = req
+	redactor := c.redactor
+	if redactor == nil {
+		redactor = privacy.NewRedactor(config.PrivacyConfig{})
+	}
+	contextText, err := llm.NewContextBuilder(redactor).Build(req)
+	if err != nil {
+		return llm.Diagnosis{}, err
+	}
+	c.contextText = contextText
+	return llm.Diagnosis{
+		Severity:            models.SeverityNone,
+		Confidence:          0.98,
+		IncidentType:        models.IncidentUnknown,
+		Diagnosis:           "No problem found.",
+		Evidence:            []string{"Compact diagnosis request completed."},
+		GeneralUserSummary:  "Everything visible looks normal.",
+		AdminMessage:        "Compact diagnosis request completed.",
+		RecommendedActionID: "none",
+		ShouldNotifyAdmin:   false,
+	}, nil
 }
 
 func newTestApp(t *testing.T, cfg config.Config) *App {

@@ -2,7 +2,9 @@ package llm
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -54,6 +56,104 @@ func TestOpenAIClientUsesResponsesAPIWithStructuredOutput(t *testing.T) {
 	}
 	if diagnosis.RecommendedActionID != "none" || diagnosis.Severity != models.SeverityNone {
 		t.Fatalf("diagnosis = %#v", diagnosis)
+	}
+}
+
+func TestOpenAIClientRunsAllowedReadOnlyAgentTool(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+	cfg := config.Defaults()
+	cfg.LLM.Provider = "openai"
+	cfg.LLM.OpenAIModel = "gpt-test"
+	client := NewOpenAIClient(cfg.LLM, privacy.NewRedactor(config.PrivacyConfig{}))
+	requests := 0
+	client.http = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		requests++
+		var body map[string]interface{}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		switch requests {
+		case 1:
+			tools := body["tools"].([]interface{})
+			if len(tools) == 0 {
+				t.Fatalf("agent-enabled request did not advertise tools: %#v", body["tools"])
+			}
+			return jsonResponse(t, http.StatusOK, map[string]interface{}{
+				"output": []map[string]interface{}{
+					{
+						"type":      "function_call",
+						"id":        "fc_1",
+						"call_id":   "call_1",
+						"name":      "noobboard_network_status",
+						"arguments": `{}`,
+					},
+				},
+			})
+		case 2:
+			input := fmt.Sprint(body["input"])
+			if !strings.Contains(input, "fresh live unifi") {
+				t.Fatalf("second request did not include fresh tool output: %s", input)
+			}
+			return jsonResponse(t, http.StatusOK, map[string]string{"output_text": validDiagnosisJSON(t)})
+		default:
+			t.Fatalf("unexpected extra request %d", requests)
+		}
+		return nil, nil
+	})}
+
+	req := sampleLLMRequest()
+	req.Policy.AgentToolsEnabled = true
+	req.Policy.AgentMaxToolCalls = 2
+	req.Policy.AgentToolRules = []models.LLMAgentToolRule{{Tool: "noobboard_network_status", Action: "allow"}}
+	req.LiveSnapshot = func(context.Context) (models.Snapshot, error) {
+		snapshot := req.Snapshot
+		snapshot.IntegrationMode = "live"
+		snapshot.Infrastructure.SourceHealth.UniFi = "fresh live unifi"
+		snapshot.Infrastructure.UniFiWANUp = true
+		snapshot.Infrastructure.UniFiGatewayReachable = true
+		return snapshot, nil
+	}
+	diagnosis, err := client.Diagnose(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diagnosis.RecommendedActionID != "none" {
+		t.Fatalf("diagnosis = %#v", diagnosis)
+	}
+	if requests != 2 {
+		t.Fatalf("requests = %d, want 2", requests)
+	}
+}
+
+func TestGeneralUserCannotAdvertiseAgentToolsEvenIfPolicyIsMisconfigured(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+	cfg := config.Defaults()
+	cfg.LLM.Provider = "openai"
+	cfg.LLM.OpenAIModel = "gpt-test"
+	client := NewOpenAIClient(cfg.LLM, privacy.NewRedactor(config.PrivacyConfig{}))
+	client.http = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		var body map[string]interface{}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if tools, ok := body["tools"].([]interface{}); !ok || len(tools) != 0 {
+			t.Fatalf("general-user request advertised tools: %#v", body["tools"])
+		}
+		return jsonResponse(t, http.StatusOK, map[string]string{"output_text": validDiagnosisJSON(t)})
+	})}
+	req := sampleLLMRequest()
+	req.Mode = ModeGeneralUserRequested
+	req.Policy.RecipientRole = models.RoleGeneralUser
+	req.Policy.IncludeLogs = false
+	req.Policy.MaxContextBytes = 12000
+	req.Policy.AgentToolsEnabled = true
+	req.Policy.AgentMaxToolCalls = 2
+	req.Policy.AgentToolRules = []models.LLMAgentToolRule{{Tool: "*", Action: "allow"}}
+	req.LiveSnapshot = func(context.Context) (models.Snapshot, error) {
+		return req.Snapshot, nil
+	}
+	if _, err := client.Diagnose(context.Background(), req); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -139,6 +239,58 @@ func TestProviderUsesConfigKeys(t *testing.T) {
 	})}
 	if _, err := anthropicClient.Diagnose(context.Background(), sampleLLMRequest()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestChatGPTConnectorUsesCodexResponsesEndpoint(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.LLM.Provider = "openai"
+	cfg.LLM.OpenAIAuthMethod = config.OpenAIAuthMethodChatGPTBrowser
+	cfg.LLM.ChatGPTRefreshToken = "refresh-token"
+	cfg.LLM.ChatGPTAccessToken = "access-token"
+	cfg.LLM.ChatGPTAccountID = "account-123"
+	cfg.LLM.ChatGPTTokenExpiresAt = time.Now().UTC().Add(time.Hour)
+	cfg.LLM.OpenAIModel = "gpt-chatgpt-test"
+	if !ProviderAvailable(cfg.LLM) {
+		t.Fatal("ChatGPT connector should be available with refresh token and account id")
+	}
+	client, ok := NewClient(cfg.LLM, privacy.NewRedactor(config.PrivacyConfig{})).(*ChatGPTClient)
+	if !ok {
+		t.Fatalf("NewClient returned %T, want *ChatGPTClient", NewClient(cfg.LLM, privacy.NewRedactor(config.PrivacyConfig{})))
+	}
+	client.http = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Method != http.MethodPost || req.URL.String() != OpenAIChatGPTCodexEndpoint {
+			t.Fatalf("unexpected ChatGPT request %s %s", req.Method, req.URL.String())
+		}
+		if got := req.Header.Get("Authorization"); got != "Bearer access-token" {
+			t.Fatalf("Authorization header = %q", got)
+		}
+		if got := req.Header.Get("ChatGPT-Account-Id"); got != "account-123" {
+			t.Fatalf("ChatGPT-Account-Id header = %q", got)
+		}
+		var body map[string]interface{}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["model"] != "gpt-chatgpt-test" {
+			t.Fatalf("model = %#v", body["model"])
+		}
+		return jsonResponse(t, http.StatusOK, map[string]string{"output_text": validDiagnosisJSON(t)})
+	})}
+	if _, err := client.Diagnose(context.Background(), sampleLLMRequest()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExtractChatGPTAccountIDFromTokenClaims(t *testing.T) {
+	token := testJWT(t, map[string]interface{}{
+		"https://api.openai.com/auth": map[string]interface{}{
+			"chatgpt_account_id": "account-from-claim",
+		},
+	})
+	accountID := ExtractChatGPTAccountID(ChatGPTTokenResponse{IDToken: token})
+	if accountID != "account-from-claim" {
+		t.Fatalf("account id = %q", accountID)
 	}
 }
 
@@ -229,4 +381,17 @@ func validDiagnosisMap() map[string]interface{} {
 		"recommended_action_id": "none",
 		"should_notify_admin":   false,
 	}
+}
+
+func testJWT(t *testing.T, claims map[string]interface{}) string {
+	t.Helper()
+	header, err := json.Marshal(map[string]string{"alg": "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return base64.RawURLEncoding.EncodeToString(header) + "." + base64.RawURLEncoding.EncodeToString(payload) + ".sig"
 }

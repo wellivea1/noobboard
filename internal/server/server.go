@@ -59,6 +59,7 @@ type App struct {
 	loginLimiter           *loginLimiter
 	settingsMu             sync.RWMutex
 	runtimeIntegrationsSet bool
+	openAIAuth             *openAIAuthStore
 }
 
 const maxRequestBodyBytes int64 = 1 << 20
@@ -87,6 +88,7 @@ func New(deps Dependencies) (*App, error) {
 		deps:         deps,
 		sessions:     newSessionStore(deps.Config.Auth.SessionTimeout),
 		loginLimiter: newLoginLimiter(),
+		openAIAuth:   newOpenAIAuthStore(),
 	}
 	if settings, ok, err := deps.Store.RuntimeSettings(); err != nil {
 		return nil, err
@@ -123,6 +125,10 @@ func (a *App) AdminRouter() http.Handler {
 	mux.HandleFunc("POST /api/admin/settings/apps", a.requireAdmin(a.updateAppCatalogSettings))
 	mux.HandleFunc("GET /api/admin/settings/llm", a.requireAdmin(a.getLLMSettings))
 	mux.HandleFunc("POST /api/admin/settings/llm", a.requireAdmin(a.updateLLMSettings))
+	mux.HandleFunc("POST /api/admin/settings/llm/openai/browser/start", a.requireAdmin(a.startOpenAIChatGPTBrowserAuth))
+	mux.HandleFunc("POST /api/admin/settings/llm/openai/browser/finish", a.requireAdmin(a.finishOpenAIChatGPTBrowserAuth))
+	mux.HandleFunc("POST /api/admin/settings/llm/openai/headless/start", a.requireAdmin(a.startOpenAIChatGPTHeadlessAuth))
+	mux.HandleFunc("POST /api/admin/settings/llm/openai/headless/poll", a.requireAdmin(a.pollOpenAIChatGPTHeadlessAuth))
 	mux.HandleFunc("GET /api/admin/settings/integrations", a.requireAdmin(a.getIntegrationSettings))
 	mux.HandleFunc("POST /api/admin/settings/integrations", a.requireAdmin(a.updateIntegrationSettings))
 	mux.HandleFunc("GET /api/admin/settings/notifications", a.requireAdmin(a.getNotificationSettings))
@@ -178,6 +184,14 @@ func (a *App) Flush() {
 }
 
 func (a *App) fullSnapshot(ctx context.Context) (models.Snapshot, error) {
+	return a.collectSnapshot(ctx, true)
+}
+
+func (a *App) readOnlySnapshot(ctx context.Context) (models.Snapshot, error) {
+	return a.collectSnapshot(ctx, false)
+}
+
+func (a *App) collectSnapshot(ctx context.Context, processNotifications bool) (models.Snapshot, error) {
 	cfg, collectors := a.runtimeSnapshot()
 	infra, unraidLogs, err := collectors.Unraid.Status(ctx)
 	if err != nil {
@@ -247,7 +261,9 @@ func (a *App) fullSnapshot(ctx context.Context) (models.Snapshot, error) {
 	snapshot.NotificationInfo = notifications.RollupFromPreferences(cfg.Notifications.Enabled, cfg.Notifications.GlobalOptInEnabled, prefs)
 	auditTail, _ := a.deps.Store.AuditTail(50)
 	snapshot.AuditTail = auditTail
-	_ = a.deps.Notifications.ProcessSnapshot(ctx, snapshot)
+	if processNotifications {
+		_ = a.deps.Notifications.ProcessSnapshot(ctx, snapshot)
+	}
 	return snapshot, nil
 }
 
@@ -764,8 +780,9 @@ func (a *App) adminDiagnose(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) userDiagnose(w http.ResponseWriter, r *http.Request) {
 	a.settingsMu.RLock()
-	role := mustUser(r).Role
-	allowed := roleCanUseLLM(a.deps.Config.Visibility, role)
+	visibility := a.deps.Config.Visibility
+	role := compactDiagnosisRole(mustUser(r).Role, visibility.DefaultRole)
+	allowed := roleCanUseLLM(visibility, role)
 	a.settingsMu.RUnlock()
 	if !allowed {
 		writeError(w, http.StatusForbidden, errors.New("status chat is disabled for this role"))
@@ -781,7 +798,7 @@ func (a *App) diagnose(w http.ResponseWriter, r *http.Request, mode llm.Mode, ro
 		return
 	}
 	if !llm.ProviderAvailable(cfg.LLM) {
-		writeError(w, http.StatusForbidden, errors.New("diagnostics require NOOBBOARD_LLM_PROVIDER=openai or anthropic with the matching API key"))
+		writeError(w, http.StatusForbidden, errors.New("diagnostics require NOOBBOARD_LLM_PROVIDER=openai or anthropic with a matching API key, or an OpenAI ChatGPT connector configured in LLM settings"))
 		return
 	}
 	if err := requireCSRF(r); err != nil {
@@ -811,11 +828,19 @@ func (a *App) diagnose(w http.ResponseWriter, r *http.Request, mode llm.Mode, ro
 	}
 	policy.RecipientRole = role
 	diagnosis, err := llmClient.Diagnose(r.Context(), llm.Request{
-		Mode:     mode,
-		Policy:   policy,
-		Snapshot: full,
-		Question: body.Question,
-		ActorID:  mustUser(r).ID,
+		Mode:         mode,
+		Policy:       policy,
+		Snapshot:     full,
+		Question:     body.Question,
+		ActorID:      mustUser(r).ID,
+		LiveSnapshot: a.readOnlySnapshot,
+		ToolAudit: func(name string, ok bool, errText string) {
+			details := map[string]interface{}{"mode": string(mode), "tool": name, "ok": ok}
+			if errText != "" {
+				details["error"] = errText
+			}
+			a.deps.Audit.Record(mustUser(r).ID, "llm.agent_tool", details)
+		},
 	})
 	if err != nil {
 		a.deps.Audit.Record(mustUser(r).ID, "llm.failed", map[string]interface{}{"mode": string(mode), "error": err.Error()})
@@ -1088,6 +1113,9 @@ func (a *App) updateLLMSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.deps.Audit.Record(mustUser(r).ID, "settings.llm.saved", map[string]interface{}{"path": r.URL.Path, "provider": settings.Provider})
+	if chatGPTAuthPresent(current) && !chatGPTAuthPresent(settings) {
+		a.deps.Audit.Record(mustUser(r).ID, "settings.llm.chatgpt.cleared", map[string]interface{}{"path": r.URL.Path})
+	}
 	writeJSON(w, http.StatusOK, llmSettingsResponse(settings))
 }
 
@@ -1162,22 +1190,28 @@ func (a *App) updateNotificationSettings(w http.ResponseWriter, r *http.Request)
 }
 
 type llmSettingsView struct {
-	Enabled            bool                        `json:"enabled"`
-	Provider           string                      `json:"provider"`
-	OpenAIModel        string                      `json:"openai_model"`
-	OpenAIAPIKeySet    bool                        `json:"openai_api_key_set"`
-	AnthropicModel     string                      `json:"anthropic_model"`
-	AnthropicAPIKeySet bool                        `json:"anthropic_api_key_set"`
-	Timeout            time.Duration               `json:"timeout"`
-	Policies           map[string]models.LLMPolicy `json:"policies"`
+	Enabled               bool                        `json:"enabled"`
+	Provider              string                      `json:"provider"`
+	OpenAIAuthMethod      string                      `json:"openai_auth_method"`
+	OpenAIModel           string                      `json:"openai_model"`
+	OpenAIAPIKeySet       bool                        `json:"openai_api_key_set"`
+	ChatGPTConnected      bool                        `json:"chatgpt_connected"`
+	ChatGPTAccessTokenSet bool                        `json:"chatgpt_access_token_set"`
+	ChatGPTAccountIDSet   bool                        `json:"chatgpt_account_id_set"`
+	AnthropicModel        string                      `json:"anthropic_model"`
+	AnthropicAPIKeySet    bool                        `json:"anthropic_api_key_set"`
+	Timeout               time.Duration               `json:"timeout"`
+	Policies              map[string]models.LLMPolicy `json:"policies"`
 }
 
 type llmSettingsUpdate struct {
 	Enabled              *bool                       `json:"enabled"`
 	Provider             *string                     `json:"provider"`
+	OpenAIAuthMethod     *string                     `json:"openai_auth_method"`
 	OpenAIModel          *string                     `json:"openai_model"`
 	OpenAIAPIKey         *string                     `json:"openai_api_key"`
 	ClearOpenAIAPIKey    bool                        `json:"clear_openai_api_key"`
+	ClearChatGPTAuth     bool                        `json:"clear_chatgpt_auth"`
 	AnthropicModel       *string                     `json:"anthropic_model"`
 	AnthropicAPIKey      *string                     `json:"anthropic_api_key"`
 	ClearAnthropicAPIKey bool                        `json:"clear_anthropic_api_key"`
@@ -1233,14 +1267,18 @@ type integrationSettingsUpdate struct {
 
 func llmSettingsResponse(cfg config.LLMConfig) llmSettingsView {
 	return llmSettingsView{
-		Enabled:            cfg.Enabled,
-		Provider:           cfg.Provider,
-		OpenAIModel:        cfg.OpenAIModel,
-		OpenAIAPIKeySet:    strings.TrimSpace(cfg.OpenAIAPIKey) != "",
-		AnthropicModel:     cfg.AnthropicModel,
-		AnthropicAPIKeySet: strings.TrimSpace(cfg.AnthropicAPIKey) != "",
-		Timeout:            cfg.Timeout,
-		Policies:           cfg.Policies,
+		Enabled:               cfg.Enabled,
+		Provider:              cfg.Provider,
+		OpenAIAuthMethod:      firstNonEmpty(strings.TrimSpace(cfg.OpenAIAuthMethod), config.OpenAIAuthMethodAPIKey),
+		OpenAIModel:           cfg.OpenAIModel,
+		OpenAIAPIKeySet:       strings.TrimSpace(cfg.OpenAIAPIKey) != "",
+		ChatGPTConnected:      strings.TrimSpace(cfg.ChatGPTRefreshToken) != "" && strings.TrimSpace(cfg.ChatGPTAccountID) != "",
+		ChatGPTAccessTokenSet: strings.TrimSpace(cfg.ChatGPTAccessToken) != "",
+		ChatGPTAccountIDSet:   strings.TrimSpace(cfg.ChatGPTAccountID) != "",
+		AnthropicModel:        cfg.AnthropicModel,
+		AnthropicAPIKeySet:    strings.TrimSpace(cfg.AnthropicAPIKey) != "",
+		Timeout:               cfg.Timeout,
+		Policies:              cfg.Policies,
 	}
 }
 
@@ -1256,6 +1294,9 @@ func decodeLLMSettingsUpdate(r *http.Request, current config.LLMConfig) (config.
 	if update.Provider != nil {
 		settings.Provider = strings.TrimSpace(*update.Provider)
 	}
+	if update.OpenAIAuthMethod != nil {
+		settings.OpenAIAuthMethod = strings.TrimSpace(*update.OpenAIAuthMethod)
+	}
 	if update.OpenAIModel != nil {
 		settings.OpenAIModel = strings.TrimSpace(*update.OpenAIModel)
 	}
@@ -1265,6 +1306,12 @@ func decodeLLMSettingsUpdate(r *http.Request, current config.LLMConfig) (config.
 		if key := strings.TrimSpace(*update.OpenAIAPIKey); key != "" {
 			settings.OpenAIAPIKey = key
 		}
+	}
+	if update.ClearChatGPTAuth {
+		settings.ChatGPTRefreshToken = ""
+		settings.ChatGPTAccessToken = ""
+		settings.ChatGPTTokenExpiresAt = time.Time{}
+		settings.ChatGPTAccountID = ""
 	}
 	if update.AnthropicModel != nil {
 		settings.AnthropicModel = strings.TrimSpace(*update.AnthropicModel)
@@ -1643,10 +1690,84 @@ func normalizeVisibilitySettings(settings models.VisibilitySettings) models.Visi
 }
 
 func normalizeLLMSettings(settings config.LLMConfig) config.LLMConfig {
+	defaults := config.Defaults().LLM
+	settings.Provider = strings.TrimSpace(settings.Provider)
 	if settings.Provider == "" || settings.Provider == "mock" {
 		settings.Provider = "disabled"
 	}
+	settings.OpenAIAuthMethod = strings.TrimSpace(settings.OpenAIAuthMethod)
+	if settings.OpenAIAuthMethod == "" {
+		settings.OpenAIAuthMethod = config.OpenAIAuthMethodAPIKey
+	}
+	settings.OpenAIAPIKey = strings.TrimSpace(settings.OpenAIAPIKey)
+	settings.OpenAIModel = strings.TrimSpace(settings.OpenAIModel)
+	if settings.OpenAIModel == "" {
+		settings.OpenAIModel = defaults.OpenAIModel
+	}
+	settings.ChatGPTRefreshToken = strings.TrimSpace(settings.ChatGPTRefreshToken)
+	settings.ChatGPTAccessToken = strings.TrimSpace(settings.ChatGPTAccessToken)
+	settings.ChatGPTAccountID = strings.TrimSpace(settings.ChatGPTAccountID)
+	settings.AnthropicAPIKey = strings.TrimSpace(settings.AnthropicAPIKey)
+	settings.AnthropicModel = strings.TrimSpace(settings.AnthropicModel)
+	if settings.AnthropicModel == "" {
+		settings.AnthropicModel = defaults.AnthropicModel
+	}
+	if settings.Timeout == 0 {
+		settings.Timeout = defaults.Timeout
+	}
+	settings.Policies = normalizeLLMPolicies(settings.Policies, defaults.Policies)
 	return settings
+}
+
+func normalizeLLMPolicies(policies, defaults map[string]models.LLMPolicy) map[string]models.LLMPolicy {
+	if policies == nil {
+		policies = map[string]models.LLMPolicy{}
+	}
+	out := make(map[string]models.LLMPolicy, len(policies)+len(defaults))
+	for name, fallback := range defaults {
+		policy, ok := policies[name]
+		if !ok {
+			out[name] = fallback
+			continue
+		}
+		out[name] = normalizeLLMPolicy(policy, fallback)
+	}
+	for name, policy := range policies {
+		if _, ok := out[name]; ok {
+			continue
+		}
+		out[name] = normalizeLLMPolicy(policy, models.LLMPolicy{AgentMaxToolCalls: 3})
+	}
+	return out
+}
+
+func normalizeLLMPolicy(policy, fallback models.LLMPolicy) models.LLMPolicy {
+	if policy.Name == "" {
+		policy.Name = fallback.Name
+	}
+	if policy.MaxContextBytes <= 0 {
+		policy.MaxContextBytes = fallback.MaxContextBytes
+	}
+	if policy.AgentMaxToolCalls <= 0 {
+		policy.AgentMaxToolCalls = fallback.AgentMaxToolCalls
+	}
+	if len(policy.AgentToolRules) == 0 && len(fallback.AgentToolRules) > 0 {
+		policy.AgentToolRules = append([]models.LLMAgentToolRule(nil), fallback.AgentToolRules...)
+	}
+	for i := range policy.AgentToolRules {
+		policy.AgentToolRules[i].Tool = strings.TrimSpace(policy.AgentToolRules[i].Tool)
+		policy.AgentToolRules[i].Action = strings.TrimSpace(policy.AgentToolRules[i].Action)
+	}
+	if policy.AgentToolsEnabled && policy.RecipientRole != models.RoleAdmin {
+		policy.AgentToolsEnabled = false
+	}
+	return policy
+}
+
+func chatGPTAuthPresent(settings config.LLMConfig) bool {
+	return strings.TrimSpace(settings.ChatGPTRefreshToken) != "" ||
+		strings.TrimSpace(settings.ChatGPTAccessToken) != "" ||
+		strings.TrimSpace(settings.ChatGPTAccountID) != ""
 }
 
 func normalizeRoleVisibility(settings models.VisibilitySettings) []models.RoleVisibility {
@@ -1690,6 +1811,19 @@ func roleCanUseLLM(settings models.VisibilitySettings, role models.Role) bool {
 		}
 	}
 	return settings.GeneralUserCanUseLLM
+}
+
+func compactDiagnosisRole(actorRole, defaultRole models.Role) models.Role {
+	if actorRole == "" {
+		return models.RoleGeneralUser
+	}
+	if actorRole != models.RoleAdmin {
+		return actorRole
+	}
+	if defaultRole == "" || defaultRole == models.RoleAdmin {
+		return models.RoleGeneralUser
+	}
+	return defaultRole
 }
 
 func compactStrings(values []string) []string {

@@ -269,7 +269,7 @@ Settings destination: notifications + account), is specified in **`docs/ux-compa
 
 ## Workstream C — Customizable LLM access + optional full agent access
 
-**Status:** `not-started`
+**Status:** `in-progress` (read-only live API tools implemented; mutating repair tools not started)
 **Goal:** (1) Make LLM access easy to customize per role/policy, and (2) add an **opt-in,
 manually enabled** "agent mode" where the LLM can *act* to resolve problems (e.g., restart
 a stuck container) rather than only producing an advisory report.
@@ -302,13 +302,20 @@ than a general coding agent.
 `internal/models/models.go`, settings handlers in `internal/server/server.go`,
 `web/public/app.js`.
 
-### Part 2 — Full agent access (opt-in, fail-closed)
-Today the LLM returns a read-only `Diagnosis` (`internal/llm/schema.go`) with a
-`recommended_action_id` — it advises, it does not act. Agent mode lets the model call a
-small, vetted set of **tools** that map onto operations the app already performs safely.
+### Part 2 — Agent access (opt-in, fail-closed)
+The baseline LLM returns a read-only `Diagnosis` (`internal/llm/schema.go`) with a
+`recommended_action_id` — it advises, it does not mutate anything. Agent mode lets the
+model call a small, vetted set of **tools** that map onto operations the app already
+performs safely.
 
 **Design, grounded in the references:**
-- **Narrow tool allowlist.** Tools wrap existing audited operations only:
+- **Read-only live API tools (implemented first).** Admin-requested diagnosis can opt into
+  `noobboard_current_status`, `noobboard_server_status`, `noobboard_network_status`, and
+  `noobboard_app_status`. These tools refresh sanitized NoobBoard snapshots through the
+  normal collectors and never expose raw API clients, credentials, shell, filesystem,
+  Docker control, Unraid mutations, or UniFi configuration mutation. General-user policies
+  never receive tools.
+- **Future narrow mutation allowlist.** Tools wrap existing audited operations only:
   `get_status`, `get_logs` (bounded + redacted), `docker_restart`, `docker_start`,
   `docker_stop` — all already admin-only, CSRF/audit-gated, and resolved from the
   server-side snapshot. **No shell, no filesystem, no arbitrary commands, no Unraid/UniFi
