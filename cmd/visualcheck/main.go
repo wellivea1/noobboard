@@ -40,16 +40,22 @@ type visualResult struct {
 }
 
 type screenshots struct {
-	DesktopOverview string `json:"desktopOverview"`
-	DesktopServer   string `json:"desktopServer"`
-	DesktopRouter   string `json:"desktopRouter"`
-	DesktopApps     string `json:"desktopApps"`
-	DesktopSettings string `json:"desktopSettings"`
-	MobileOverview  string `json:"mobileOverview"`
-	MobileRouter    string `json:"mobileRouter"`
-	MobileApps      string `json:"mobileApps"`
-	MobileSettings  string `json:"mobileSettings"`
-	MobileUserHome  string `json:"mobileUserHome"`
+	DesktopOverview    string `json:"desktopOverview"`
+	DesktopServer      string `json:"desktopServer"`
+	DesktopRouter      string `json:"desktopRouter"`
+	DesktopApps        string `json:"desktopApps"`
+	DesktopIncidents   string `json:"desktopIncidents"`
+	DesktopDiagnostics string `json:"desktopDiagnostics"`
+	DesktopAdmin       string `json:"desktopAdmin"`
+	DesktopSettings    string `json:"desktopSettings"`
+	MobileOverview     string `json:"mobileOverview"`
+	MobileRouter       string `json:"mobileRouter"`
+	MobileApps         string `json:"mobileApps"`
+	MobileIncidents    string `json:"mobileIncidents"`
+	MobileDiagnostics  string `json:"mobileDiagnostics"`
+	MobileAdmin        string `json:"mobileAdmin"`
+	MobileSettings     string `json:"mobileSettings"`
+	MobileUserHome     string `json:"mobileUserHome"`
 }
 
 type flags struct {
@@ -60,10 +66,16 @@ type flags struct {
 	OverviewCardCount       int      `json:"overviewCardCount,omitempty"`
 	OverviewMoveButtonCount int      `json:"overviewMoveButtonCount,omitempty"`
 	OverviewRearrangeReady  bool     `json:"overviewRearrangeReady,omitempty"`
+	PageSubtitle            string   `json:"pageSubtitle,omitempty"`
 	ServerHealthRowCount    int      `json:"serverHealthRowCount,omitempty"`
 	RouterStatusRowCount    int      `json:"routerStatusRowCount,omitempty"`
 	AppCardCount            int      `json:"appCardCount,omitempty"`
 	AppLogoCount            int      `json:"appLogoCount,omitempty"`
+	IncidentCardCount       int      `json:"incidentCardCount,omitempty"`
+	DiagnosticPanelCount    int      `json:"diagnosticPanelCount,omitempty"`
+	AuditTableRowCount      int      `json:"auditTableRowCount,omitempty"`
+	RawSnapshotCollapsed    bool     `json:"rawSnapshotCollapsed,omitempty"`
+	AssistantOverlapCount   int      `json:"assistantOverlapCount,omitempty"`
 	SettingsEditorCount     int      `json:"settingsEditorCount,omitempty"`
 	SettingsControlCount    int      `json:"settingsControlCount,omitempty"`
 	SettingsMenuButtonCount int      `json:"settingsMenuButtonCount,omitempty"`
@@ -296,6 +308,33 @@ func run(opts options) (visualResult, error) {
 		return result, err
 	}
 
+	incidents, err := evalFlags(cdp, incidentsExpression)
+	if err != nil {
+		return result, err
+	}
+	result.Screenshots.DesktopIncidents = filepath.Join(cache, "visual-desktop-incidents-"+runID+".png")
+	if err := captureScreenshot(cdp, result.Screenshots.DesktopIncidents); err != nil {
+		return result, err
+	}
+
+	diagnostics, err := evalFlags(cdp, diagnosticsExpression)
+	if err != nil {
+		return result, err
+	}
+	result.Screenshots.DesktopDiagnostics = filepath.Join(cache, "visual-desktop-diagnostics-"+runID+".png")
+	if err := captureScreenshot(cdp, result.Screenshots.DesktopDiagnostics); err != nil {
+		return result, err
+	}
+
+	admin, err := evalFlags(cdp, adminExpression)
+	if err != nil {
+		return result, err
+	}
+	result.Screenshots.DesktopAdmin = filepath.Join(cache, "visual-desktop-admin-"+runID+".png")
+	if err := captureScreenshot(cdp, result.Screenshots.DesktopAdmin); err != nil {
+		return result, err
+	}
+
 	settings, err := evalFlags(cdp, settingsExpression)
 	if err != nil {
 		return result, err
@@ -361,6 +400,30 @@ func run(opts options) (visualResult, error) {
 	if err := captureScreenshot(cdp, result.Screenshots.MobileApps); err != nil {
 		return result, err
 	}
+	mobileIncidents, err := evalFlags(cdp, incidentsExpression)
+	if err != nil {
+		return result, err
+	}
+	result.Screenshots.MobileIncidents = filepath.Join(cache, "visual-mobile-incidents-"+runID+".png")
+	if err := captureScreenshot(cdp, result.Screenshots.MobileIncidents); err != nil {
+		return result, err
+	}
+	mobileDiagnostics, err := evalFlags(cdp, diagnosticsExpression)
+	if err != nil {
+		return result, err
+	}
+	result.Screenshots.MobileDiagnostics = filepath.Join(cache, "visual-mobile-diagnostics-"+runID+".png")
+	if err := captureScreenshot(cdp, result.Screenshots.MobileDiagnostics); err != nil {
+		return result, err
+	}
+	mobileAdmin, err := evalFlags(cdp, adminExpression)
+	if err != nil {
+		return result, err
+	}
+	result.Screenshots.MobileAdmin = filepath.Join(cache, "visual-mobile-admin-"+runID+".png")
+	if err := captureScreenshot(cdp, result.Screenshots.MobileAdmin); err != nil {
+		return result, err
+	}
 	mobileSettings, err := evalFlags(cdp, settingsExpression)
 	if err != nil {
 		return result, err
@@ -388,19 +451,25 @@ func run(opts options) (visualResult, error) {
 	}
 
 	result.Flags = map[string]flags{
-		"overview":       overview,
-		"server":         serverFlags,
-		"router":         router,
-		"apps":           apps,
-		"settings":       settings,
-		"customization":  monitorCustomization,
-		"mobileOverview": mobileOverview,
-		"mobileRouter":   mobileRouter,
-		"mobileApps":     mobileApps,
-		"mobileSettings": mobileSettings,
-		"mobileUserHome": mobileUserHome,
+		"overview":          overview,
+		"server":            serverFlags,
+		"router":            router,
+		"apps":              apps,
+		"incidents":         incidents,
+		"diagnostics":       diagnostics,
+		"admin":             admin,
+		"settings":          settings,
+		"customization":     monitorCustomization,
+		"mobileOverview":    mobileOverview,
+		"mobileRouter":      mobileRouter,
+		"mobileApps":        mobileApps,
+		"mobileIncidents":   mobileIncidents,
+		"mobileDiagnostics": mobileDiagnostics,
+		"mobileAdmin":       mobileAdmin,
+		"mobileSettings":    mobileSettings,
+		"mobileUserHome":    mobileUserHome,
 	}
-	if err := assertVisualFlags(overview, serverFlags, router, apps, settings, monitorCustomization, mobileOverview, mobileRouter, mobileApps, mobileSettings, mobileUserHome); err != nil {
+	if err := assertVisualFlags(overview, serverFlags, router, apps, incidents, diagnostics, admin, settings, monitorCustomization, mobileOverview, mobileRouter, mobileApps, mobileIncidents, mobileDiagnostics, mobileAdmin, mobileSettings, mobileUserHome); err != nil {
 		return result, err
 	}
 
@@ -531,7 +600,7 @@ func captureScreenshot(cdp *cdpClient, path string) error {
 	return os.WriteFile(path, data, 0o644)
 }
 
-func assertVisualFlags(overview, server, router, apps, settings, customization, mobileOverview, mobileRouter, mobileApps, mobileSettings, mobileUserHome flags) error {
+func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, admin, settings, customization, mobileOverview, mobileRouter, mobileApps, mobileIncidents, mobileDiagnostics, mobileAdmin, mobileSettings, mobileUserHome flags) error {
 	var failures []string
 	if !overview.DashboardVisible {
 		failures = append(failures, "dashboard was not visible after login")
@@ -560,14 +629,32 @@ func assertVisualFlags(overview, server, router, apps, settings, customization, 
 	if apps.AppLogoCount < 1 {
 		failures = append(failures, "apps tab did not render app logos")
 	}
+	if incidents.IncidentCardCount < 1 || mobileIncidents.IncidentCardCount < 1 {
+		failures = append(failures, "incidents tab did not render incident cards")
+	}
+	if diagnostics.DiagnosticPanelCount < 2 || mobileDiagnostics.DiagnosticPanelCount < 2 {
+		failures = append(failures, "diagnostics tab did not render diagnosis panels")
+	}
+	if admin.AuditTableRowCount < 1 || mobileAdmin.AuditTableRowCount < 1 {
+		failures = append(failures, "admin audit log did not render as a table")
+	}
+	if !admin.RawSnapshotCollapsed || !mobileAdmin.RawSnapshotCollapsed {
+		failures = append(failures, "raw admin snapshot debug disclosure was not collapsed")
+	}
+	if admin.PageSubtitle == overview.PageSubtitle || settings.PageSubtitle == overview.PageSubtitle || diagnostics.PageSubtitle == overview.PageSubtitle {
+		failures = append(failures, "admin/settings/diagnostics subtitle repeated overall status")
+	}
+	if overview.AssistantOverlapCount > 0 || settings.AssistantOverlapCount > 0 || mobileSettings.AssistantOverlapCount > 0 {
+		failures = append(failures, "assistant launcher overlapped interactive controls")
+	}
 	if apps.BodyHorizontalOverflow {
 		failures = append(failures, "apps tab horizontal overflow detected")
 	}
 	if apps.ButtonTextOverflow {
 		failures = append(failures, "apps tab button text overflow detected")
 	}
-	if overview.ElementBoundsOverflow || server.ElementBoundsOverflow || router.ElementBoundsOverflow || apps.ElementBoundsOverflow || settings.ElementBoundsOverflow {
-		failures = append(failures, "desktop component bounds overflow detected: "+firstNonEmpty(overview.ElementBoundsOffender, server.ElementBoundsOffender, router.ElementBoundsOffender, apps.ElementBoundsOffender, settings.ElementBoundsOffender))
+	if overview.ElementBoundsOverflow || server.ElementBoundsOverflow || router.ElementBoundsOverflow || apps.ElementBoundsOverflow || incidents.ElementBoundsOverflow || diagnostics.ElementBoundsOverflow || admin.ElementBoundsOverflow || settings.ElementBoundsOverflow {
+		failures = append(failures, "desktop component bounds overflow detected: "+firstNonEmpty(overview.ElementBoundsOffender, server.ElementBoundsOffender, router.ElementBoundsOffender, apps.ElementBoundsOffender, incidents.ElementBoundsOffender, diagnostics.ElementBoundsOffender, admin.ElementBoundsOffender, settings.ElementBoundsOffender))
 	}
 	if settings.SettingsControlCount < 12 {
 		failures = append(failures, "structured settings controls did not render")
@@ -620,8 +707,8 @@ func assertVisualFlags(overview, server, router, apps, settings, customization, 
 	if mobileOverview.ButtonTextOverflow || mobileRouter.ButtonTextOverflow {
 		failures = append(failures, "mobile button text overflow detected")
 	}
-	if mobileOverview.ElementBoundsOverflow || mobileRouter.ElementBoundsOverflow || mobileApps.ElementBoundsOverflow || mobileSettings.ElementBoundsOverflow {
-		failures = append(failures, "mobile component bounds overflow detected: "+firstNonEmpty(mobileOverview.ElementBoundsOffender, mobileRouter.ElementBoundsOffender, mobileApps.ElementBoundsOffender, mobileSettings.ElementBoundsOffender))
+	if mobileOverview.ElementBoundsOverflow || mobileRouter.ElementBoundsOverflow || mobileApps.ElementBoundsOverflow || mobileIncidents.ElementBoundsOverflow || mobileDiagnostics.ElementBoundsOverflow || mobileAdmin.ElementBoundsOverflow || mobileSettings.ElementBoundsOverflow {
+		failures = append(failures, "mobile component bounds overflow detected: "+firstNonEmpty(mobileOverview.ElementBoundsOffender, mobileRouter.ElementBoundsOffender, mobileApps.ElementBoundsOffender, mobileIncidents.ElementBoundsOffender, mobileDiagnostics.ElementBoundsOffender, mobileAdmin.ElementBoundsOffender, mobileSettings.ElementBoundsOffender))
 	}
 	if !mobileOverview.ViewportFitCover || !mobileUserHome.ViewportFitCover {
 		failures = append(failures, "mobile viewport-fit=cover metadata missing")
@@ -868,6 +955,7 @@ const overviewExpression = `(async () => {
   const buttonTextOverflow = hasButtonTextOverflow();
   return {
     pageTitle: document.querySelector('#page-title')?.textContent || '',
+    pageSubtitle: document.querySelector('#summary')?.textContent || '',
     overviewCardCount: document.querySelectorAll('#overview-cards .overview-card').length,
     overviewMoveButtonCount: document.querySelectorAll('.overview-move').length,
     overviewRearrangeReady,
@@ -886,6 +974,7 @@ const serverExpression = `(async () => {
   const buttonTextOverflow = hasButtonTextOverflow();
   return {
     pageTitle: document.querySelector('#page-title')?.textContent || '',
+    pageSubtitle: document.querySelector('#summary')?.textContent || '',
     serverHealthRowCount: document.querySelectorAll('#server-health-grid .status-list-row').length,
     detailSectionCount: document.querySelectorAll('#server-detail-grid .detail-section').length,
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
@@ -905,6 +994,7 @@ const routerExpression = `(async () => {
   const buttonTextOverflow = hasButtonTextOverflow();
   return {
     pageTitle: document.querySelector('#page-title')?.textContent || '',
+    pageSubtitle: document.querySelector('#summary')?.textContent || '',
     routerStatusRowCount: document.querySelectorAll('#router-status-grid .status-list-row').length,
     detailSectionCount: document.querySelectorAll('#router-detail-grid .detail-section').length,
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
@@ -923,11 +1013,65 @@ const appsExpression = `(async () => {
   const buttonTextOverflow = hasButtonTextOverflow();
   return {
     pageTitle: document.querySelector('#page-title')?.textContent || '',
+    pageSubtitle: document.querySelector('#summary')?.textContent || '',
     appCardCount: document.querySelectorAll('#apps .app-card').length,
     appLogoCount: document.querySelectorAll('#apps .app-logo').length,
     detailSectionCount: document.querySelectorAll('.detail-section').length,
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow,
+    ...mobileAudit
+  };
+})()`
+
+const incidentsExpression = `(async () => {
+  document.querySelector('[data-tab="incidents"]')?.click();
+  const started = Date.now();
+  while (document.querySelectorAll('#incident-list .incident-card').length < 1 && Date.now() - started < 5000) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  const mobileAudit = await auditMobileShell();
+  return {
+    pageTitle: document.querySelector('#page-title')?.textContent || '',
+    pageSubtitle: document.querySelector('#summary')?.textContent || '',
+    incidentCardCount: document.querySelectorAll('#incident-list .incident-card').length,
+    bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
+    buttonTextOverflow: hasButtonTextOverflow(),
+    ...mobileAudit
+  };
+})()`
+
+const diagnosticsExpression = `(async () => {
+  document.querySelector('[data-tab="diagnostics"]')?.click();
+  const started = Date.now();
+  while (document.querySelectorAll('#tab-diagnostics .panel').length < 2 && Date.now() - started < 5000) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  const mobileAudit = await auditMobileShell();
+  return {
+    pageTitle: document.querySelector('#page-title')?.textContent || '',
+    pageSubtitle: document.querySelector('#summary')?.textContent || '',
+    diagnosticPanelCount: document.querySelectorAll('#tab-diagnostics .panel').length,
+    bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
+    buttonTextOverflow: hasButtonTextOverflow(),
+    ...mobileAudit
+  };
+})()`
+
+const adminExpression = `(async () => {
+  document.querySelector('[data-tab="admin"]')?.click();
+  const started = Date.now();
+  while (document.querySelectorAll('#audit-output table tbody tr').length < 1 && Date.now() - started < 5000) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  const debug = document.querySelector('.debug-disclosure');
+  const mobileAudit = await auditMobileShell();
+  return {
+    pageTitle: document.querySelector('#page-title')?.textContent || '',
+    pageSubtitle: document.querySelector('#summary')?.textContent || '',
+    auditTableRowCount: document.querySelectorAll('#audit-output table tbody tr').length,
+    rawSnapshotCollapsed: !!debug && !debug.open,
+    bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
+    buttonTextOverflow: hasButtonTextOverflow(),
     ...mobileAudit
   };
 })()`
@@ -1030,7 +1174,7 @@ const generalUserExpression = `(async () => {
 })()`
 
 const auditMobileShellExpression = `async function auditMobileShell() {
-  const visibleControls = [...document.querySelectorAll('button,input,textarea')]
+  const visibleControls = [...document.querySelectorAll('button,input,textarea,select')]
     .filter((element) => element.getClientRects().length && getComputedStyle(element).visibility !== 'hidden' && getComputedStyle(element).display !== 'none');
   const smallTouchTargets = visibleControls.filter((element) => {
     const rect = element.getBoundingClientRect();
@@ -1054,6 +1198,7 @@ const auditMobileShellExpression = `async function auditMobileShell() {
     smallTouchTargets,
     sourcePillText: document.querySelector('#source-pill')?.textContent || '',
     detailSectionCount: document.querySelectorAll('.detail-section').length,
+    assistantOverlapCount: assistantControlOverlapCount(),
     elementBoundsOverflow: componentBoundsOverflow(),
     elementBoundsOffender: componentBoundsOffender()
   };
@@ -1102,6 +1247,20 @@ function componentBoundsOverflow() {
   return componentBoundsOffender() !== '';
 }
 
+function assistantControlOverlapCount() {
+  const dock = document.querySelector('#assistant-dock');
+  if (!dock || !visibleElement(dock)) return 0;
+  const dockRect = dock.getBoundingClientRect();
+  return [...document.querySelectorAll('button,input,textarea,select,summary,a[href]')]
+    .filter((element) => visibleElement(element) && !dock.contains(element))
+    .filter((element) => rectsIntersect(dockRect, element.getBoundingClientRect()))
+    .length;
+}
+
+function rectsIntersect(a, b) {
+  return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+}
+
 function componentBoundsOffender() {
   const parents = [...document.querySelectorAll('.overview-card,.status-list-row,.detail-section,.user-status-card,.user-app-card,.app-card,.role-detail,.role-nav-item,.user-editor,.settings-card,.fact-row,.incident-card')];
   for (const parent of parents) {
@@ -1136,15 +1295,16 @@ const settingsExpression = `(async () => {
     .filter((element) => !element.hidden && getComputedStyle(element).display !== 'none').length;
   const settingsControlCount = document.querySelectorAll('.settings-card input,.settings-card select,.settings-card button').length;
   const buttonTextOverflow = hasButtonTextOverflow();
+  const mobileAudit = await auditMobileShell();
   return {
     pageTitle: document.querySelector('#page-title')?.textContent || '',
+    pageSubtitle: document.querySelector('#summary')?.textContent || '',
     settingsEditorCount: document.querySelectorAll('.settings-editor').length,
     settingsControlCount,
     settingsMenuButtonCount: document.querySelectorAll('#settings-menu [data-settings-section]').length,
     visibleSettingsSections,
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow,
-    elementBoundsOverflow: componentBoundsOverflow(),
-    elementBoundsOffender: componentBoundsOffender()
+    ...mobileAudit
   };
 })()`

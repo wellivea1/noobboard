@@ -1489,39 +1489,44 @@ button.command.app-control:focus-visible {
 
 .settings-workspace {
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
-  gap: 14px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
   align-items: start;
 }
 
+.settings-menu-head {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 780;
+  text-transform: uppercase;
+}
+
 .settings-menu {
-  position: sticky;
-  top: calc(12px + var(--safe-top));
-  display: grid;
+  display: flex;
+  min-height: 44px;
   min-width: 0;
+  overflow-x: auto;
   border: 1px solid var(--border);
   background: var(--surface);
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
 }
 
 .settings-menu button {
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  min-height: 52px;
-  border-width: 0 0 1px 4px;
-  border-right-color: transparent;
+  flex: 0 0 auto;
+  min-height: 44px;
+  border-width: 0 0 3px 0;
   border-bottom-color: var(--border-soft);
-  border-left-color: transparent;
-  padding-inline: 14px;
-  text-align: left;
+  padding-inline: 12px;
+  white-space: nowrap;
 }
 
 .settings-menu button:last-child {
-  border-bottom-color: transparent;
+  border-right-color: transparent;
 }
 
 .settings-menu button.active {
-  border-left-color: var(--accent-strong);
+  border-bottom-color: var(--accent-strong);
   background: rgba(107, 199, 186, 0.12);
   color: var(--accent-strong);
 }
@@ -1547,6 +1552,102 @@ button.command.app-control:focus-visible {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+}
+
+.audit-filter {
+  max-width: 420px;
+}
+
+.audit-table-meta {
+  min-height: 20px;
+}
+
+.audit-table-wrap {
+  min-width: 0;
+  overflow-x: auto;
+  border: 1px solid var(--border-soft);
+  background: var(--surface-alt);
+  -webkit-overflow-scrolling: touch;
+}
+
+.audit-table {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.audit-table th,
+.audit-table td {
+  border-bottom: 1px solid var(--border-soft);
+  padding: 9px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.audit-table th {
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 820;
+  text-transform: uppercase;
+}
+
+.audit-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.audit-detail-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.audit-chip,
+.evidence-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  max-width: 100%;
+  border: 1px solid var(--border-soft);
+  padding: 2px 6px;
+  color: var(--muted);
+  background: var(--surface);
+  overflow-wrap: anywhere;
+}
+
+.audit-chip strong,
+.evidence-chip strong {
+  color: var(--text);
+  font-size: 0.74rem;
+  text-transform: uppercase;
+}
+
+.evidence-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.debug-disclosure {
+  border: 1px solid var(--border-soft);
+  background: var(--surface-alt);
+}
+
+.debug-disclosure summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  cursor: pointer;
+  font-weight: 740;
+}
+
+.debug-disclosure pre {
+  margin: 0;
+  max-height: 540px;
+  overflow: auto;
+  border-top: 1px solid var(--border-soft);
+  padding: 12px;
 }
 
 .settings-actions {
@@ -1766,11 +1867,25 @@ button.command.app-control:focus-visible {
   font-weight: 850;
 }
 
+.settings-policy summary span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.settings-policy summary strong {
+  line-height: 1.15;
+}
+
 .settings-policy summary small {
   color: var(--muted);
   font-size: 0.76rem;
-  font-weight: 900;
-  text-transform: uppercase;
+  font-weight: 760;
+  text-transform: none;
+}
+
+.settings-policy > p {
+  margin: 0 10px 10px;
 }
 
 .settings-policy > .settings-toggle-grid,
@@ -2321,6 +2436,18 @@ button.command.app-control:focus-visible {
   width: min(440px, calc(100vw - 32px - var(--safe-left) - var(--safe-right)));
 }
 
+.assistant-dock[hidden] {
+  display: none !important;
+}
+
+body.admin-view.assistant-available .dashboard {
+  padding-bottom: calc(84px + var(--safe-bottom));
+}
+
+body.admin-view.assistant-available .dashboard:has(.assistant-panel:not([hidden])) {
+  padding-bottom: calc(360px + var(--safe-bottom));
+}
+
 .assistant-toggle,
 .assistant-panel {
   width: 100%;
@@ -2688,11 +2815,11 @@ body.compact-view .assistant-toggle {
 
   .settings-menu {
     position: static;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    display: flex;
   }
 
   .settings-menu button {
-    border-width: 0 0 1px 4px;
+    border-width: 0 0 3px 0;
   }
 
   .role-settings {
@@ -2763,6 +2890,11 @@ body.compact-view .assistant-toggle {
 }
 
 @media (max-width: 520px) {
+  .notice {
+    top: auto;
+    bottom: calc(12px + var(--safe-bottom));
+  }
+
   .shell {
     width: 100%;
     padding: calc(8px + var(--safe-top)) max(10px, var(--safe-right)) calc(64px + var(--safe-bottom)) max(10px, var(--safe-left));
@@ -2773,8 +2905,10 @@ body.compact-view .assistant-toggle {
   }
 
   .topbar {
-    grid-template-columns: auto minmax(0, 1fr) minmax(132px, auto);
-    grid-template-areas: "nav title actions";
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas:
+      "nav title"
+      "actions actions";
     align-items: center;
     gap: 6px;
     margin-bottom: 6px;
@@ -2794,8 +2928,8 @@ body.compact-view .assistant-toggle {
     display: flex;
     flex-wrap: nowrap;
     gap: 3px;
-    width: auto;
-    max-width: min(46vw, 260px);
+    width: 100%;
+    max-width: 100%;
     overflow-x: auto;
     padding-bottom: 2px;
     scrollbar-width: none;
@@ -2882,7 +3016,7 @@ body.compact-view .assistant-toggle {
     line-height: 1.1;
     overflow: hidden;
     text-overflow: ellipsis;
-    white-space: nowrap;
+    white-space: normal;
   }
 
   .overview-card,
@@ -3119,7 +3253,7 @@ body.compact-view .assistant-toggle {
   }
 
   .settings-menu {
-    grid-template-columns: 1fr;
+    display: flex;
   }
 
   .settings-save-state {
