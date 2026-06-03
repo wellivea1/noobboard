@@ -21,6 +21,7 @@ const state = {
   notificationPreferencesLoading: false,
   userDrawerActiveSection: "settings",
   userDrawerLastFocus: null,
+  openAIAuthDialog: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -284,6 +285,175 @@ function handleUserDrawerKeydown(event) {
     event.preventDefault();
     first.focus();
   }
+}
+
+function openOpenAIAuthDialog() {
+  closeOpenAIAuthDialog({ returnFocus: false });
+  const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const session = { cancelled: false };
+  const content = node("div", { class: "openai-auth-content" },
+    node("p", { class: "openai-auth-copy", text: "Preparing OpenAI connection..." }),
+  );
+  const status = node("p", { class: "openai-auth-status", "aria-live": "polite", text: "Starting..." });
+  const closeButton = node("button", {
+    type: "button",
+    class: "command ghost",
+    "data-glyph": "x",
+    "aria-label": "Close OpenAI connection dialog",
+    onclick: () => closeOpenAIAuthDialog(),
+    text: "Close",
+  });
+  const dialog = node("section", {
+    class: "openai-auth-dialog",
+    role: "dialog",
+    "aria-modal": "true",
+    "aria-labelledby": "openai-auth-title",
+  },
+    node("header", { class: "openai-auth-head" },
+      node("div", { class: "openai-auth-title-group" },
+        node("span", { class: "openai-auth-mark", "aria-hidden": "true", text: "AI" }),
+        node("div", {},
+          node("p", { class: "eyebrow", text: "OpenAI" }),
+          node("h2", { id: "openai-auth-title", text: "Connect OpenAI" }),
+        ),
+      ),
+      closeButton,
+    ),
+    content,
+    status,
+  );
+  const backdrop = node("div", { class: "openai-auth-backdrop" }, dialog);
+  backdrop.addEventListener("click", (event) => {
+    if (event.target === backdrop) closeOpenAIAuthDialog();
+  });
+  backdrop.addEventListener("keydown", handleOpenAIAuthDialogKeydown);
+  document.body.append(backdrop);
+  document.body.classList.add("openai-auth-open");
+  state.openAIAuthDialog = { backdrop, dialog, content, status, closeButton, session, previousFocus };
+  closeButton.focus({ preventScroll: true });
+  return state.openAIAuthDialog;
+}
+
+function closeOpenAIAuthDialog(options = {}) {
+  const current = state.openAIAuthDialog;
+  if (!current) return;
+  current.session.cancelled = true;
+  current.backdrop.remove();
+  document.body.classList.remove("openai-auth-open");
+  state.openAIAuthDialog = null;
+  if (options.returnFocus !== false && current.previousFocus?.isConnected) {
+    current.previousFocus.focus({ preventScroll: true });
+  }
+}
+
+function handleOpenAIAuthDialogKeydown(event) {
+  const current = state.openAIAuthDialog;
+  if (!current) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeOpenAIAuthDialog();
+    return;
+  }
+  if (event.key !== "Tab") return;
+  const focusable = openAIAuthDialogFocusableElements(current.dialog);
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+    return;
+  }
+  if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+function openAIAuthDialogFocusableElements(dialog) {
+  return [...dialog.querySelectorAll("a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),summary,[tabindex]:not([tabindex='-1'])")]
+    .filter((element) => element.getClientRects().length && getComputedStyle(element).visibility !== "hidden");
+}
+
+function setOpenAIAuthDialogStatus(dialog, text, tone = "info") {
+  if (!dialog || dialog.session.cancelled) return;
+  dialog.status.textContent = text;
+  dialog.status.dataset.tone = tone;
+}
+
+function renderOpenAIAuthWorking(dialog, text) {
+  if (!dialog || dialog.session.cancelled) return;
+  dialog.content.replaceChildren(node("p", { class: "openai-auth-copy", text }));
+  setOpenAIAuthDialogStatus(dialog, "Waiting for OpenAI...", "info");
+}
+
+function renderOpenAIAuthCode(dialog, data, note = "") {
+  if (!dialog || dialog.session.cancelled) return;
+  const code = String(data.user_code || "").trim();
+  const verificationURL = String(data.verification_url || "").trim();
+  const copyButton = node("button", {
+    type: "button",
+    class: "command",
+    "data-glyph": "\u2398",
+    onclick: () => copyOpenAICode(code, copyButton),
+    text: "Copy",
+  });
+  const openLink = node("a", {
+    class: "button-link primary command",
+    href: verificationURL,
+    target: "_blank",
+    rel: "noreferrer",
+  }, "Open OpenAI login");
+  const content = [
+    node("div", { class: "openai-auth-code-block" },
+      node("span", { class: "openai-auth-label", text: "Device code" }),
+      node("div", { class: "openai-auth-code", text: code || "Waiting..." }),
+    ),
+    node("div", { class: "openai-auth-actions" },
+      copyButton,
+      openLink,
+    ),
+    node("p", { class: "openai-auth-copy", text: "Keep this dialog open until OpenAI accepts the code." }),
+  ];
+  if (note) content.unshift(node("p", { class: "openai-auth-copy", text: note }));
+  dialog.content.replaceChildren(...content);
+  setOpenAIAuthDialogStatus(dialog, "Waiting for OpenAI to confirm the code...", "info");
+}
+
+async function copyOpenAICode(code, button) {
+  if (!code) return;
+  try {
+    await navigator.clipboard.writeText(code);
+    const original = button.textContent;
+    button.textContent = "Copied";
+    setTimeout(() => {
+      if (button.isConnected) button.textContent = original;
+    }, 1400);
+  } catch {
+    showNotice("Could not copy the OpenAI code.", "error");
+  }
+}
+
+function renderOpenAIAuthSuccess(dialog) {
+  if (!dialog || dialog.session.cancelled) return;
+  dialog.content.replaceChildren(
+    node("p", { class: "openai-auth-copy", text: "OpenAI is connected." }),
+    node("div", { class: "openai-auth-actions" },
+      node("button", { type: "button", class: "primary command", "data-glyph": "v", onclick: () => closeOpenAIAuthDialog(), text: "Done" }),
+    ),
+  );
+  setOpenAIAuthDialogStatus(dialog, "Connected.", "ok");
+}
+
+function renderOpenAIAuthError(dialog, message) {
+  if (!dialog || dialog.session.cancelled) return;
+  dialog.content.replaceChildren(
+    node("p", { class: "openai-auth-copy", text: message }),
+    node("div", { class: "openai-auth-actions" },
+      node("button", { type: "button", class: "command", "data-glyph": "x", onclick: () => closeOpenAIAuthDialog(), text: "Close" }),
+    ),
+  );
+  setOpenAIAuthDialogStatus(dialog, "Connection failed.", "bad");
 }
 
 function visibleMonitor(id, element) {
@@ -2526,77 +2696,102 @@ async function connectOpenAIChatGPTBrowser(message, button, headlessMessage = nu
   button.disabled = true;
   message.hidden = false;
   message.textContent = "Opening OpenAI login...";
+  const dialog = openOpenAIAuthDialog();
+  renderOpenAIAuthWorking(dialog, "Opening OpenAI browser login...");
   try {
     const data = await api("/api/admin/settings/llm/openai/browser/start", { method: "POST", body: "{}" });
     const popup = window.open(data.auth_url, "_blank");
     if (!popup) {
-      message.textContent = "OpenAI login was blocked by the browser. Allow popups and try again.";
+      const fallbackMessage = "OpenAI login was blocked by the browser. Use this code login instead.";
+      message.textContent = fallbackMessage;
+      if (headlessMessage && headlessButton) {
+        headlessMessage.hidden = false;
+        await connectOpenAIChatGPTHeadless(headlessMessage, headlessButton, { dialog, note: fallbackMessage });
+        return;
+      }
+      renderOpenAIAuthError(dialog, fallbackMessage);
       return;
     }
     popup.opener = null;
     message.textContent = "Finish OpenAI login in the new window. This page will update when it connects.";
-    await waitForChatGPTConnection(data.poll_id, message);
+    renderOpenAIAuthWorking(dialog, "Finish OpenAI login in the new browser window.");
+    await waitForChatGPTConnection(data.poll_id, message, dialog);
   } catch (error) {
     if (error.status === 409 && error.data?.fallback === "chatgpt_headless" && headlessMessage && headlessButton) {
-      message.textContent = "Browser login only works from localhost on the NoobBoard host. Starting code login instead.";
+      const fallbackMessage = "Browser login only works from localhost on the NoobBoard host. Use this code login from a LAN device.";
+      message.textContent = fallbackMessage;
       headlessMessage.hidden = false;
-      await connectOpenAIChatGPTHeadless(headlessMessage, headlessButton);
+      await connectOpenAIChatGPTHeadless(headlessMessage, headlessButton, { dialog, note: fallbackMessage });
       return;
     }
     message.textContent = error.message;
+    renderOpenAIAuthError(dialog, error.message);
     showNotice(error.message, "error");
   } finally {
     button.disabled = false;
   }
 }
 
-async function connectOpenAIChatGPTHeadless(message, button) {
-  button.disabled = true;
+async function connectOpenAIChatGPTHeadless(message, button, options = {}) {
+  const dialog = options.dialog || openOpenAIAuthDialog();
+  if (button) button.disabled = true;
+  message.hidden = false;
+  message.textContent = "Starting OpenAI code login...";
+  renderOpenAIAuthWorking(dialog, "Requesting an OpenAI device code...");
   try {
     const data = await api("/api/admin/settings/llm/openai/headless/start", { method: "POST", body: "{}" });
+    renderOpenAIAuthCode(dialog, data, options.note || "");
     message.replaceChildren(
-      node("span", { text: "Enter code " }),
+      node("span", { text: "Use code " }),
       node("strong", { text: data.user_code }),
       node("span", { text: " at " }),
       node("a", { href: data.verification_url, target: "_blank", rel: "noreferrer", text: data.verification_url }),
     );
     const popup = window.open(data.verification_url, "_blank");
     if (popup) popup.opener = null;
-    await pollOpenAIChatGPTHeadless(data.poll_id, data.interval_seconds || 5, message);
+    await pollOpenAIChatGPTHeadless(data.poll_id, data.interval_seconds || 5, message, dialog);
   } catch (error) {
     message.textContent = error.message;
+    renderOpenAIAuthError(dialog, error.message);
     showNotice(error.message, "error");
   } finally {
-    button.disabled = false;
+    if (button) button.disabled = false;
   }
 }
 
-async function waitForChatGPTConnection(pollID, message) {
+async function waitForChatGPTConnection(pollID, message, dialog = null) {
   for (let attempt = 0; attempt < 90; attempt++) {
+    if (dialog?.session.cancelled) return;
     await delay(2000);
+    if (dialog?.session.cancelled) return;
     const data = await api("/api/admin/settings/llm/openai/browser/finish", {
       method: "POST",
       body: JSON.stringify({ poll_id: pollID }),
     });
     if (data.status === "connected") {
       message.textContent = "OpenAI is connected.";
+      renderOpenAIAuthSuccess(dialog);
       showNotice("OpenAI connected.");
       await loadSettings();
       return;
     }
   }
   message.textContent = "Still waiting for OpenAI login. Save is not required after the login window finishes.";
+  setOpenAIAuthDialogStatus(dialog, "Still waiting for OpenAI login.", "info");
 }
 
-async function pollOpenAIChatGPTHeadless(pollID, intervalSeconds, message) {
+async function pollOpenAIChatGPTHeadless(pollID, intervalSeconds, message, dialog = null) {
   for (let attempt = 0; attempt < 120; attempt++) {
+    if (dialog?.session.cancelled) return;
     await delay(Math.max(1, Number(intervalSeconds) || 5) * 1000);
+    if (dialog?.session.cancelled) return;
     const data = await api("/api/admin/settings/llm/openai/headless/poll", {
       method: "POST",
       body: JSON.stringify({ poll_id: pollID }),
     });
     if (data.status === "connected") {
       message.textContent = "OpenAI is connected.";
+      renderOpenAIAuthSuccess(dialog);
       showNotice("OpenAI connected.");
       await loadSettings();
       return;
@@ -2604,6 +2799,7 @@ async function pollOpenAIChatGPTHeadless(pollID, intervalSeconds, message) {
     if (data.interval_seconds) intervalSeconds = data.interval_seconds;
   }
   message.textContent = "The OpenAI login code timed out. Start again to get a new code.";
+  setOpenAIAuthDialogStatus(dialog, "The OpenAI code timed out.", "bad");
 }
 
 function delay(ms) {
