@@ -3740,6 +3740,317 @@ body.compact-view .user-technical-details[open] .user-status-grid {
   margin-bottom: 4px;
 }
 
+#user-menu-toggle {
+  display: none;
+}
+
+body.compact-view #user-menu-toggle {
+  display: inline-flex !important;
+}
+
+body.admin-view #user-menu-toggle {
+  display: none !important;
+}
+
+body.compact-view .topbar {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas: "nav title actions";
+}
+
+body.compact-view #user-menu-toggle.nav-toggle {
+  width: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+}
+
+body.compact-view #user-menu-toggle.nav-toggle:hover,
+body.compact-view #user-menu-toggle.nav-toggle:focus-visible {
+  border-color: #56606b;
+  background: var(--button-hover);
+}
+
+body.compact-view #refresh {
+  min-width: 44px;
+}
+
+body.user-menu-open {
+  overflow: hidden;
+}
+
+.user-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  opacity: 0;
+  background: rgba(0, 0, 0, 0.5);
+  transition: opacity 200ms ease;
+}
+
+body.user-menu-open .user-drawer-backdrop {
+  opacity: 1;
+}
+
+.user-drawer {
+  position: fixed;
+  inset: 0 auto 0 0;
+  z-index: 41;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(86vw, 360px);
+  max-width: calc(100vw - var(--safe-right));
+  height: var(--visual-viewport-height);
+  max-height: 100vh;
+  overflow: hidden;
+  border-right: 1px solid var(--border-soft);
+  background: var(--surface);
+  box-shadow: 18px 0 44px rgba(0, 0, 0, 0.32);
+  transform: translateX(-100%);
+  transition: transform 200ms ease;
+}
+
+body.user-menu-open .user-drawer {
+  transform: translateX(0);
+}
+
+.user-drawer-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: 58px;
+  padding: calc(var(--space-3) + var(--safe-top)) var(--space-4) var(--space-3) max(var(--space-4), var(--safe-left));
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--surface);
+}
+
+.user-drawer-head h2 {
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.12;
+}
+
+.user-drawer-head .monitor-hide {
+  width: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  font-size: 0;
+}
+
+.user-drawer-head .monitor-hide::before {
+  margin: 0;
+}
+
+.user-drawer-body {
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: var(--space-4) var(--space-4) calc(var(--space-5) + var(--safe-bottom)) max(var(--space-4), var(--safe-left));
+  -webkit-overflow-scrolling: touch;
+}
+
+.user-drawer-content,
+.user-settings-section {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.user-settings-section + .user-settings-section {
+  margin-top: var(--space-5);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--border-soft);
+}
+
+.user-settings-section h3 {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 820;
+  letter-spacing: 0;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.user-settings-intro,
+.user-account-line,
+.user-settings-loading {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.32;
+}
+
+.user-account-line strong {
+  color: var(--text);
+}
+
+.user-notification-list {
+  display: grid;
+  gap: 0;
+  border-block: 1px solid var(--border-soft);
+}
+
+.user-notification-row {
+  display: grid;
+  gap: 4px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.user-notification-row:last-child {
+  border-bottom: 0;
+}
+
+.user-notification-row[data-saving="true"] {
+  opacity: 0.78;
+}
+
+.user-notification-label {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  min-height: 48px;
+  color: var(--text);
+  font-size: 0.88rem;
+  font-weight: 680;
+  line-height: 1.2;
+}
+
+.user-notification-label .app-logo {
+  width: 34px;
+  height: 34px;
+}
+
+.user-notification-copy {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.user-switch {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  min-width: 70px;
+  min-height: 44px;
+}
+
+.user-switch input {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.user-switch-track {
+  position: relative;
+  display: block;
+  width: 66px;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-alt);
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.user-switch-knob {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--muted);
+  transition: transform 120ms ease, background 120ms ease;
+}
+
+.user-switch-state {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+  color: var(--muted);
+  font-size: 0.66rem;
+  font-weight: 820;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.user-switch input:checked + .user-switch-track {
+  border-color: var(--ok-border);
+  background: color-mix(in srgb, var(--ok-bg) 72%, var(--surface));
+}
+
+.user-switch input:checked + .user-switch-track .user-switch-knob {
+  transform: translateX(34px);
+  background: var(--ok-border);
+}
+
+.user-switch input:checked + .user-switch-track .user-switch-state {
+  right: auto;
+  left: 8px;
+  color: var(--ok-text);
+}
+
+.user-switch input:focus-visible + .user-switch-track {
+  outline: 3px solid rgba(199, 215, 230, 0.26);
+  outline-offset: 2px;
+}
+
+.user-switch input:disabled {
+  cursor: progress;
+}
+
+.user-settings-error {
+  min-height: 0;
+  margin: 0 0 0 43px;
+  color: var(--bad-text);
+  font-size: 0.78rem;
+  line-height: 1.25;
+}
+
+.user-settings-error:empty {
+  display: none;
+}
+
+.user-settings-empty {
+  margin: var(--space-3) 0;
+}
+
+.user-signout {
+  justify-content: center;
+  width: 100%;
+  min-height: 44px;
+  border-color: var(--bad-border);
+  color: var(--bad-text);
+}
+
+.user-signout:hover,
+.user-signout:focus-visible {
+  border-color: var(--bad-border);
+  background: var(--bad-bg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .user-drawer,
+  .user-drawer-backdrop,
+  .user-switch-track,
+  .user-switch-knob {
+    transition: none;
+  }
+}
+
 @supports (height: 100dvh) {
   :root {
     --visual-viewport-height: 100dvh;
