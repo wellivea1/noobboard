@@ -60,14 +60,18 @@
       </header>
 
       <section id="user-home" class="user-home" hidden>
-        <section id="user-hero" class="user-hero" aria-live="polite"></section>
-
-        <div id="user-primary-actions" class="user-primary-actions" aria-label="Status actions">
-          <button id="user-notify-admin" type="button" class="command" data-glyph="!">Notify admin</button>
-          <button id="user-chat-open" type="button" class="primary command" data-glyph="?">Ask what's wrong</button>
+        <div id="user-view-tabs" class="user-view-tabs" role="tablist" aria-label="Compact views">
+          <button id="user-status-open" type="button" role="tab" aria-selected="true" class="active">Status</button>
+          <button id="user-chat-open" type="button" role="tab" aria-selected="false">Ask what's wrong</button>
         </div>
 
-        <section class="panel">
+        <section id="user-hero" class="user-hero" aria-live="polite" data-user-status-view></section>
+
+        <div id="user-primary-actions" class="user-primary-actions" aria-label="Status actions" data-user-status-view>
+          <button id="user-notify-admin" type="button" class="command" data-glyph="!">Notify admin</button>
+        </div>
+
+        <section class="panel" data-user-status-view>
           <div class="section-head">
             <h2>Your apps</h2>
             <span id="user-app-count" class="muted">0 apps</span>
@@ -84,7 +88,7 @@
           </div>
         </section>
 
-        <details class="user-technical-details" data-technical>
+        <details class="user-technical-details" data-technical data-user-status-view>
           <summary>Technical details</summary>
           <div id="user-status-grid" class="user-status-grid"></div>
         </details>
