@@ -93,7 +93,10 @@ func (c *ChatGPTClient) Diagnose(ctx context.Context, req Request) (Diagnosis, e
 	headers.Set("ChatGPT-Account-Id", c.accountID)
 	headers.Set("Originator", "noobboard")
 	headers.Set("User-Agent", "NoobBoard")
-	return runOpenAIResponsesDiagnosis(ctx, c.http, c.endpoint, headers, c.model, contextText, req, c.builder.redactor, "chatgpt codex responses api", openAIResponsesOptions{ReasoningEffort: ChatGPTCodexReasoningHigh})
+	return runOpenAIResponsesDiagnosis(ctx, c.http, c.endpoint, headers, c.model, contextText, req, c.builder.redactor, "chatgpt codex responses api", openAIResponsesOptions{
+		ReasoningEffort: ChatGPTCodexReasoningHigh,
+		InputAsList:     true,
+	})
 }
 
 func (c *ChatGPTClient) ensureAccessToken(ctx context.Context) (string, error) {

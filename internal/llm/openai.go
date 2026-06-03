@@ -24,6 +24,7 @@ type OpenAIClient struct {
 
 type openAIResponsesOptions struct {
 	ReasoningEffort string
+	InputAsList     bool
 }
 
 func NewOpenAIClient(cfg config.LLMConfig, redactor *privacy.Redactor) OpenAIClient {
@@ -84,12 +85,13 @@ func openAIResponsesBodyWithInput(model string, input interface{}, tools []inter
 func runOpenAIResponsesDiagnosis(ctx context.Context, client *http.Client, endpoint string, headers http.Header, model, contextText string, req Request, redactor *privacy.Redactor, label string, opts openAIResponsesOptions) (Diagnosis, error) {
 	agentTools := agentToolsForRequest(req, redactor)
 	toolDefinitions := openAIToolDefinitions(agentTools)
-	input := interface{}(BuildPrompt(contextText))
+	prompt := BuildPrompt(contextText)
+	input := interface{}(prompt)
 	var conversation []interface{}
-	if len(toolDefinitions) > 0 {
+	if opts.InputAsList || len(toolDefinitions) > 0 {
 		conversation = []interface{}{map[string]interface{}{
 			"role":    "user",
-			"content": BuildPrompt(contextText),
+			"content": prompt,
 		}}
 		input = conversation
 	}
