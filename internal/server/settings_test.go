@@ -174,6 +174,60 @@ func TestLLMSettingsKeysAreWriteOnly(t *testing.T) {
 	}
 }
 
+func TestLLMSettingsChatGPTTokensAreWriteOnlyAndClearable(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "llm-chatgpt-settings")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+	cfg.LLM.Provider = "openai"
+	cfg.LLM.OpenAIAuthMethod = config.OpenAIAuthMethodChatGPTBrowser
+	cfg.LLM.ChatGPTRefreshToken = "refresh-local-test"
+	cfg.LLM.ChatGPTAccessToken = "access-local-test"
+	cfg.LLM.ChatGPTAccountID = "account-local-test"
+	cfg.LLM.ChatGPTTokenExpiresAt = time.Now().UTC().Add(time.Hour)
+
+	app := newTestApp(t, cfg)
+	router := app.Router()
+	cookie, csrf := loginAdmin(t, router)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/settings/llm", nil)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/admin/settings/llm status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	responseBody := rec.Body.String()
+	for _, secret := range []string{"refresh-local-test", "access-local-test", "account-local-test"} {
+		if strings.Contains(responseBody, secret) {
+			t.Fatalf("llm settings response exposed ChatGPT secret/account value: %s", responseBody)
+		}
+	}
+	if !strings.Contains(responseBody, `"chatgpt_connected":true`) || !strings.Contains(responseBody, `"chatgpt_account_id_set":true`) {
+		t.Fatalf("llm settings response did not report ChatGPT connection state: %s", responseBody)
+	}
+
+	rec = httptest.NewRecorder()
+	body := `{"provider":"openai","openai_auth_method":"api_key","clear_chatgpt_auth":true}`
+	req = httptest.NewRequest(http.MethodPost, "/api/admin/settings/llm", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/admin/settings/llm status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	stored, ok, err := app.deps.Store.RuntimeSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("runtime settings were not saved")
+	}
+	if stored.LLM.ChatGPTRefreshToken != "" || stored.LLM.ChatGPTAccessToken != "" || stored.LLM.ChatGPTAccountID != "" {
+		t.Fatalf("ChatGPT auth was not cleared: %#v", stored.LLM)
+	}
+}
+
 func TestIntegrationSettingsPersistAndHideKeys(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Database.Path = serverCacheTestPath(t, "integration-settings")
@@ -285,6 +339,8 @@ func TestCompactRouterExcludesAdminAPI(t *testing.T) {
 		{method: http.MethodGet, path: "/api/admin/status/full"},
 		{method: http.MethodPost, path: "/api/admin/apps/emby/action", body: `{"action":"restart"}`},
 		{method: http.MethodGet, path: "/api/admin/settings/integrations"},
+		{method: http.MethodPost, path: "/api/admin/settings/llm/openai/browser/start", body: `{}`},
+		{method: http.MethodPost, path: "/api/admin/settings/llm/openai/browser/finish", body: `{"poll_id":"test"}`},
 	}
 	for _, tc := range adminCases {
 		rec := httptest.NewRecorder()

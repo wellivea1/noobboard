@@ -92,15 +92,26 @@ type NotificationConfig struct {
 }
 
 type LLMConfig struct {
-	Enabled         bool                        `json:"enabled"`
-	Provider        string                      `json:"provider"`
-	OpenAIAPIKey    string                      `json:"openai_api_key,omitempty"`
-	OpenAIModel     string                      `json:"openai_model"`
-	AnthropicAPIKey string                      `json:"anthropic_api_key,omitempty"`
-	AnthropicModel  string                      `json:"anthropic_model"`
-	Timeout         time.Duration               `json:"timeout"`
-	Policies        map[string]models.LLMPolicy `json:"policies"`
+	Enabled               bool                        `json:"enabled"`
+	Provider              string                      `json:"provider"`
+	OpenAIAuthMethod      string                      `json:"openai_auth_method"`
+	OpenAIAPIKey          string                      `json:"openai_api_key,omitempty"`
+	OpenAIModel           string                      `json:"openai_model"`
+	ChatGPTRefreshToken   string                      `json:"chatgpt_refresh_token,omitempty"`
+	ChatGPTAccessToken    string                      `json:"chatgpt_access_token,omitempty"`
+	ChatGPTTokenExpiresAt time.Time                   `json:"chatgpt_token_expires_at,omitempty"`
+	ChatGPTAccountID      string                      `json:"chatgpt_account_id,omitempty"`
+	AnthropicAPIKey       string                      `json:"anthropic_api_key,omitempty"`
+	AnthropicModel        string                      `json:"anthropic_model"`
+	Timeout               time.Duration               `json:"timeout"`
+	Policies              map[string]models.LLMPolicy `json:"policies"`
 }
+
+const (
+	OpenAIAuthMethodAPIKey          = "api_key"
+	OpenAIAuthMethodChatGPTBrowser  = "chatgpt_browser"
+	OpenAIAuthMethodChatGPTHeadless = "chatgpt_headless"
+)
 
 type IntegrationConfig struct {
 	Mode              string `json:"mode"`
@@ -193,12 +204,13 @@ func Defaults() Config {
 			WholeOutageDeduping: true,
 		},
 		LLM: LLMConfig{
-			Enabled:        true,
-			Provider:       "disabled",
-			OpenAIModel:    "gpt-5",
-			AnthropicModel: "claude-sonnet-4-5",
-			Timeout:        45 * time.Second,
-			Policies:       defaultLLMPolicies(),
+			Enabled:          true,
+			Provider:         "disabled",
+			OpenAIAuthMethod: OpenAIAuthMethodAPIKey,
+			OpenAIModel:      "gpt-5",
+			AnthropicModel:   "claude-sonnet-4-5",
+			Timeout:          45 * time.Second,
+			Policies:         defaultLLMPolicies(),
 		},
 		Integrations: IntegrationConfig{
 			Mode:             "live",
@@ -355,6 +367,11 @@ func (c Config) Validate() error {
 	case "disabled", "openai", "anthropic":
 	default:
 		return fmt.Errorf("llm provider %q is invalid", c.LLM.Provider)
+	}
+	switch strings.TrimSpace(c.LLM.OpenAIAuthMethod) {
+	case "", OpenAIAuthMethodAPIKey, OpenAIAuthMethodChatGPTBrowser, OpenAIAuthMethodChatGPTHeadless:
+	default:
+		return fmt.Errorf("openai auth method %q is invalid", c.LLM.OpenAIAuthMethod)
 	}
 	for name, policy := range c.LLM.Policies {
 		if policy.MaxContextBytes <= 0 {
@@ -558,11 +575,23 @@ func applyEnv(cfg *Config) {
 	if v := envValue("NOOBBOARD_LLM_PROVIDER", "HSD_LLM_PROVIDER"); v != "" {
 		cfg.LLM.Provider = v
 	}
+	if v := envValue("NOOBBOARD_OPENAI_AUTH_METHOD", "OPENAI_AUTH_METHOD"); v != "" {
+		cfg.LLM.OpenAIAuthMethod = v
+	}
 	if v := os.Getenv("OPENAI_API_KEY"); v != "" {
 		cfg.LLM.OpenAIAPIKey = v
 	}
 	if v := os.Getenv("OPENAI_MODEL"); v != "" {
 		cfg.LLM.OpenAIModel = v
+	}
+	if v := envValue("NOOBBOARD_CHATGPT_REFRESH_TOKEN", "CHATGPT_REFRESH_TOKEN"); v != "" {
+		cfg.LLM.ChatGPTRefreshToken = v
+	}
+	if v := envValue("NOOBBOARD_CHATGPT_ACCESS_TOKEN", "CHATGPT_ACCESS_TOKEN"); v != "" {
+		cfg.LLM.ChatGPTAccessToken = v
+	}
+	if v := envValue("NOOBBOARD_CHATGPT_ACCOUNT_ID", "CHATGPT_ACCOUNT_ID"); v != "" {
+		cfg.LLM.ChatGPTAccountID = v
 	}
 	if v := os.Getenv("ANTHROPIC_API_KEY"); v != "" {
 		cfg.LLM.AnthropicAPIKey = v
@@ -782,6 +811,30 @@ func applyConfigKey(cfg *Config, section, key, value string) {
 		cfg.Notifications.GlobalOptInEnabled = parseBool(value)
 	case "notifications.backend":
 		cfg.Notifications.Backend = value
+	case "llm.enabled":
+		cfg.LLM.Enabled = parseBool(value)
+	case "llm.provider":
+		cfg.LLM.Provider = value
+	case "llm.openai_auth_method":
+		cfg.LLM.OpenAIAuthMethod = value
+	case "llm.openai_api_key":
+		cfg.LLM.OpenAIAPIKey = value
+	case "llm.openai_model":
+		cfg.LLM.OpenAIModel = value
+	case "llm.chatgpt_refresh_token":
+		cfg.LLM.ChatGPTRefreshToken = value
+	case "llm.chatgpt_access_token":
+		cfg.LLM.ChatGPTAccessToken = value
+	case "llm.chatgpt_account_id":
+		cfg.LLM.ChatGPTAccountID = value
+	case "llm.chatgpt_token_expires_at":
+		if expiresAt, err := time.Parse(time.RFC3339, value); err == nil {
+			cfg.LLM.ChatGPTTokenExpiresAt = expiresAt
+		}
+	case "llm.anthropic_api_key":
+		cfg.LLM.AnthropicAPIKey = value
+	case "llm.anthropic_model":
+		cfg.LLM.AnthropicModel = value
 	case "integrations.mode":
 		cfg.Integrations.Mode = value
 	case "integrations.unraid_base_url":

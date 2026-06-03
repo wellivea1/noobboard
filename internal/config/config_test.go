@@ -20,6 +20,9 @@ func TestDefaultConfigValidation(t *testing.T) {
 	if cfg.LLM.Provider != "disabled" {
 		t.Fatalf("default llm provider = %q, want disabled", cfg.LLM.Provider)
 	}
+	if cfg.LLM.OpenAIAuthMethod != OpenAIAuthMethodAPIKey {
+		t.Fatalf("default OpenAI auth method = %q, want api_key", cfg.LLM.OpenAIAuthMethod)
+	}
 }
 
 func TestConfigValidationRejectsInvalidCompactPort(t *testing.T) {
@@ -63,6 +66,12 @@ func TestConfigValidationRejectsUnknownModes(t *testing.T) {
 	cfg.LLM.Provider = "mock"
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected mock LLM provider to fail validation")
+	}
+
+	cfg = Defaults()
+	cfg.LLM.OpenAIAuthMethod = "session_cookie"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected invalid OpenAI auth method to fail validation")
 	}
 }
 

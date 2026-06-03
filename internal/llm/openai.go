@@ -43,21 +43,7 @@ func (c OpenAIClient) Diagnose(ctx context.Context, req Request) (Diagnosis, err
 	if err != nil {
 		return Diagnosis{}, err
 	}
-	body := map[string]interface{}{
-		"model":        c.model,
-		"instructions": Instructions(),
-		"input":        BuildPrompt(contextText),
-		"tools":        []interface{}{},
-		"text": map[string]interface{}{
-			"format": map[string]interface{}{
-				"type":   "json_schema",
-				"name":   "server_status_diagnosis",
-				"strict": true,
-				"schema": JSONSchema(),
-			},
-		},
-	}
-	data, err := json.Marshal(body)
+	data, err := openAIResponsesBody(c.model, contextText)
 	if err != nil {
 		return Diagnosis{}, err
 	}
@@ -79,6 +65,32 @@ func (c OpenAIClient) Diagnose(ctx context.Context, req Request) (Diagnosis, err
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return Diagnosis{}, fmt.Errorf("openai responses api returned %d: %s", resp.StatusCode, string(respData))
 	}
+	jsonText, err := firstJSONString(respData)
+	if err != nil {
+		return Diagnosis{}, err
+	}
+	return ValidateDiagnosis([]byte(jsonText))
+}
+
+func openAIResponsesBody(model, contextText string) ([]byte, error) {
+	body := map[string]interface{}{
+		"model":        model,
+		"instructions": Instructions(),
+		"input":        BuildPrompt(contextText),
+		"tools":        []interface{}{},
+		"text": map[string]interface{}{
+			"format": map[string]interface{}{
+				"type":   "json_schema",
+				"name":   "server_status_diagnosis",
+				"strict": true,
+				"schema": JSONSchema(),
+			},
+		},
+	}
+	return json.Marshal(body)
+}
+
+func diagnosisFromResponsesBody(respData []byte) (Diagnosis, error) {
 	jsonText, err := firstJSONString(respData)
 	if err != nil {
 		return Diagnosis{}, err

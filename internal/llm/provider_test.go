@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -142,6 +143,58 @@ func TestProviderUsesConfigKeys(t *testing.T) {
 	}
 }
 
+func TestChatGPTConnectorUsesCodexResponsesEndpoint(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.LLM.Provider = "openai"
+	cfg.LLM.OpenAIAuthMethod = config.OpenAIAuthMethodChatGPTBrowser
+	cfg.LLM.ChatGPTRefreshToken = "refresh-token"
+	cfg.LLM.ChatGPTAccessToken = "access-token"
+	cfg.LLM.ChatGPTAccountID = "account-123"
+	cfg.LLM.ChatGPTTokenExpiresAt = time.Now().UTC().Add(time.Hour)
+	cfg.LLM.OpenAIModel = "gpt-chatgpt-test"
+	if !ProviderAvailable(cfg.LLM) {
+		t.Fatal("ChatGPT connector should be available with refresh token and account id")
+	}
+	client, ok := NewClient(cfg.LLM, privacy.NewRedactor(config.PrivacyConfig{})).(*ChatGPTClient)
+	if !ok {
+		t.Fatalf("NewClient returned %T, want *ChatGPTClient", NewClient(cfg.LLM, privacy.NewRedactor(config.PrivacyConfig{})))
+	}
+	client.http = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Method != http.MethodPost || req.URL.String() != OpenAIChatGPTCodexEndpoint {
+			t.Fatalf("unexpected ChatGPT request %s %s", req.Method, req.URL.String())
+		}
+		if got := req.Header.Get("Authorization"); got != "Bearer access-token" {
+			t.Fatalf("Authorization header = %q", got)
+		}
+		if got := req.Header.Get("ChatGPT-Account-Id"); got != "account-123" {
+			t.Fatalf("ChatGPT-Account-Id header = %q", got)
+		}
+		var body map[string]interface{}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["model"] != "gpt-chatgpt-test" {
+			t.Fatalf("model = %#v", body["model"])
+		}
+		return jsonResponse(t, http.StatusOK, map[string]string{"output_text": validDiagnosisJSON(t)})
+	})}
+	if _, err := client.Diagnose(context.Background(), sampleLLMRequest()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExtractChatGPTAccountIDFromTokenClaims(t *testing.T) {
+	token := testJWT(t, map[string]interface{}{
+		"https://api.openai.com/auth": map[string]interface{}{
+			"chatgpt_account_id": "account-from-claim",
+		},
+	})
+	accountID := ExtractChatGPTAccountID(ChatGPTTokenResponse{IDToken: token})
+	if accountID != "account-from-claim" {
+		t.Fatalf("account id = %q", accountID)
+	}
+}
+
 func TestDefaultClientDoesNotReturnMockDiagnosis(t *testing.T) {
 	cfg := config.Defaults()
 	client := NewClient(cfg.LLM, privacy.NewRedactor(config.PrivacyConfig{}))
@@ -229,4 +282,17 @@ func validDiagnosisMap() map[string]interface{} {
 		"recommended_action_id": "none",
 		"should_notify_admin":   false,
 	}
+}
+
+func testJWT(t *testing.T, claims map[string]interface{}) string {
+	t.Helper()
+	header, err := json.Marshal(map[string]string{"alg": "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return base64.RawURLEncoding.EncodeToString(header) + "." + base64.RawURLEncoding.EncodeToString(payload) + ".sig"
 }

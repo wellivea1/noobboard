@@ -2383,12 +2383,36 @@ function renderAppImageSettings(item, data) {
 
 function renderLLMSettings(item, data) {
   const settings = clone(data || {});
-  const enabled = settingToggle("Enabled", settings.enabled !== false);
+  const enabled = settingToggle("Use LLM diagnosis", settings.enabled !== false);
   const provider = settingSelectField("Provider", settings.provider || "disabled", [
     { value: "disabled", label: "Disabled" },
     { value: "openai", label: "OpenAI" },
     { value: "anthropic", label: "Anthropic" },
   ]);
+  const authMethodName = `openai-auth-${Date.now()}`;
+  const selectedAuthMethod = settings.openai_auth_method || "api_key";
+  const browserStatus = node("span", { class: `settings-key-state ${settings.chatgpt_connected ? "set" : ""}`, text: settings.chatgpt_connected ? "Connected" : "Not connected" });
+  const browserMessage = node("p", { class: "muted settings-connection-detail", "aria-live": "polite" });
+  const browserConnect = node("button", {
+    type: "button",
+    class: "command",
+    "data-glyph": ">",
+    onclick: () => connectOpenAIChatGPTBrowser(browserMessage, browserConnect),
+    text: settings.chatgpt_connected ? "Reconnect" : "Connect",
+  });
+  const headlessMessage = node("div", { class: "muted settings-connection-detail", "aria-live": "polite", text: "Use this when the server cannot open a browser." });
+  const headlessConnect = node("button", {
+    type: "button",
+    class: "command",
+    "data-glyph": ">",
+    onclick: () => connectOpenAIChatGPTHeadless(headlessMessage, headlessConnect),
+    text: "Get code",
+  });
+  const authChoices = [
+    settingChoice(authMethodName, "chatgpt_browser", "ChatGPT Pro/Plus (browser)", "Opens OpenAI login in a browser window.", selectedAuthMethod === "chatgpt_browser", node("div", { class: "settings-choice-action" }, browserStatus, browserConnect)),
+    settingChoice(authMethodName, "chatgpt_headless", "ChatGPT Pro/Plus (headless)", "Shows a login code for another browser or device.", selectedAuthMethod === "chatgpt_headless", node("div", { class: "settings-choice-action" }, headlessConnect)),
+    settingChoice(authMethodName, "api_key", "API key", "Uses a saved OpenAI API key.", selectedAuthMethod === "api_key"),
+  ];
   const openAIModel = settingTextField("OpenAI model", settings.openai_model || "gpt-5");
   const anthropicModel = settingTextField("Anthropic model", settings.anthropic_model || "claude-sonnet-4-5");
   const timeout = durationSecondsField("Timeout", settings.timeout || 45000000000);
@@ -2403,37 +2427,73 @@ function renderLLMSettings(item, data) {
     placeholder: settings.anthropic_api_key_set ? "Saved key unchanged" : "Paste API key",
   });
   const clearOpenAI = settingToggle("Clear saved OpenAI key", false);
+  const clearChatGPT = settingToggle("Forget ChatGPT login", false);
   const clearAnthropic = settingToggle("Clear saved Anthropic key", false);
   clearOpenAI.input.disabled = !settings.openai_api_key_set;
+  clearChatGPT.input.disabled = !settings.chatgpt_connected;
   clearAnthropic.input.disabled = !settings.anthropic_api_key_set;
   const policyEditors = Object.entries(settings.policies || {}).map(([name, policy]) => policyEditor(name, policy));
+  const apiKeyBlock = node("div", { class: "settings-field-stack" },
+    keyFieldWithState(openAIKey, settings.openai_api_key_set),
+    clearOpenAI.element,
+  );
+  const openAISection = node("section", { class: "settings-subsection" },
+    node("h4", { text: "OpenAI login" }),
+    node("div", { class: "settings-choice-list" }, authChoices.map((choice) => choice.element)),
+    browserMessage,
+    headlessMessage,
+    node("div", { class: "settings-field-grid" }, openAIModel.element),
+    apiKeyBlock,
+    clearChatGPT.element,
+  );
+  const anthropicSection = node("section", { class: "settings-subsection" },
+    node("h4", { text: "Anthropic" }),
+    node("div", { class: "settings-field-grid" },
+      anthropicModel.element,
+      keyFieldWithState(anthropicKey, settings.anthropic_api_key_set),
+    ),
+    clearAnthropic.element,
+  );
+  const syncLLMVisibility = () => {
+    const selectedProvider = provider.input.value;
+    const method = authChoices.find((choice) => choice.input.checked)?.input.value || "api_key";
+    openAISection.hidden = selectedProvider !== "openai";
+    anthropicSection.hidden = selectedProvider !== "anthropic";
+    apiKeyBlock.hidden = method !== "api_key";
+    browserMessage.hidden = selectedProvider !== "openai" || method !== "chatgpt_browser" || !browserMessage.textContent;
+    headlessMessage.hidden = selectedProvider !== "openai" || method !== "chatgpt_headless";
+    for (const choice of authChoices) choice.element.classList.toggle("selected", choice.input.checked);
+  };
+  provider.input.addEventListener("change", syncLLMVisibility);
+  for (const choice of authChoices) choice.input.addEventListener("change", syncLLMVisibility);
   const body = node("div", { class: "settings-form" },
     node("section", { class: "settings-subsection" },
-      node("h4", { text: "Provider" }),
-      node("div", { class: "settings-field-grid" }, provider.element, openAIModel.element, anthropicModel.element, timeout.element),
+      node("h4", { text: "Diagnosis provider" }),
+      node("div", { class: "settings-field-grid" }, provider.element),
       node("div", { class: "settings-toggle-grid" }, enabled.element),
     ),
+    openAISection,
+    anthropicSection,
     node("section", { class: "settings-subsection" },
-      node("h4", { text: "API keys" }),
-      node("div", { class: "settings-field-grid" },
-        keyFieldWithState(openAIKey, settings.openai_api_key_set),
-        keyFieldWithState(anthropicKey, settings.anthropic_api_key_set),
-      ),
-      node("div", { class: "settings-toggle-grid" }, clearOpenAI.element, clearAnthropic.element),
-    ),
-    node("section", { class: "settings-subsection" },
-      node("h4", { text: "Policies" }),
+      node("h4", { text: "Who can ask" }),
       node("div", { class: "settings-policy-list" }, policyEditors.map((editor) => editor.element)),
     ),
+    node("details", { class: "settings-advanced" },
+      node("summary", { text: "Advanced request timing" }),
+      node("div", { class: "settings-field-grid" }, timeout.element),
+    ),
   );
+  syncLLMVisibility();
   return settingsCard(item, body, (status) => {
     const payload = {
       enabled: enabled.input.checked,
       provider: provider.input.value,
+      openai_auth_method: authChoices.find((choice) => choice.input.checked)?.input.value || "api_key",
       openai_model: openAIModel.input.value.trim(),
       anthropic_model: anthropicModel.input.value.trim(),
       timeout: secondsToDuration(timeout.input.value),
       clear_openai_api_key: clearOpenAI.input.checked,
+      clear_chatgpt_auth: clearChatGPT.input.checked,
       clear_anthropic_api_key: clearAnthropic.input.checked,
       policies: {},
     };
@@ -2442,6 +2502,101 @@ function renderLLMSettings(item, data) {
     for (const editor of policyEditors) payload.policies[editor.name] = editor.value();
     return saveSettingsPayload(item.title, item.path, payload, status);
   });
+}
+
+function settingChoice(name, value, title, description, checked, action = null) {
+  const input = node("input", { type: "radio", name, value, checked: !!checked });
+  const element = node("label", { class: `settings-choice${checked ? " selected" : ""}` },
+    input,
+    node("span", { class: "settings-choice-copy" },
+      node("strong", { text: title }),
+      node("small", { text: description }),
+    ),
+    action,
+  );
+  return { input, element };
+}
+
+async function connectOpenAIChatGPTBrowser(message, button) {
+  button.disabled = true;
+  message.hidden = false;
+  message.textContent = "Opening OpenAI login...";
+  try {
+    const data = await api("/api/admin/settings/llm/openai/browser/start", { method: "POST", body: "{}" });
+    const popup = window.open(data.auth_url, "_blank");
+    if (!popup) {
+      message.textContent = "OpenAI login was blocked by the browser. Allow popups and try again.";
+      return;
+    }
+    popup.opener = null;
+    message.textContent = "Finish OpenAI login in the new window. This page will update when it connects.";
+    await waitForChatGPTConnection(data.poll_id, message);
+  } catch (error) {
+    message.textContent = error.message;
+    showNotice(error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function connectOpenAIChatGPTHeadless(message, button) {
+  button.disabled = true;
+  try {
+    const data = await api("/api/admin/settings/llm/openai/headless/start", { method: "POST", body: "{}" });
+    message.replaceChildren(
+      node("span", { text: "Enter code " }),
+      node("strong", { text: data.user_code }),
+      node("span", { text: " at " }),
+      node("a", { href: data.verification_url, target: "_blank", rel: "noreferrer", text: data.verification_url }),
+    );
+    const popup = window.open(data.verification_url, "_blank");
+    if (popup) popup.opener = null;
+    await pollOpenAIChatGPTHeadless(data.poll_id, data.interval_seconds || 5, message);
+  } catch (error) {
+    message.textContent = error.message;
+    showNotice(error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function waitForChatGPTConnection(pollID, message) {
+  for (let attempt = 0; attempt < 90; attempt++) {
+    await delay(2000);
+    const data = await api("/api/admin/settings/llm/openai/browser/finish", {
+      method: "POST",
+      body: JSON.stringify({ poll_id: pollID }),
+    });
+    if (data.status === "connected") {
+      message.textContent = "OpenAI is connected.";
+      showNotice("OpenAI connected.");
+      await loadSettings();
+      return;
+    }
+  }
+  message.textContent = "Still waiting for OpenAI login. Save is not required after the login window finishes.";
+}
+
+async function pollOpenAIChatGPTHeadless(pollID, intervalSeconds, message) {
+  for (let attempt = 0; attempt < 120; attempt++) {
+    await delay(Math.max(1, Number(intervalSeconds) || 5) * 1000);
+    const data = await api("/api/admin/settings/llm/openai/headless/poll", {
+      method: "POST",
+      body: JSON.stringify({ poll_id: pollID }),
+    });
+    if (data.status === "connected") {
+      message.textContent = "OpenAI is connected.";
+      showNotice("OpenAI connected.");
+      await loadSettings();
+      return;
+    }
+    if (data.interval_seconds) intervalSeconds = data.interval_seconds;
+  }
+  message.textContent = "The OpenAI login code timed out. Start again to get a new code.";
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function renderIntegrationSettings(item, data) {
@@ -2673,18 +2828,21 @@ function policyEditor(name, policy) {
   const logSources = listEditor("Allowed log sources", current.allowed_log_sources || [], "source");
   return {
     name,
-    element: node("details", { class: "settings-policy", open: name === "admin_requested" },
-      node("summary", {},
-        node("span", {},
+    element: node("article", { class: "settings-policy-card" },
+      node("div", { class: "settings-policy-main" },
+        node("span", { class: "settings-policy-copy" },
           node("strong", { text: meta.title }),
           node("small", { text: meta.description }),
         ),
-        node("small", { text: `Recipient: ${current.recipient_role || meta.recipient}` }),
+        enabled.element,
       ),
-      node("p", { class: "muted", text: "Advanced context and redaction tuning." }),
-      node("div", { class: "settings-toggle-grid" }, enabled.element, includeLogs.element, preferFacts.element, allowHidden.element, allowBlacklisted.element, failClosed.element),
-      node("div", { class: "settings-field-grid" }, maxContext.element, maxLogs.element),
-      logSources.element,
+      node("details", { class: "settings-policy-advanced" },
+        node("summary", { text: "Advanced context and redaction" }),
+        node("p", { class: "muted", text: `Recipient: ${current.recipient_role || meta.recipient}` }),
+        node("div", { class: "settings-toggle-grid" }, includeLogs.element, preferFacts.element, allowHidden.element, allowBlacklisted.element, failClosed.element),
+        node("div", { class: "settings-field-grid" }, maxContext.element, maxLogs.element),
+        logSources.element,
+      ),
     ),
     value: () => ({
       ...current,

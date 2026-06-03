@@ -1738,6 +1738,13 @@ button.command.app-control:focus-visible {
   min-width: 0;
 }
 
+.settings-field-stack,
+.settings-choice-list {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
 .setting-toggle {
   min-height: 42px;
   border: 1px solid var(--border-soft);
@@ -1745,6 +1752,90 @@ button.command.app-control:focus-visible {
   padding: 6px 10px;
   background: var(--surface-alt);
   color: var(--text);
+}
+
+.settings-choice {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 52px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: var(--surface-alt);
+  color: var(--text);
+}
+
+.settings-choice.selected {
+  border-color: color-mix(in srgb, var(--accent-strong) 72%, var(--border));
+  background: rgba(199, 215, 230, 0.07);
+}
+
+.settings-choice input[type="radio"] {
+  width: 18px;
+  min-width: 18px;
+  min-height: 18px;
+  accent-color: var(--accent-strong);
+}
+
+.settings-choice-copy,
+.settings-policy-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settings-choice-copy strong,
+.settings-policy-copy strong {
+  line-height: 1.2;
+}
+
+.settings-choice-copy small,
+.settings-policy-copy small,
+.settings-connection-detail {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.settings-choice-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.settings-connection-detail:empty {
+  display: none;
+}
+
+.settings-advanced,
+.settings-policy-advanced {
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  background: var(--surface-alt);
+}
+
+.settings-advanced summary,
+.settings-policy-advanced summary {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  cursor: pointer;
+  color: var(--text);
+  font-weight: 820;
+}
+
+.settings-advanced > .settings-field-grid,
+.settings-policy-advanced > .settings-toggle-grid,
+.settings-policy-advanced > .settings-field-grid,
+.settings-policy-advanced > .settings-list-editor,
+.settings-policy-advanced > p {
+  margin: 0 10px 10px;
 }
 
 .settings-add-row,
@@ -1866,6 +1957,27 @@ button.command.app-control:focus-visible {
 .settings-key-state.set {
   border-color: var(--ok-border);
   color: var(--ok-text);
+}
+
+.settings-policy-card {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  padding: 10px;
+  background: var(--surface-alt);
+}
+
+.settings-policy-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.settings-policy-main .setting-toggle {
+  min-width: 118px;
+  justify-content: start;
 }
 
 .settings-policy {
@@ -3282,6 +3394,8 @@ body.compact-view .assistant-toggle {
   .settings-field-grid,
   .settings-two-col,
   .settings-key-field,
+  .settings-choice,
+  .settings-policy-main,
   .settings-kv-row,
   .settings-app-image-row {
     grid-template-columns: minmax(0, 1fr);
@@ -3289,6 +3403,16 @@ body.compact-view .assistant-toggle {
 
   .settings-toggle-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-choice {
+    grid-template-columns: 20px minmax(0, 1fr);
+  }
+
+  .settings-choice-action {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+    flex-wrap: wrap;
   }
 
   .settings-app-image-row {
