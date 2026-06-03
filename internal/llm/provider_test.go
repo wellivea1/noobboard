@@ -279,6 +279,17 @@ func TestChatGPTConnectorUsesCodexResponsesEndpoint(t *testing.T) {
 		if !ok || reasoning["effort"] != ChatGPTCodexReasoningHigh {
 			t.Fatalf("reasoning = %#v", body["reasoning"])
 		}
+		input, ok := body["input"].([]interface{})
+		if !ok || len(input) != 1 {
+			t.Fatalf("ChatGPT Codex input = %#v, want one-item list", body["input"])
+		}
+		message, ok := input[0].(map[string]interface{})
+		if !ok || message["role"] != "user" {
+			t.Fatalf("ChatGPT Codex input message = %#v", input[0])
+		}
+		if content, _ := message["content"].(string); !strings.Contains(content, "Sanitized diagnostic context") {
+			t.Fatalf("ChatGPT Codex input content did not include prompt: %s", content)
+		}
 		return jsonResponse(t, http.StatusOK, map[string]string{"output_text": validDiagnosisJSON(t)})
 	})}
 	if _, err := client.Diagnose(context.Background(), sampleLLMRequest()); err != nil {
