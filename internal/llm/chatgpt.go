@@ -101,6 +101,7 @@ func (c *ChatGPTClient) Diagnose(ctx context.Context, req Request) (Diagnosis, e
 		IncludeEncryptedReasoning: true,
 		InputAsList:               true,
 		StoreFalse:                true,
+		Stream:                    true,
 	})
 }
 
