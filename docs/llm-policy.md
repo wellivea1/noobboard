@@ -2,7 +2,7 @@
 
 LLM support is provider-based. The default provider is `disabled`, so the app does not fabricate diagnostic answers when no real provider is configured. Real providers are selected with `NOOBBOARD_LLM_PROVIDER=openai` or `NOOBBOARD_LLM_PROVIDER=anthropic`.
 
-OpenAI API-key mode uses the Responses API with strict structured outputs. OpenAI ChatGPT connector mode follows the Codex/OpenCode-style OAuth pattern: an admin starts browser or device-code login, NoobBoard stores the returned refresh/access tokens as write-only local runtime settings, refreshes access tokens server-side, and sends diagnosis requests to the ChatGPT Codex responses endpoint with the saved account id. Anthropic uses the Messages API with a forced client tool whose `input_schema` matches the diagnosis schema. All providers are called through Go `net/http`; no SDK or runtime dependency is required.
+OpenAI API-key mode uses the Responses API with strict structured outputs. OpenAI ChatGPT connector mode follows the Codex/OpenCode-style OAuth pattern without using OpenCode's standalone local callback listener: an admin starts browser or device-code login, browser login redirects back to the current NoobBoard admin origin, NoobBoard stores the returned refresh/access tokens as write-only local runtime settings, refreshes access tokens server-side, and sends diagnosis requests to the ChatGPT Codex responses endpoint with the saved account id. Anthropic uses the Messages API with a forced client tool whose `input_schema` matches the diagnosis schema. All providers are called through Go `net/http`; no SDK or runtime dependency is required.
 
 Environment variables:
 

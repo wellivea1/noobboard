@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -228,6 +229,68 @@ func TestLLMSettingsChatGPTTokensAreWriteOnlyAndClearable(t *testing.T) {
 	}
 }
 
+func TestOpenAIChatGPTBrowserAuthUsesAdminRequestOrigin(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "llm-chatgpt-browser-origin")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+
+	app := newTestApp(t, cfg)
+	router := app.Router()
+	cookie, csrf := loginAdmin(t, router)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/settings/llm/openai/browser/start", strings.NewReader(`{}`))
+	req.Host = "192.168.1.50:8787"
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/admin/settings/llm/openai/browser/start status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	var response struct {
+		AuthURL string `json:"auth_url"`
+		PollID  string `json:"poll_id"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.AuthURL == "" || response.PollID == "" {
+		t.Fatalf("browser auth start response was incomplete: %#v", response)
+	}
+	authURL, err := url.Parse(response.AuthURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRedirect := "http://192.168.1.50:8787" + openAIChatGPTBrowserCallbackPath
+	if got := authURL.Query().Get("redirect_uri"); got != wantRedirect {
+		t.Fatalf("redirect_uri = %q, want %q", got, wantRedirect)
+	}
+	if strings.Contains(response.AuthURL, "localhost:1455") {
+		t.Fatalf("browser auth URL still uses the old local callback port: %s", response.AuthURL)
+	}
+}
+
+func TestOpenAIChatGPTBrowserCallbackDoesNotRequireSession(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "llm-chatgpt-browser-callback")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+
+	app := newTestApp(t, cfg)
+	router := app.Router()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, openAIChatGPTBrowserCallbackPath, nil)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("GET %s status = %d, body = %s", openAIChatGPTBrowserCallbackPath, rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Header().Get("Content-Type"), "text/html") {
+		t.Fatalf("callback content type = %q, want text/html", rec.Header().Get("Content-Type"))
+	}
+}
+
 func TestIntegrationSettingsPersistAndHideKeys(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Database.Path = serverCacheTestPath(t, "integration-settings")
@@ -340,6 +403,7 @@ func TestCompactRouterExcludesAdminAPI(t *testing.T) {
 		{method: http.MethodPost, path: "/api/admin/apps/emby/action", body: `{"action":"restart"}`},
 		{method: http.MethodGet, path: "/api/admin/settings/integrations"},
 		{method: http.MethodPost, path: "/api/admin/settings/llm/openai/browser/start", body: `{}`},
+		{method: http.MethodGet, path: "/api/admin/settings/llm/openai/browser/callback?code=test&state=test"},
 		{method: http.MethodPost, path: "/api/admin/settings/llm/openai/browser/finish", body: `{"poll_id":"test"}`},
 	}
 	for _, tc := range adminCases {
