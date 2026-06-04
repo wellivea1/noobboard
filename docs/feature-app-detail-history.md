@@ -16,6 +16,59 @@ is the compact app-detail and infra-detail pages.
 
 ---
 
+## Implementation status & review (reviewed 2026-06-04)
+
+Codex landed PR #25 (`codex/api-coverage-safety-hardening`), which implements the
+bulk of this plan **and** a safety-first scaffold for chat-driven automatic
+repair. Verified on this machine: `go build ./...` ✓, `go test ./...` ✓,
+`cmd/visualcheck` ✓ (`ok:true`, 0 sub-44px targets, 0 banned terms, no overflow).
+
+**Landed:**
+- **Phase 1 — poller + cache:** `App.RunPoller(ctx, cfg.Polling.Interval)` is
+  started from `runServers`; read handlers serve a cloned cached snapshot
+  (`latestSnapshot`) with a cold-start fallback; only the poller processes
+  notifications; runtime-settings writes invalidate the cache;
+  `POST /api/status/refresh` forces an immediate collect.
+- **Phase 2 — history store + recorder:** `db.FileHistoryStore` (append-only
+  `history.jsonl` + in-memory per-subject ring) and `history.Recorder`
+  (transition-only diff; seeds baseline with no event; emits one `unknown` on app
+  disappearance; covers infra subjects internet/dns/wan/nas/unraid_array). Hourly
+  `Prune` by age + per-subject cap. Wired into the poller.
+- **Phase 3 — history API:** `GET /api/apps/{id}/history` and
+  `GET /api/infrastructure/history?subject=…`, role-gated, redacted notes,
+  uptime 24h/7d, `no-store`.
+- **Phases 4–5 — UI:** app cards are activatable (`role=button`, keydown), open an
+  `app-detail`/`infra-detail` compact view with current status, last-working,
+  uptime, and a plain-language timeline; focus-managed back; "Check again" uses
+  the shared refresh endpoint. Privacy filter strips the new Unraid/Docker infra
+  fields from general users.
+- **Repair scaffold (execution-locked):** the diagnosis schema now returns a
+  closed-set `recommended_action_id` + `recommended_action_target`; the server
+  builds an `llmAgentPlanView` with an HMAC-signed, 5-min, actor/action/target
+  -bound approval token; chat renders an approval popup ("Allow fix" disabled);
+  admin can **Arm** a session (`AgentControlEnabled` gate, `AgentArmDuration`
+  ≤1h). `recordAgentApproval` verifies token + arm but **deliberately returns 409
+  "locked"** — no mutating tool runs yet. This is the clean handoff point for the
+  repair work in the section below.
+
+**Review findings (small, worth a follow-up):**
+- **Banned-term / plain-language leak in infra history for general users.**
+  `visibleInfraHistorySubject` returns raw display names ("DNS", "WAN", "NAS",
+  "Unraid array") and the recorder writes notes like "DNS is resolving."
+  `internet` and **`dns` are exposed to general users unconditionally**, so a
+  general user hitting `/api/infrastructure/history?subject=dns` receives the
+  banned term "DNS". The compact UI only ever opens `internet`, so the harness
+  stays green, but the API leaks technical vocabulary. Fix: for non-admins,
+  return plain-language display names + notes (or restrict general users to the
+  `internet` subject). Add a harness case that opens a non-`internet` infra
+  subject to catch this.
+- **Remaining from the original plan:** add visual-check coverage that actually
+  opens app-detail/infra-detail (assert render, back-with-focus, banned-term +
+  touch-target + overflow audits, screenshots); the optional 24-hour status bar;
+  a `docs/security.md` note that `history.jsonl` is sensitive + git-ignored.
+
+---
+
 ## Current architecture (what exists vs. what's missing)
 
 Grounded in the code as it stands today:
@@ -341,6 +394,113 @@ display name, not "WAN".
    + `docs/agent-roadmap.md` updates.
 
 Each PR is independently shippable and leaves the app working.
+
+---
+
+# Automatic server repair — path to deployable quality
+
+The chat agent can already *diagnose* and *recommend* a fix, and the approval/arm
+plumbing exists, but execution is hard-locked. This section plans the remaining
+work to let an admin let the agent actually perform a repair (initially: restart
+a crashed container) from chat, safely.
+
+## Trust model (the non-negotiable principle)
+
+**The LLM never executes anything.** It only returns a closed-set
+`recommended_action_id` + a target *hint*. The **server** is the sole actuator:
+it re-resolves the target against its own live snapshot, maps the action to a
+hardcoded, allowlisted operation, and runs it only after every gate passes. No
+free-form command, container name, or shell string from the model is ever
+executed. This boundary already exists in the scaffold — we complete it without
+weakening it.
+
+## Defense-in-depth gates (all must hold to execute)
+
+1. `LLM.AgentControlEnabled` is **on** (admin setting, default **off**).
+2. The admin **armed** this session (`AgentArmDuration` ≤ 1h, auto-expires).
+3. A valid, **single-use**, unexpired approval token bound to actor + action +
+   target (HMAC already implemented; add one-time consumption).
+4. The action is in the **executable allowlist** (v1: `restart` only).
+5. The target app is **opted in** to auto-repair (per-app flag, default off) and
+   not blacklisted.
+6. Per-app **cooldown** + global **rate limit** not exceeded.
+7. Requester is **admin** on the admin router (general users can never reach it).
+
+## R1 — Server-side actuator (unlock execution)
+- Add an `agentRepairExecutor` mapping `recommended_action_id` → a concrete op:
+  - `ask_admin_to_restart_container` → `docker.ControlContainer(app, ActionRestart)`.
+  - The `ask_admin_to_check_*` actions stay **non-executing** recommendations
+    (they don't mutate) — they show in chat but never actuate.
+- Reuse the existing `controlApp` discipline verbatim: re-resolve the target from
+  the current full snapshot (`findAppByID`), apply the stop/restart confirmation
+  rule, and audit `app.container.action` with `actor` = approving admin +
+  `via:"agent_plan"`, `plan_id`, `recommended_action_id`.
+- In `recordAgentApproval`, when `choice=allow_once` + token valid + armed +
+  action executable + target resolved: call the executor and return the result,
+  replacing today's `409 "locked"`. Compute `CanExecute` from
+  (`AgentControlEnabled` && action∈allowlist && target resolved && app opted-in);
+  enable the chat "Allow fix" button only when armed.
+
+## R2 — Safety envelope
+- **Per-app opt-in:** add `AgentRepairAllowed bool` to the app catalog entry
+  (default false), surfaced in admin app settings. Only opted-in, non-blacklisted
+  apps are eligible; reflected in `resolveAgentPlanTarget`.
+- **Single-use tokens:** track consumed plan nonces (in-memory set with TTL = token
+  expiry) so an approval executes at most once; reject replays.
+- **Action allowlist:** hardcode `{restart}` for v1. Explicitly reject stop/start/
+  delete/exec/anything else. Never expose shell/exec.
+- **Cooldown + rate limit:** e.g. ≤1 agent restart per app / 10 min and ≤5 agent
+  actions / hour globally; over-limit → audited refusal, surfaced in chat.
+- **Kill switch:** disarm or `AgentControlEnabled=off` disables instantly; arm
+  auto-expires. One target per approval (no bulk).
+
+## R3 — Outcome verification & reporting
+- After executing, force a `refreshSnapshot` after a short delay, compare the
+  target's before/after status, and write a history `StatusEvent` note
+  ("Auto-repair: restarted — recovered" / "still not responding").
+- Return the outcome to chat (recovered / still down, before→after). On failure,
+  **do not auto-retry**; surface to the admin.
+- Audit the full lifecycle: proposed → approved (by whom) → executed → verified.
+
+## R4 — UI completion
+- Enable "Allow fix" only when `can_execute` && armed; show the resolved app +
+  action and a confirm affordance consistent with `controlApp`.
+- Show the execution outcome inline in the chat thread.
+- Admin settings: expose the `AgentControlEnabled` switch and per-app
+  "Allow automatic repair" toggles alongside the existing Arm control; show
+  cooldown/rate-limit + armed-until state.
+
+## R5 — Tests, security review, docs
+- Unit: action→op mapping; rejects non-allowlisted actions; single-use token;
+  cooldown/rate-limit; per-app opt-in; disarmed/disabled/non-admin paths refuse
+  **without** calling the Docker client.
+- Integration: armed + approved + eligible restart calls a mock `ControlContainer`
+  exactly once; replay blocked; cooldown blocks the second; verification re-poll
+  records the outcome event.
+- Run `/security-review` on the actuation path (trust boundary, no model→command
+  injection, token replay, privilege checks, audit completeness).
+- Docs: `docs/security.md` (new actuation capability + every gate + audit),
+  `docs/llm-policy.md`, `docs/agent-roadmap.md`, and this file.
+
+## Suggested repair PR breakdown
+- **AR1:** per-app `AgentRepairAllowed` flag + admin settings toggle + plan
+  eligibility wiring (no execution yet).
+- **AR2:** server-side actuator + single-use tokens + allowlist; unlock
+  `recordAgentApproval` to execute restart; enable "Allow fix"; full audit.
+- **AR3:** cooldown/rate-limit + outcome verification re-poll + chat outcome UI.
+- **AR4:** security review + docs + harness coverage for the armed/approved flow.
+
+## Repair-specific open choices
+- **Autonomy level (key decision).** v1 recommended: **approval-gated while
+  armed** — the admin clicks "Allow fix" for each action. A later opt-in could
+  allow **armed-autonomous** repair (agent fixes allowlisted apps without a
+  per-action click during the arm window). Recommend shipping approval-gated
+  first; treat autonomous as a separate, clearly-flagged follow-up.
+- **Executable action scope for v1:** restart-only (recommended) vs. also
+  start/stop.
+- **Cooldown/rate-limit defaults:** suggested 1/app/10min, 5/hour global.
+- **Per-app flag:** new `AgentRepairAllowed` (recommended) vs. reusing an existing
+  restart-permission flag.
 
 ---
 
