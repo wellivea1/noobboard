@@ -38,6 +38,20 @@ Or use the one-step installer, which also prompts for the firewall rule and the 
 .\install.ps1 -Start
 ```
 
+Rebuild/update an existing service after pulling new code:
+
+```powershell
+.\install.ps1
+```
+
+On update runs, the installer rebuilds `dist\noobboard.exe`, stops and deletes the existing
+Windows service by service name, waits until it is fully stopped/removed so the old binary is
+not locked, copies the rebuilt binary into `%ProgramFiles%\NoobBoard`, registers the service
+again, and starts it again if it was running before the rebuild. Existing firewall and
+bootstrap-login settings are preserved by default so update runs do not repeat first-install
+prompts. Use `-Start` to start a previously stopped service, `-AllowLan` to add/reapply LAN
+firewall + bind settings, or `-SetupAuth` to force the bootstrap admin prompt.
+
 Admin login via the installer (and the install/wizard contract):
 
 - When you accept the admin-login prompt, `install.ps1` writes `auth.bootstrap_admin_username`
