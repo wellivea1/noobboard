@@ -45,7 +45,7 @@ func TestValidateDiagnosisRequiresAppTargetForAppActions(t *testing.T) {
 		"severity":"medium",
 		"confidence":0.7,
 		"incident_type":"app_down",
-		"affected_services":["emby"],
+		"affected_services":["emby","plex"],
 		"diagnosis":"Emby is offline.",
 		"evidence":["container exited"],
 		"general_user_summary":"Emby is offline.",
@@ -55,7 +55,29 @@ func TestValidateDiagnosisRequiresAppTargetForAppActions(t *testing.T) {
 		"should_notify_admin":true
 	}`))
 	if err == nil {
-		t.Fatal("expected restart recommendation without an app target to be rejected")
+		t.Fatal("expected ambiguous restart recommendation without an app target to be rejected")
+	}
+}
+
+func TestValidateDiagnosisInfersSingleAffectedAppTarget(t *testing.T) {
+	diagnosis, err := ValidateDiagnosis([]byte(`{
+		"severity":"medium",
+		"confidence":0.7,
+		"incident_type":"app_down",
+		"affected_services":["emby"],
+		"diagnosis":"Emby is offline.",
+		"evidence":["container exited"],
+		"general_user_summary":"Emby is offline.",
+		"admin_message":"Incident: Emby is offline.",
+		"recommended_action_id":"ask_admin_to_check_logs",
+		"recommended_action_target":{"kind":"manual","id_or_name":""},
+		"should_notify_admin":true
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diagnosis.RecommendedTarget.Kind != "app" || diagnosis.RecommendedTarget.IDOrName != "emby" {
+		t.Fatalf("target was not inferred from affected_services: %#v", diagnosis.RecommendedTarget)
 	}
 }
 

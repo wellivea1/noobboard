@@ -1444,10 +1444,22 @@ func (a *App) llmUserRepairPlanResponse(diagnosis llm.Diagnosis, snapshot models
 	action, known := agentActionDefinition(diagnosis.RecommendedActionID)
 	target := resolveAgentPlanTarget(action, diagnosis, snapshot)
 	canRequest := known && action.Executable && action.DockerAction == docker.ActionRestart && target.Resolved
+	canExecute := false
 	status := "not_actionable"
 	reason := ""
 	if canRequest {
 		status = "request_available"
+		if app, ok := findAppByID(snapshot.Apps, target.ID); ok {
+			switch {
+			case app.RestartAllowedGeneralUser && currentStatusOrUnknown(app.CurrentStatus) != models.StatusOnline:
+				canExecute = true
+				status = "direct_restart_available"
+			case app.RestartAllowedGeneralUser:
+				reason = "This app is currently working."
+			default:
+				reason = "Ask an admin to review this app."
+			}
+		}
 	} else if known && action.RequiresAppTarget && !target.Resolved {
 		status = "target_unresolved"
 		reason = target.Reason
@@ -1459,17 +1471,25 @@ func (a *App) llmUserRepairPlanResponse(diagnosis llm.Diagnosis, snapshot models
 		RecommendedActionID:   action.ID,
 		ActionKnown:           known,
 		RequiresAdminApproval: false,
-		CanExecute:            false,
+		CanExecute:            canExecute,
 		CanRequestRepair:      canRequest,
 		Status:                status,
 		Target:                target,
 		Options: []llmAgentPlanOptionView{
 			{
+				ID:          "restart_now",
+				Label:       "Restart now",
+				Description: "Restart this app from NoobBoard.",
+				Enabled:     canExecute,
+				Selected:    canExecute,
+				Reason:      reason,
+			},
+			{
 				ID:          "request_admin",
 				Label:       "Ask admin",
 				Description: "Ask an admin to review and fix this app.",
 				Enabled:     canRequest,
-				Selected:    canRequest,
+				Selected:    canRequest && !canExecute,
 				Reason:      reason,
 			},
 		},
@@ -2476,6 +2496,20 @@ func (a *App) restartUserApp(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, errors.New("this app is currently working"))
 		return
 	}
+	action, _ := agentActionDefinition("ask_admin_to_restart_container")
+	reviewDecision, reviewEnabled, err := a.reviewAgentAction(r.Context(), user, snapshot, app, action, "general_user_direct")
+	if reviewEnabled {
+		details["auto_review_allow"] = reviewDecision.Allow
+		details["auto_review_confidence"] = reviewDecision.Confidence
+		details["auto_review_summary"] = reviewDecision.Summary
+	}
+	if err != nil {
+		details["reason"] = "auto_review_refused"
+		details["error"] = err.Error()
+		a.deps.Audit.Record(user.ID, "user.app.restart.auto_review_refused", auditDetailsCopy(details))
+		writeError(w, http.StatusConflict, err)
+		return
+	}
 	limit := a.reserveAgentRepair(app.AppID, time.Now().UTC())
 	if !limit.Allowed {
 		details["reason"] = limit.Reason
@@ -2495,7 +2529,6 @@ func (a *App) restartUserApp(w http.ResponseWriter, r *http.Request) {
 	a.invalidateSnapshot()
 	a.deps.Audit.Record(user.ID, "user.app.restart.executed", auditDetailsCopy(details))
 	a.deps.Audit.Record(user.ID, "app.container.action", map[string]interface{}{"app_id": app.AppID, "action": string(docker.ActionRestart), "container_name": app.ContainerName, "via": "general_user_direct"})
-	action, _ := agentActionDefinition("ask_admin_to_restart_container")
 	outcome := a.verifyRepairOutcome(r.Context(), app, action, result, "Restart")
 	verifyDetails := auditDetailsCopy(details)
 	verifyDetails["verified"] = outcome.Verified

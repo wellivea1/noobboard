@@ -79,7 +79,7 @@ func TestConfigValidationRejectsInvalidActionAutoReviewSettings(t *testing.T) {
 	}
 
 	cfg = Defaults()
-	cfg.LLM.ActionAutoReviewModel = "chatgpt/gpt-5.5"
+	cfg.LLM.ActionAutoReviewModel = "chatgpt/gpt-5.1-codex"
 	cfg.LLM.ActionAutoReviewReasoning = "xhigh"
 	cfg.LLM.ActionAutoReviewReferencePaths = []string{"docs/security.md", "AGENTS.md"}
 	if err := cfg.Validate(); err != nil {
@@ -234,7 +234,7 @@ func TestActionAutoReviewConfigParsing(t *testing.T) {
 	}
 
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(configPath, []byte("llm:\n  action_auto_review_enabled: true\n  action_auto_review_model: chatgpt/gpt-5.5\n  action_auto_review_reasoning: xhigh\n  action_auto_review_reference_paths: docs/security.md,docs/llm-policy.md\n"), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte("llm:\n  action_auto_review_enabled: true\n  action_auto_review_model: chatgpt/gpt-5.1-codex\n  action_auto_review_reasoning: xhigh\n  action_auto_review_reference_paths: docs/security.md,docs/llm-policy.md\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg = Defaults()
@@ -242,7 +242,7 @@ func TestActionAutoReviewConfigParsing(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !cfg.LLM.ActionAutoReviewEnabled ||
-		cfg.LLM.ActionAutoReviewModel != "chatgpt/gpt-5.5" ||
+		cfg.LLM.ActionAutoReviewModel != "chatgpt/gpt-5.1-codex" ||
 		cfg.LLM.ActionAutoReviewReasoning != "xhigh" ||
 		len(cfg.LLM.ActionAutoReviewReferencePaths) != 2 ||
 		cfg.LLM.ActionAutoReviewReferencePaths[1] != "docs/llm-policy.md" {

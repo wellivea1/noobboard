@@ -51,6 +51,30 @@ const SETTINGS_ENDPOINTS = [
   { title: "Integrations", section: "integrations", path: "/api/admin/settings/integrations" },
   { title: "Notifications", section: "notifications", path: "/api/admin/settings/notifications" },
 ];
+const OPENAI_MODEL_OPTIONS = [
+  { value: "gpt-4.1", label: "GPT-4.1" },
+  { value: "gpt-4.1-mini", label: "GPT-4.1 mini" },
+  { value: "gpt-4.1-nano", label: "GPT-4.1 nano" },
+  { value: "gpt-4o", label: "GPT-4o" },
+  { value: "gpt-4o-mini", label: "GPT-4o mini" },
+  { value: "o3", label: "o3" },
+  { value: "o4-mini", label: "o4-mini" },
+];
+const CHATGPT_CODEX_MODEL_OPTIONS = [
+  { value: "gpt-5.2-codex", label: "GPT-5.2 Codex" },
+  { value: "gpt-5.1-codex", label: "GPT-5.1 Codex" },
+  { value: "gpt-5.1-codex-max", label: "GPT-5.1 Codex Max" },
+  { value: "gpt-5.1-codex-mini", label: "GPT-5.1 Codex mini" },
+  { value: "gpt-5-codex", label: "GPT-5 Codex" },
+];
+const ANTHROPIC_MODEL_OPTIONS = [
+  { value: "claude-sonnet-4-5", label: "Claude Sonnet 4.5" },
+  { value: "claude-opus-4-1-20250805", label: "Claude Opus 4.1" },
+  { value: "claude-opus-4-20250514", label: "Claude Opus 4" },
+  { value: "claude-sonnet-4-20250514", label: "Claude Sonnet 4" },
+  { value: "claude-3-7-sonnet-20250219", label: "Claude Sonnet 3.7" },
+  { value: "claude-3-5-haiku-20241022", label: "Claude Haiku 3.5" },
+];
 const compactDrawerSections = [
   { id: "settings", label: "Settings", glyph: "\u2699", render: renderCompactSettings },
 ];
@@ -2300,18 +2324,26 @@ function renderUserRepairRequestPrompt(plan, diagnosis = {}) {
   const target = plan?.target || {};
   if (!plan?.can_request_repair || !target.id) return null;
   const label = target.label || target.id;
+  const directRestart = !!plan.can_execute;
   return node("section", { class: "agent-plan-prompt user-repair-prompt" },
     node("div", { class: "agent-plan-head" },
       node("span", {},
-        node("strong", { text: "Ask admin to fix this" }),
-        node("small", { text: `${label} can be sent to an admin for review.` }),
+        node("strong", { text: directRestart ? "Restart this app" : "Ask admin to fix this" }),
+        node("small", { text: directRestart ? `${label} can be restarted from here.` : `${label} can be sent to an admin for review.` }),
       ),
-      node("span", { class: "settings-state-pill state-warn", text: "Admin review" }),
+      node("span", { class: `settings-state-pill ${directRestart ? "state-ok" : "state-warn"}`, text: directRestart ? "Ready" : "Admin review" }),
     ),
     node("div", { class: "agent-plan-actions" },
-      node("button", {
+      directRestart ? node("button", {
         type: "button",
         class: "primary command",
+        "data-glyph": "r",
+        onclick: (event) => runUserAppRestart({ app_id: target.id, display_name: label }, event.currentTarget),
+        text: "Restart now",
+      }) : null,
+      node("button", {
+        type: "button",
+        class: directRestart ? "command" : "primary command",
         "data-glyph": "!",
         onclick: (event) => requestAdminRepair(plan, diagnosis, event.currentTarget),
         text: "Ask admin",
@@ -2861,13 +2893,42 @@ async function loadRoleSettings() {
   try {
     const data = await api("/api/admin/settings/roles");
     state.roleVisibility = clone(data.visibility || {});
-    state.roleApps = data.apps || [];
+    state.roleApps = hydrateRoleApps(data.apps || []);
     state.roleUsers = data.users || [];
     state.roleUsersOriginal = clone(data.users || []);
     renderRoleSettings();
   } catch (error) {
     $("role-settings").replaceChildren(node("div", { class: "empty", text: error.message }));
   }
+}
+
+function hydrateRoleApps(apps) {
+  const snapshotApps = new Map((state.snapshot?.apps || []).flatMap((app) => {
+    const keys = [
+      app.app_id,
+      app.container_name,
+      app.display_name,
+    ].map((value) => String(value || "").trim().toLowerCase()).filter(Boolean);
+    return keys.map((key) => [key, app]);
+  }));
+  return apps.map((app) => {
+    const keys = [
+      app.app_id,
+      app.container_name,
+      app.display_name,
+    ].map((value) => String(value || "").trim().toLowerCase()).filter(Boolean);
+    const live = keys.map((key) => snapshotApps.get(key)).find(Boolean);
+    if (!live) return app;
+    return {
+      ...live,
+      ...app,
+      icon_url: app.icon_url || live.icon_url,
+      icon_source: app.icon_source || live.icon_source,
+      web_url: app.web_url || live.web_url,
+      image_ref: app.image_ref || live.image_ref,
+      template_path: app.template_path || live.template_path,
+    };
+  });
 }
 
 function renderRoleSettings() {
@@ -2962,8 +3023,8 @@ function renderRoleDetail(role, defaultRole, roles, visibility) {
           type: "button",
           class: "primary command",
           "data-glyph": "v",
-          onclick: saveRoles,
-          text: "Save roles",
+          onclick: saveRoleAccess,
+          text: "Save role access",
         }),
       ),
     ),
@@ -3059,14 +3120,7 @@ function roleAssignmentSection(role, roles) {
         node("h4", { text: "User assignments" }),
         node("p", { class: "muted", text: members.length ? `${members.length} user${members.length === 1 ? "" : "s"} currently use this role.` : "No users currently use this role." }),
       ),
-      node("button", {
-        type: "button",
-        class: "primary command",
-        "data-glyph": "v",
-        disabled: changed === 0,
-        onclick: saveRoleAssignments,
-        text: changed ? `Save ${changed}` : "Saved",
-      }),
+      node("span", { class: `settings-state-pill ${changed ? "state-warn" : "state-ok"}`, text: changed ? `${changed} pending` : "Saved" }),
     ),
     node("div", { class: "role-assignment-list" },
       assignableRoleUsers().length ? assignableRoleUsers().map((user) => roleAssignmentRow(user, roles, role.role)) : node("span", { class: "empty inline-empty", text: "No non-admin users" }),
@@ -3273,16 +3327,32 @@ function roleDisplayName(roles, roleName) {
   return role?.display_name || String(roleName || "").replaceAll("_", " ");
 }
 
-async function saveRoles() {
+async function saveRoleAccess() {
+  const original = new Map((state.roleUsersOriginal || []).map((user) => [user.username, String(user.role || "")]));
+  const changedAssignments = assignableRoleUsers().filter((user) => String(user.role || "") !== (original.get(user.username) || ""));
   try {
     const saved = await api("/api/admin/settings/roles", {
       method: "POST",
       body: JSON.stringify(state.roleVisibility),
     });
     state.roleVisibility = clone(saved);
-    renderRoleSettings();
-    showNotice("Role access saved.");
+    for (const user of changedAssignments) {
+      await api("/api/admin/users", {
+        method: "POST",
+        body: JSON.stringify({
+          username: user.username,
+          display_name: user.display_name || user.username,
+          role: user.role,
+          disabled: !!user.disabled,
+          password: "",
+        }),
+      });
+    }
     await refresh();
+    await loadRoleSettings();
+    showNotice(changedAssignments.length
+      ? `Role access and ${changedAssignments.length} assignment${changedAssignments.length === 1 ? "" : "s"} saved.`
+      : "Role access saved.");
   } catch (error) {
     showNotice(error.message, "error");
   }
@@ -3315,31 +3385,6 @@ async function saveUser(fields) {
     state.selectedUser = saved.username || username;
     showNotice(`${saved.username} saved.`);
     await loadRoleSettings();
-  } catch (error) {
-    showNotice(error.message, "error");
-  }
-}
-
-async function saveRoleAssignments() {
-  const original = new Map((state.roleUsersOriginal || []).map((user) => [user.username, String(user.role || "")]));
-  const changed = assignableRoleUsers().filter((user) => String(user.role || "") !== (original.get(user.username) || ""));
-  if (!changed.length) return;
-  try {
-    for (const user of changed) {
-      await api("/api/admin/users", {
-        method: "POST",
-        body: JSON.stringify({
-          username: user.username,
-          display_name: user.display_name || user.username,
-          role: user.role,
-          disabled: !!user.disabled,
-          password: "",
-        }),
-      });
-    }
-    showNotice(`${changed.length} assignment${changed.length === 1 ? "" : "s"} saved.`);
-    await loadRoleSettings();
-    await refresh();
   } catch (error) {
     showNotice(error.message, "error");
   }
@@ -3449,18 +3494,18 @@ function renderVisibilitySettings(item, data) {
 function renderBlacklistSettings(item, data) {
   const settings = clone(data || {});
   const groups = [
-    ["Apps", [
+    ["Apps", "Hide application identifiers before they reach user-facing views or LLM context.", [
       ["blacklist_app_ids", "App IDs", "app id"],
       ["blacklist_container_names", "Container names", "container name"],
       ["blacklist_display_names", "Display names", "display name"],
     ]],
-    ["Storage", [
+    ["Storage", "Redact private paths, shares, and filename patterns from status details.", [
       ["blacklist_folder_paths", "Folder paths", "/mnt/user/private"],
       ["blacklist_share_names", "Share names", "share"],
       ["blacklist_file_paths", "File paths", "path"],
       ["blacklist_filename_globs", "Filename globs", "*.key"],
     ]],
-    ["Network and logs", [
+    ["Network and logs", "Remove sensitive hosts, addresses, accounts, URLs, and log patterns.", [
       ["blacklist_log_patterns", "Log patterns", "pattern"],
       ["blacklist_env_names", "Environment names", "*_KEY"],
       ["blacklist_url_patterns", "URL patterns", "url pattern"],
@@ -3470,9 +3515,10 @@ function renderBlacklistSettings(item, data) {
     ]],
   ];
   const editors = new Map();
-  const sections = groups.map(([title, fields]) => node("section", { class: "settings-subsection" },
+  const sections = groups.map(([title, description, fields]) => node("section", { class: "settings-subsection settings-blacklist-section" },
     node("h4", { text: title }),
-    node("div", { class: "settings-two-col" }, fields.map(([key, label, placeholder]) => {
+    node("p", { class: "muted", text: description }),
+    node("div", { class: "settings-blacklist-grid" }, fields.map(([key, label, placeholder]) => {
       const editor = listEditor(label, settings[key] || [], placeholder);
       editors.set(key, editor);
       return editor.element;
@@ -3485,6 +3531,7 @@ function renderBlacklistSettings(item, data) {
     sections,
     node("section", { class: "settings-subsection" },
       node("h4", { text: "Redaction" }),
+      node("p", { class: "muted", text: "Global redaction switches applied after blacklist matching." }),
       node("div", { class: "settings-toggle-grid" }, redactIPs.element, redactHosts.element, redactEmails.element),
     ),
   );
@@ -3636,8 +3683,9 @@ function renderLLMSettings(item, data) {
     settingChoice(authMethodName, "chatgpt_headless", "ChatGPT Pro/Plus (code)", "Shows a login code for another browser or device.", selectedAuthMethod === "chatgpt_headless", node("div", { class: "settings-choice-action" }, headlessConnect)),
     settingChoice(authMethodName, "api_key", "API key", "Uses a saved OpenAI API key.", selectedAuthMethod === "api_key"),
   ];
-  const openAIModel = settingTextField("OpenAI model", settings.openai_model || "gpt-5");
-  const anthropicModel = settingTextField("Anthropic model", settings.anthropic_model || "claude-sonnet-4-5");
+  const openAIModel = settingSelectField("OpenAI API model", knownModelValue(OPENAI_MODEL_OPTIONS, settings.openai_model, "gpt-4.1"), OPENAI_MODEL_OPTIONS);
+  const chatGPTModel = settingSelectField("ChatGPT Codex model", knownModelValue(CHATGPT_CODEX_MODEL_OPTIONS, settings.openai_model, "gpt-5.1-codex"), CHATGPT_CODEX_MODEL_OPTIONS);
+  const anthropicModel = settingSelectField("Anthropic model", knownModelValue(ANTHROPIC_MODEL_OPTIONS, settings.anthropic_model, "claude-sonnet-4-5"), ANTHROPIC_MODEL_OPTIONS);
   const timeout = durationSecondsField("Timeout", settings.timeout || 45000000000);
   const agentControlEnabled = settingToggle("Enable action approval gate", !!settings.agent_control_enabled);
   const agentArmDuration = durationSecondsField("Arm window", settings.agent_arm_duration || settings.agent_readiness?.agent_arm_duration || 600000000000);
@@ -3681,8 +3729,8 @@ function renderLLMSettings(item, data) {
     node("div", { class: "settings-choice-list" }, authChoices.map((choice) => choice.element)),
     browserMessage,
     headlessMessage,
-    node("p", { class: "muted", text: "API-key mode uses this model directly. ChatGPT login uses Codex-compatible models; unsupported values are sent as gpt-5.5 with high reasoning." }),
-    node("div", { class: "settings-field-grid" }, openAIModel.element),
+    node("p", { class: "muted", text: "API-key mode uses OpenAI API models. ChatGPT login uses Codex models only; unsupported saved values fall back to the default Codex model." }),
+    node("div", { class: "settings-field-grid" }, openAIModel.element, chatGPTModel.element),
     apiKeyBlock,
     clearChatGPT.element,
   );
@@ -3700,6 +3748,8 @@ function renderLLMSettings(item, data) {
     openAISection.hidden = selectedProvider !== "openai";
     anthropicSection.hidden = selectedProvider !== "anthropic";
     apiKeyBlock.hidden = method !== "api_key";
+    openAIModel.element.hidden = method !== "api_key";
+    chatGPTModel.element.hidden = method === "api_key";
     browserMessage.hidden = selectedProvider !== "openai" || method !== "chatgpt_browser" || !browserMessage.textContent;
     headlessMessage.hidden = selectedProvider !== "openai" || method !== "chatgpt_headless";
     for (const choice of authChoices) choice.element.classList.toggle("selected", choice.input.checked);
@@ -3739,7 +3789,7 @@ function renderLLMSettings(item, data) {
       enabled: enabled.input.checked,
       provider: provider.input.value,
       openai_auth_method: authChoices.find((choice) => choice.input.checked)?.input.value || "api_key",
-      openai_model: openAIModel.input.value.trim(),
+      openai_model: (authChoices.find((choice) => choice.input.checked)?.input.value || "api_key") === "api_key" ? openAIModel.input.value : chatGPTModel.input.value,
       anthropic_model: anthropicModel.input.value.trim(),
       timeout: secondsToDuration(timeout.input.value),
       agent_control_enabled: agentControlEnabled.input.checked,
@@ -3761,18 +3811,37 @@ function renderLLMSettings(item, data) {
 }
 
 function actionReviewModelOptions(settings) {
+  const openAIModel = knownModelValue(OPENAI_MODEL_OPTIONS, settings.openai_model, "gpt-4.1");
+  const chatGPTModel = knownModelValue(CHATGPT_CODEX_MODEL_OPTIONS, settings.openai_model, "gpt-5.1-codex");
+  const anthropicModel = knownModelValue(ANTHROPIC_MODEL_OPTIONS, settings.anthropic_model, "claude-sonnet-4-5");
   const options = [
     { value: "same", label: "Same as diagnosis" },
-    { value: `openai/${settings.openai_model || "gpt-5"}`, label: `OpenAI: ${settings.openai_model || "gpt-5"}` },
-    { value: "chatgpt/gpt-5.5", label: "ChatGPT connector: gpt-5.5" },
-    { value: "chatgpt/gpt-5.4", label: "ChatGPT connector: gpt-5.4" },
-    { value: `anthropic/${settings.anthropic_model || "claude-sonnet-4-5"}`, label: `Anthropic: ${settings.anthropic_model || "claude-sonnet-4-5"}` },
+    { value: `openai/${openAIModel}`, label: `OpenAI: ${openAIModel}` },
+    { value: `chatgpt/${chatGPTModel}`, label: `ChatGPT connector: ${chatGPTModel}` },
+    { value: `anthropic/${anthropicModel}`, label: `Anthropic: ${anthropicModel}` },
   ];
   const current = String(settings.action_auto_review_model || "same").trim() || "same";
-  if (!options.some((option) => option.value === current)) {
-    options.push({ value: current, label: current });
-  }
+  if (isKnownActionReviewModel(current) && !options.some((option) => option.value === current)) options.push({ value: current, label: current });
   return options;
+}
+
+function knownModelValue(options, current, fallback) {
+  const value = String(current || "").trim();
+  return options.some((option) => option.value === value) ? value : fallback;
+}
+
+function isKnownActionReviewModel(value) {
+  if (value === "same") return true;
+  const [provider, model] = String(value || "").split("/", 2);
+  if (!provider || !model) return false;
+  const options = provider === "openai"
+    ? OPENAI_MODEL_OPTIONS
+    : provider === "chatgpt"
+      ? CHATGPT_CODEX_MODEL_OPTIONS
+      : provider === "anthropic"
+        ? ANTHROPIC_MODEL_OPTIONS
+        : [];
+  return options.some((option) => option.value === model);
 }
 
 function renderLLMAgentReadiness(readiness, options = {}) {
@@ -4090,22 +4159,35 @@ function renderIntegrationSettings(item, data) {
   const body = node("div", { class: "settings-form" },
     node("section", { class: "settings-subsection" },
       node("h4", { text: "Mode" }),
+      node("p", { class: "muted", text: "Choose whether status comes from live integrations, fixtures, or a mixed setup." }),
       node("div", { class: "settings-field-grid" }, mode.element),
     ),
     node("section", { class: "settings-subsection" },
-      node("h4", { text: "Unraid" }),
+      node("h4", { text: "Unraid API" }),
+      node("p", { class: "muted", text: "Primary NAS connection used for app, storage, and server status." }),
       node("div", { class: "settings-field-grid" }, unraidURL.element, keyFieldWithState(unraidKey, settings.unraid_api_key_set), unraidKeyFile.element),
-      node("div", { class: "settings-toggle-grid" }, clearUnraidKey.element, sshFallback.element),
+      node("div", { class: "settings-toggle-grid" }, clearUnraidKey.element),
+    ),
+    node("section", { class: "settings-subsection" },
+      node("h4", { text: "Unraid SSH fallback" }),
+      node("p", { class: "muted", text: "Optional fallback when the Unraid API is reachable but cannot provide enough detail." }),
+      node("div", { class: "settings-toggle-grid" }, sshFallback.element),
       node("div", { class: "settings-field-grid" }, sshHost.element, sshPort.element, sshUser.element, sshKeyFile.element, sshCommand.element),
     ),
     node("section", { class: "settings-subsection" },
-      node("h4", { text: "UniFi" }),
+      node("h4", { text: "UniFi API" }),
+      node("p", { class: "muted", text: "Router and network status source." }),
       node("div", { class: "settings-field-grid" }, unifiURL.element, keyFieldWithState(unifiKey, settings.unifi_api_key_set), unifiKeyFile.element, unifiSite.element),
-      node("div", { class: "settings-field-grid" }, nasClientHint.element, expectedNASLink.element),
       node("div", { class: "settings-toggle-grid" }, clearUniFiKey.element, unifiTLS.element),
     ),
     node("section", { class: "settings-subsection" },
-      node("h4", { text: "Probes" }),
+      node("h4", { text: "NAS network matching" }),
+      node("p", { class: "muted", text: "Hints used to match the NAS in UniFi client data and validate link speed." }),
+      node("div", { class: "settings-field-grid" }, nasClientHint.element, expectedNASLink.element),
+    ),
+    node("section", { class: "settings-subsection" },
+      node("h4", { text: "Health probes" }),
+      node("p", { class: "muted", text: "Lightweight checks for internet, DNS, router, and NAS reachability." }),
       node("div", { class: "settings-field-grid" }, internetProbe.element, dnsProbe.element, routerProbe.element, nasProbe.element),
     ),
   );

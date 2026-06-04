@@ -358,8 +358,8 @@ it deduplicates reviewed turns, skips child/review-loop sessions, and asks a dif
 model family for PASS/FAIL/UNKNOWN evidence. NoobBoard's implementation only copies the
 configurable separate-review idea: it reviews a concrete restart approval request against
 redacted status and allowlisted reference docs, then fails closed before Docker if the
-reviewer denies or errors. Its examples use `gpt-5.5` with `xhigh` reasoning; this is not
-proof that Codex auto-review uses "5.4 Thinking".
+reviewer denies or errors. Its examples use provider-specific high-reasoning settings;
+this is not proof that Codex auto-review uses a particular unreleased model family.
 
 **Likely files:** new `internal/llm/agent.go` (runner + tool schema), `internal/llm/
 schema.go` (tool-call validation), `internal/server/server.go` (arming + run endpoints,

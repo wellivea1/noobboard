@@ -32,7 +32,21 @@ func ValidateDiagnosis(data []byte) (Diagnosis, error) {
 	if err := json.Unmarshal(data, &diagnosis); err != nil {
 		return Diagnosis{}, err
 	}
+	diagnosis.inferMissingActionTarget()
 	return diagnosis, diagnosis.Validate()
+}
+
+func (d *Diagnosis) inferMissingActionTarget() {
+	if !actionRequiresAppTarget(d.RecommendedActionID) {
+		return
+	}
+	if d.RecommendedTarget.Kind == "app" && d.RecommendedTarget.IDOrName != "" {
+		return
+	}
+	if len(d.AffectedServices) != 1 {
+		return
+	}
+	d.RecommendedTarget = ActionTarget{Kind: "app", IDOrName: d.AffectedServices[0]}
 }
 
 func (d Diagnosis) Validate() error {
