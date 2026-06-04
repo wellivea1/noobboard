@@ -52,7 +52,19 @@ builds a self-contained `noobboard.exe`, and registers the NoobBoard Windows ser
 .\install.ps1 -Start
 ```
 
-During a service install, the script also **prompts** whether to:
+After pulling new code, rerun the same installer from an elevated prompt to rebuild and
+replace the installed service binary:
+
+```powershell
+.\install.ps1
+```
+
+If the NoobBoard service was already running, the script stops it, waits for the service
+to be fully removed, installs the rebuilt binary, and starts it again. Existing firewall
+and admin-login settings are preserved on rebuild runs; pass `-AllowLan` to add LAN access
+or `-SetupAuth` to force the bootstrap admin prompt again.
+
+During a first service install, the script also **prompts** whether to:
 
 - add a Windows Firewall rule for ports 8787-8788 (recommended) — opens the Private and
   Public profiles with a warning (see Windows Service below) **and** binds the server to
@@ -66,7 +78,7 @@ from where the installer left off. See the install/wizard contract in
 
 Useful flags: `-NoService` (build only), `-Start` (start the service after install),
 `-RunTests` (run the test suite first), `-AllowLan` / `-NoFirewall` (firewall rule yes/no
-without prompting), `-InstallDir <path>` (service binary location, default
+without prompting), `-SetupAuth` (force bootstrap admin prompt), `-InstallDir <path>` (service binary location, default
 `%ProgramFiles%\NoobBoard`). Run `Get-Help .\install.ps1 -Detailed` for the full list.
 
 ### Manual build (alternative)

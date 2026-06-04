@@ -8,7 +8,10 @@
     2. Downloads Go module dependencies and builds a self-contained noobboard.exe.
     3. Installs the app: by default, copies the binary to a stable location and registers
        the NoobBoard Windows service (requires an elevated/Administrator prompt).
-    4. Optionally prompts to add a LAN/WAN firewall rule and to set up the admin login now.
+    4. On first install, optionally prompts to add a LAN/WAN firewall rule and to set up
+       the admin login now. On rebuild/update runs, preserves those existing choices unless
+       -AllowLan or -SetupAuth is supplied. -NoFirewall suppresses adding a new firewall
+       rule but does not remove an existing one.
 
     The compiled binary embeds the web frontend, so a single .exe is all that gets installed.
 
@@ -21,18 +24,26 @@
     Useful for local development; run the app with: .\dist\noobboard.exe serve
 
 .PARAMETER Start
-    Start the NoobBoard service immediately after installing it.
+    Start the NoobBoard service immediately after installing it. When updating an existing
+    install, the script also restarts the service automatically if it was running before.
 
 .PARAMETER RunTests
     Run "go test ./..." before building.
 
 .PARAMETER AllowLan
     Add the firewall rule (Private + Public profiles) without prompting (non-interactive
-    "yes"). When neither -AllowLan nor -NoFirewall is given and the session is interactive,
-    the installer asks.
+    "yes"). On first install, when neither -AllowLan nor -NoFirewall is given and the
+    session is interactive, the installer asks. Existing installs preserve the current
+    firewall state unless this flag is supplied.
 
 .PARAMETER NoFirewall
-    Never add the firewall rule and do not prompt (non-interactive "no").
+    Never add the firewall rule and do not prompt (non-interactive "no"). This does not
+    remove an existing NoobBoard firewall rule.
+
+.PARAMETER SetupAuth
+    Prompt for bootstrap admin credentials even when an existing install is detected. This is
+    normally only needed before the first service run; existing users should change passwords
+    in the app settings or setup wizard.
 
 .PARAMETER InstallDir
     Where the service binary is installed. Default: "%ProgramFiles%\NoobBoard".
@@ -55,6 +66,7 @@ param(
     [switch]$RunTests,
     [switch]$AllowLan,
     [switch]$NoFirewall,
+    [switch]$SetupAuth,
     [string]$InstallDir = (Join-Path $env:ProgramFiles 'NoobBoard'),
     [string]$GoMinVersion = '1.25.0'
 )
@@ -67,20 +79,39 @@ function Write-Step($msg)  { Write-Host "`n==> $msg" -ForegroundColor Cyan }
 function Write-Ok($msg)    { Write-Host "    $msg" -ForegroundColor Green }
 function Write-Warn2($msg) { Write-Host "    $msg" -ForegroundColor Yellow }
 
+$ServiceName = 'NoobBoard'
+$FirewallRuleName = 'NoobBoard'
+$cfgDir  = Join-Path $env:ProgramData 'NoobBoard'
+$cfgFile = Join-Path $cfgDir 'config.yaml'
+$dbFile  = Join-Path $cfgDir 'data\dashboard.db.json'
+
 function Test-Admin {
     $id = [Security.Principal.WindowsIdentity]::GetCurrent()
     $p  = New-Object Security.Principal.WindowsPrincipal($id)
     return $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-function Confirm-Firewall {
+function Get-FirewallPlan([bool]$ExistingInstall) {
     # Decide whether to add the inbound firewall rule.
-    # -AllowLan forces yes, -NoFirewall forces no, otherwise prompt (recommended = yes).
-    if ($NoFirewall) { return $false }
-    if ($AllowLan)   { return $true }
+    # -AllowLan forces yes, -NoFirewall forces no. Existing installs preserve current
+    # firewall state by default so update/rebuild runs do not repeat first-install prompts.
+    $existingRule = $null
+    if (Get-Command Get-NetFirewallRule -ErrorAction SilentlyContinue) {
+        $existingRule = Get-NetFirewallRule -DisplayName $FirewallRuleName -ErrorAction SilentlyContinue
+    }
+    if ($NoFirewall) { return [pscustomobject]@{ AllowLan = $false; ConfigureBind = $false; ExistingRule = [bool]$existingRule } }
+    if ($AllowLan)   { return [pscustomobject]@{ AllowLan = $true;  ConfigureBind = $true;  ExistingRule = [bool]$existingRule } }
+    if ($existingRule) {
+        Write-Ok 'Firewall rule already exists; preserving LAN firewall access.'
+        return [pscustomobject]@{ AllowLan = $true; ConfigureBind = $false; ExistingRule = $true }
+    }
+    if ($ExistingInstall) {
+        Write-Ok 'Existing install detected; preserving firewall settings. Re-run with -AllowLan to add LAN access.'
+        return [pscustomobject]@{ AllowLan = $false; ConfigureBind = $false; ExistingRule = $false }
+    }
     if (-not [Environment]::UserInteractive) {
         Write-Warn2 'Non-interactive session; skipping the firewall rule. Re-run with -AllowLan to add it.'
-        return $false
+        return [pscustomobject]@{ AllowLan = $false; ConfigureBind = $false; ExistingRule = $false }
     }
     $title   = 'Allow network access through Windows Firewall?'
     $message = 'Add an inbound firewall rule for NoobBoard (TCP 8787-8788, Private + Public ' +
@@ -92,7 +123,7 @@ function Confirm-Firewall {
         '&No', 'Leave the firewall unchanged; access stays local to this machine.')
     $choices = [System.Management.Automation.Host.ChoiceDescription[]]@($yes, $no)
     $answer  = $Host.UI.PromptForChoice($title, $message, $choices, 0)  # default = Yes
-    return ($answer -eq 0)
+    return [pscustomobject]@{ AllowLan = ($answer -eq 0); ConfigureBind = ($answer -eq 0); ExistingRule = $false }
 }
 
 function Confirm-AuthSetup {
@@ -242,6 +273,26 @@ function Get-GoVersion($goExe) {
     return $null
 }
 
+function Wait-NoobServiceStatus([string]$Name, [string]$Status, [int]$TimeoutSeconds = 30) {
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    do {
+        $svc = Get-Service -Name $Name -ErrorAction SilentlyContinue
+        if ($svc -and $svc.Status.ToString() -eq $Status) { return $true }
+        Start-Sleep -Milliseconds 500
+    } while ((Get-Date) -lt $deadline)
+    return $false
+}
+
+function Wait-NoobServiceDeleted([string]$Name, [int]$TimeoutSeconds = 30) {
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    do {
+        $svc = Get-Service -Name $Name -ErrorAction SilentlyContinue
+        if (-not $svc) { return $true }
+        Start-Sleep -Milliseconds 500
+    } while ((Get-Date) -lt $deadline)
+    return $false
+}
+
 # ---------------------------------------------------------------------------
 # 1. Dependency: Go toolchain
 # ---------------------------------------------------------------------------
@@ -284,6 +335,7 @@ if ($needInstall) {
 # ---------------------------------------------------------------------------
 Write-Step 'Downloading module dependencies'
 & $goExe mod download
+if ($LASTEXITCODE -ne 0) { throw "Dependency download failed (exit $LASTEXITCODE)." }
 Write-Ok 'Dependencies are present.'
 
 if ($RunTests) {
@@ -294,6 +346,8 @@ if ($RunTests) {
 }
 
 Write-Step 'Building noobboard.exe'
+$distDir = Join-Path $RepoRoot 'dist'
+New-Item -ItemType Directory -Force -Path $distDir | Out-Null
 $distExe = Join-Path $RepoRoot 'dist\noobboard.exe'
 & $goExe build -o $distExe .\cmd\dashboard
 if ($LASTEXITCODE -ne 0) { throw "Build failed (exit $LASTEXITCODE)." }
@@ -324,13 +378,22 @@ $installedExe = Join-Path $InstallDir 'noobboard.exe'
 # Stop and remove any existing service first so the binary is not locked. Use sc.exe by
 # service name (not the installed binary) so this works even if the old binary is missing
 # or -InstallDir changed since the last install.
-$existing = Get-Service -Name 'NoobBoard' -ErrorAction SilentlyContinue
+$existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+$existingInstall = [bool]$existing -or (Test-Path -LiteralPath $installedExe) -or (Test-Path -LiteralPath $cfgFile) -or (Test-Path -LiteralPath $dbFile)
+$wasRunning = $existing -and ($existing.Status -eq 'Running')
 if ($existing) {
     Write-Warn2 'Existing NoobBoard service found; stopping and removing it before reinstall.'
-    & sc.exe stop NoobBoard | Out-Null
-    Start-Sleep -Seconds 1
-    & sc.exe delete NoobBoard | Out-Null
-    Start-Sleep -Seconds 1
+    if ($existing.Status -ne 'Stopped') {
+        & sc.exe stop $ServiceName | Out-Null
+        if (-not (Wait-NoobServiceStatus -Name $ServiceName -Status 'Stopped' -TimeoutSeconds 45)) {
+            throw "Timed out waiting for service '$ServiceName' to stop."
+        }
+    }
+    & sc.exe delete $ServiceName | Out-Null
+    if (-not (Wait-NoobServiceDeleted -Name $ServiceName -TimeoutSeconds 45)) {
+        throw "Timed out waiting for service '$ServiceName' to be removed."
+    }
+    Write-Ok 'Existing service removed cleanly.'
 }
 
 Copy-Item -Path $distExe -Destination $installedExe -Force
@@ -341,11 +404,13 @@ Write-Step 'Registering the Windows service'
 if ($LASTEXITCODE -ne 0) { throw "install-service failed (exit $LASTEXITCODE)." }
 Write-Ok 'Service "NoobBoard" registered (auto-start).'
 
-$lanRequested = Confirm-Firewall
+$firewallPlan = Get-FirewallPlan -ExistingInstall $existingInstall
+$lanRequested = [bool]$firewallPlan.AllowLan
+$bindValid = $false
 if ($lanRequested) {
     Write-Step 'Adding firewall rule for TCP 8787-8788 (Private + Public profiles)'
-    if (-not (Get-NetFirewallRule -DisplayName 'NoobBoard' -ErrorAction SilentlyContinue)) {
-        New-NetFirewallRule -DisplayName 'NoobBoard' -Direction Inbound -Action Allow `
+    if (-not $firewallPlan.ExistingRule) {
+        New-NetFirewallRule -DisplayName $FirewallRuleName -Direction Inbound -Action Allow `
             -Protocol TCP -LocalPort 8787,8788 -Profile Private,Public | Out-Null
         Write-Ok 'Firewall rule added (Private and Public profiles).'
         Write-Warn2 'This allows inbound access on Private AND Public networks. That is normally fine on a'
@@ -356,7 +421,11 @@ if ($lanRequested) {
         Write-Ok 'Firewall rule already exists.'
     }
 } else {
-    Write-Ok 'Skipped firewall rule; NoobBoard is reachable only from this machine.'
+    if ($firewallPlan.ExistingRule) {
+        Write-Ok 'Skipped firewall changes; the existing NoobBoard firewall rule remains.'
+    } else {
+        Write-Ok 'Skipped firewall rule; NoobBoard is reachable only from this machine.'
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -366,11 +435,21 @@ if ($lanRequested) {
 # setup as complete: the future in-app setup wizard still runs and simply continues from the
 # accounts step (an admin already exists). See docs/agent-roadmap.md (Workstream A) and
 # docs/deployment-windows.md for the installer/wizard contract.
-$cfgDir  = Join-Path $env:ProgramData 'NoobBoard'
-$cfgFile = Join-Path $cfgDir 'config.yaml'
-$dbFile  = Join-Path $cfgDir 'data\dashboard.db.json'
+$shouldSetupAuth = $false
+if ($SetupAuth) {
+    if ([Environment]::UserInteractive) {
+        $shouldSetupAuth = $true
+    } else {
+        Write-Warn2 'Non-interactive session; cannot prompt for admin login setup.'
+    }
+} elseif ($existingInstall) {
+    Write-Ok 'Existing install detected; skipping bootstrap admin prompt.'
+    Write-Host '    Use the app settings (or setup wizard) to change an existing login.' -ForegroundColor Gray
+} else {
+    $shouldSetupAuth = Confirm-AuthSetup
+}
 
-if (Confirm-AuthSetup) {
+if ($shouldSetupAuth) {
     if (Test-Path -LiteralPath $dbFile) {
         Write-Warn2 'A NoobBoard database already exists; bootstrap credentials only apply on first run.'
         Write-Warn2 'To change an existing login, use the app settings (or the setup wizard) instead.'
@@ -388,7 +467,11 @@ if (Confirm-AuthSetup) {
     }
 } else {
     Write-Ok 'Skipped admin login setup.'
-    Write-Host '    Default login (admin / change-me-now) applies until changed, or the setup wizard will ask.' -ForegroundColor Gray
+    if ($existingInstall) {
+        Write-Host '    Existing users and runtime settings were left unchanged.' -ForegroundColor Gray
+    } else {
+        Write-Host '    Default login (admin / change-me-now) applies until changed, or the setup wizard will ask.' -ForegroundColor Gray
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -398,7 +481,7 @@ if (Confirm-AuthSetup) {
 # would still answer only on localhost. A non-loopback bind requires a non-default admin
 # password (see config.Validate), so write it, verify with check-config, and revert to
 # localhost if validation would fail (otherwise the service could not start).
-if ($lanRequested) {
+if ($lanRequested -and $firewallPlan.ConfigureBind) {
     Write-Step 'Configuring the server to listen on the LAN (bind 0.0.0.0)'
     New-Item -ItemType Directory -Force -Path $cfgDir | Out-Null
     Set-NoobConfigKey -Path $cfgFile -Section 'server' -Key 'bind_address' -Value '0.0.0.0'
@@ -418,13 +501,21 @@ if ($lanRequested) {
         Write-Warn2 'LAN binding requires a non-default admin password (config validation failed); reverted'
         Write-Warn2 'to localhost only. Re-run and set the admin login to enable LAN access.'
     }
+} elseif ($lanRequested) {
+    Write-Ok 'Preserving existing server bind setting.'
 }
 
-if ($Start) {
-    Write-Step 'Starting the NoobBoard service'
+if ($Start -or $wasRunning) {
+    if ($wasRunning -and -not $Start) {
+        Write-Step 'Restarting the NoobBoard service because it was running before the rebuild'
+    } else {
+        Write-Step 'Starting the NoobBoard service'
+    }
     & $installedExe start-service
     if ($LASTEXITCODE -ne 0) { throw "start-service failed (exit $LASTEXITCODE)." }
     Write-Ok 'Service started.'
+} elseif ($existingInstall) {
+    Write-Ok 'Service rebuilt and registered; it was not running before, so it was left stopped.'
 }
 
 Write-Step 'Done'
