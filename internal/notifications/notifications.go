@@ -81,6 +81,61 @@ func (m *Manager) SavePreference(pref models.NotificationPreference, visibleApps
 	return m.store.UpsertNotificationPreference(pref)
 }
 
+func (m *Manager) NotifyAdmins(ctx context.Context, subject, body, appID, dedupe string) (int, error) {
+	cfg := m.configSnapshot()
+	if !cfg.Enabled {
+		return 0, nil
+	}
+	users, err := m.store.AllUsers()
+	if err != nil {
+		return 0, err
+	}
+	sent := 0
+	for _, user := range users {
+		if user.Disabled || user.Role != models.RoleAdmin {
+			continue
+		}
+		msg := Message{UserID: user.ID, AppID: appID, Subject: subject, Body: body, Dedupe: dedupe}
+		if err := m.backend.Send(ctx, msg); err != nil {
+			return sent, err
+		}
+		_ = m.store.AppendNotification(db.NotificationRecord{
+			ID:      notificationRecordID(user.ID, appID, dedupe),
+			Dedupe:  dedupe,
+			UserID:  user.ID,
+			AppID:   appID,
+			Message: subject + ": " + body,
+			Time:    time.Now().UTC().Format(time.RFC3339Nano),
+		})
+		sent++
+	}
+	if sent > 0 {
+		m.audit.Record("system", "notification.admin_message", map[string]interface{}{"app_id": appID, "sent": sent, "dedupe": dedupe})
+	}
+	return sent, nil
+}
+
+func (m *Manager) NotifyUser(ctx context.Context, userID, subject, body, appID, dedupe string) error {
+	cfg := m.configSnapshot()
+	if !cfg.Enabled || strings.TrimSpace(userID) == "" {
+		return nil
+	}
+	msg := Message{UserID: userID, AppID: appID, Subject: subject, Body: body, Dedupe: dedupe}
+	if err := m.backend.Send(ctx, msg); err != nil {
+		return err
+	}
+	_ = m.store.AppendNotification(db.NotificationRecord{
+		ID:      notificationRecordID(userID, appID, dedupe),
+		Dedupe:  dedupe,
+		UserID:  userID,
+		AppID:   appID,
+		Message: subject + ": " + body,
+		Time:    time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	m.audit.Record("system", "notification.user_message", map[string]interface{}{"app_id": appID, "user_id": userID, "dedupe": dedupe})
+	return nil
+}
+
 func (m *Manager) ProcessSnapshot(ctx context.Context, snapshot models.Snapshot) error {
 	cfg := m.configSnapshot()
 	if !cfg.Enabled {
@@ -171,4 +226,8 @@ func countDedupeKeys(prefs []models.NotificationPreference) int {
 		}
 	}
 	return len(seen)
+}
+
+func notificationRecordID(values ...string) string {
+	return fmt.Sprintf("notification-%d-%s", time.Now().UTC().UnixNano(), strings.NewReplacer(" ", "-", ":", "-", "/", "-").Replace(strings.Join(values, "-")))
 }

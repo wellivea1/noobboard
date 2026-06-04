@@ -306,6 +306,43 @@ type NotificationRollup struct {
 	PendingDedupedEvents int  `json:"pending_deduped_events"`
 }
 
+type RepairRequestStatus string
+
+const (
+	RepairRequestPending  RepairRequestStatus = "pending"
+	RepairRequestDenied   RepairRequestStatus = "denied"
+	RepairRequestApproved RepairRequestStatus = "approved"
+	RepairRequestExecuted RepairRequestStatus = "executed"
+	RepairRequestFailed   RepairRequestStatus = "failed"
+)
+
+type RepairRequest struct {
+	ID               string                `json:"id"`
+	RequesterID      string                `json:"requester_id"`
+	RequesterName    string                `json:"requester_name"`
+	RequesterRole    Role                  `json:"requester_role"`
+	AppID            string                `json:"app_id"`
+	AppLabel         string                `json:"app_label"`
+	ActionID         string                `json:"action_id"`
+	DiagnosisSummary string                `json:"diagnosis_summary,omitempty"`
+	Status           RepairRequestStatus   `json:"status"`
+	CreatedAt        time.Time             `json:"created_at"`
+	ResolvedAt       *time.Time            `json:"resolved_at,omitempty"`
+	ResolvedBy       string                `json:"resolved_by,omitempty"`
+	ResolutionNote   string                `json:"resolution_note,omitempty"`
+	Outcome          *RepairRequestOutcome `json:"outcome,omitempty"`
+}
+
+type RepairRequestOutcome struct {
+	Verified       bool          `json:"verified"`
+	Recovered      bool          `json:"recovered"`
+	BeforeStatus   CurrentStatus `json:"before_status"`
+	AfterStatus    CurrentStatus `json:"after_status"`
+	Message        string        `json:"message"`
+	HistoryEventID string        `json:"history_event_id,omitempty"`
+	CheckedAt      time.Time     `json:"checked_at"`
+}
+
 type StatusEvent struct {
 	ID          string            `json:"id"`
 	SubjectType StatusSubjectType `json:"subject_type"`

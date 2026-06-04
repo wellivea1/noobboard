@@ -600,7 +600,7 @@ executed as a command.
 - **GR0 — Quality fixes (small, do first):** lengthen/iterate the verification
   poll; make `notify-admin` deliver + carry context; stop rendering an approval
   popup for non-executable recommendations.
-- **GR1 — Request path:** `RepairRequest` model + store, `POST /api/user/repair-request`,
+- **GR1 - Request path: IMPLEMENTED.** `RepairRequest` model + store, `POST /api/user/repair-request`,
   admin pending-requests queue + approve/deny wired to execution, requester
   outcome feedback. Compact "Ask an admin to fix this."
 - **GR2 — Direct opt-in path:** wire `RestartAllowedGeneralUser` (catalog + admin

@@ -1031,6 +1031,153 @@ func TestAgentApprovalGlobalRateLimitBlocksDocker(t *testing.T) {
 	}
 }
 
+func TestGeneralUserDiagnoseIncludesRepairRequestPlan(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "general-user-repair-plan")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+	cfg.LLM.Provider = "openai"
+	cfg.LLM.OpenAIAuthMethod = config.OpenAIAuthMethodAPIKey
+	cfg.LLM.OpenAIAPIKey = "sk-test-local"
+
+	app := newTestApp(t, cfg)
+	app.deps.Collectors.Docker = &recordingDockerCollector{apps: []models.AppStatus{{
+		AppID:                 "emby",
+		DisplayName:           "Emby",
+		ContainerID:           "container:Emby",
+		ContainerName:         "Emby",
+		Category:              "docker",
+		DockerState:           models.DockerExited,
+		CurrentStatus:         models.StatusOffline,
+		VisibleToGeneralUsers: true,
+	}}}
+	app.settingsMu.Lock()
+	app.deps.LLM = &recordingLLMClient{
+		diagnosis: llm.Diagnosis{
+			Severity:            models.SeverityHigh,
+			Confidence:          0.9,
+			IncidentType:        models.IncidentAppDown,
+			AffectedServices:    []string{"Emby"},
+			Diagnosis:           "Emby is down.",
+			GeneralUserSummary:  "Emby is not working.",
+			RecommendedActionID: "ask_admin_to_restart_container",
+			RecommendedTarget:   llm.ActionTarget{Kind: "app", IDOrName: "emby"},
+			ShouldNotifyAdmin:   true,
+		},
+	}
+	app.settingsMu.Unlock()
+
+	router := app.Router()
+	cookie, csrf := loginAs(t, router, "viewer", "change-me-now")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/user/diagnose", strings.NewReader(`{"question":"what is wrong with Emby?"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("general diagnose status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var response diagnosisResponse
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.AgentPlan == nil || !response.AgentPlan.CanRequestRepair || response.AgentPlan.ApprovalToken != "" || response.AgentPlan.CanExecute {
+		t.Fatalf("general-user plan should only expose a request affordance: %#v", response.AgentPlan)
+	}
+	if response.AgentPlan.Target.ID != "emby" || response.AgentPlan.Status != "request_available" {
+		t.Fatalf("general-user plan did not resolve Emby: %#v", response.AgentPlan)
+	}
+}
+
+func TestGeneralUserRepairRequestCanBeApprovedByArmedAdmin(t *testing.T) {
+	oldDelay := agentRepairVerificationDelay
+	agentRepairVerificationDelay = 0
+	t.Cleanup(func() { agentRepairVerificationDelay = oldDelay })
+
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "general-user-repair-request-approve")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+	cfg.LLM.AgentControlEnabled = true
+	cfg.AppCatalog.AgentRepairAllowed = map[string]bool{"emby": true}
+
+	app := newTestApp(t, cfg)
+	collector := &recordingDockerCollector{apps: []models.AppStatus{{
+		AppID:                 "emby",
+		DisplayName:           "Emby",
+		ContainerID:           "container:Emby",
+		ContainerName:         "Emby",
+		Category:              "docker",
+		DockerState:           models.DockerExited,
+		CurrentStatus:         models.StatusOffline,
+		VisibleToGeneralUsers: true,
+	}},
+		afterControlApps: []models.AppStatus{{
+			AppID:                 "emby",
+			DisplayName:           "Emby",
+			ContainerID:           "container:Emby",
+			ContainerName:         "Emby",
+			Category:              "docker",
+			DockerState:           models.DockerRunning,
+			CurrentStatus:         models.StatusOnline,
+			VisibleToGeneralUsers: true,
+		}}}
+	app.deps.Collectors.Docker = collector
+
+	router := app.Router()
+	viewerCookie, viewerCSRF := loginAs(t, router, "viewer", "change-me-now")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/user/repair-request", strings.NewReader(`{"app_id":"emby","action_id":"ask_admin_to_restart_container","diagnosis_summary":"Emby is not working."}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", viewerCSRF)
+	req.AddCookie(viewerCookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("create repair request status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var created struct {
+		Request models.RepairRequest `json:"request"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Request.ID == "" || created.Request.Status != models.RepairRequestPending || created.Request.RequesterID != "user-1" {
+		t.Fatalf("created repair request = %#v", created.Request)
+	}
+
+	adminCookie, adminCSRF := loginAdmin(t, router)
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/admin/agent/arm", strings.NewReader(`{"armed":true,"duration_seconds":60}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", adminCSRF)
+	req.AddCookie(adminCookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("arm agent status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/admin/repair-requests/"+created.Request.ID+"/decision", strings.NewReader(`{"choice":"approve"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", adminCSRF)
+	req.AddCookie(adminCookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("approve repair request status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if collector.callCount != 1 || collector.called != docker.ActionRestart || collector.app.AppID != "emby" {
+		t.Fatalf("repair request did not restart Emby once: count=%d action=%q app=%#v", collector.callCount, collector.called, collector.app)
+	}
+	stored, err := app.deps.Store.RepairRequestByID(created.Request.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != models.RepairRequestExecuted || stored.Outcome == nil || !stored.Outcome.Recovered {
+		t.Fatalf("stored repair request outcome = %#v", stored)
+	}
+}
+
 func TestLLMSettingsKeysAreWriteOnly(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Database.Path = serverCacheTestPath(t, "llm-settings-keys")

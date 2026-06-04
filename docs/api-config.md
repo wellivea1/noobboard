@@ -33,8 +33,12 @@ Admin routes are registered on the admin site/port. The compact site/port serves
 - `POST /api/admin/diagnose`
 - `POST /api/admin/agent/arm`
 - `POST /api/admin/agent/approval`
+- `GET /api/admin/repair-requests`
+- `POST /api/admin/repair-requests/{id}/decision`
 - `POST /api/user/diagnose`
 - `POST /api/user/notify-admin`
+- `GET /api/user/repair-requests`
+- `POST /api/user/repair-request`
 - `GET /api/user/notification-preferences`
 - `POST /api/user/notification-preferences`
 - `GET /api/admin/settings/visibility`
@@ -60,7 +64,9 @@ Admin settings writes require the `X-CSRF-Token` returned by login. Successful w
 
 Docker app operations are admin-only. `POST /api/admin/apps/{id}/action` requires `X-CSRF-Token` and accepts `{"action":"start"}`, `{"action":"stop"}`, or `{"action":"restart"}`. `stop` and `restart` are disruptive and additionally require `{"confirmed":true,"confirm_app_id":"<resolved app_id>"}`; the server verifies that `confirm_app_id` matches the app resolved from the current snapshot before calling Docker. `GET /api/admin/apps/{id}/logs?limit=80` returns redacted Docker log lines and clamps `limit` to `1..200`. Both routes resolve `{id}` against the current admin snapshot and use a `container:` object ID or safe container name from that snapshot; clients do not submit raw Unraid object IDs. Restart prefers Unraid's native Docker restart mutation when available and falls back to stop/start only when that mutation is not present in the GraphQL schema. Log audit records store only metadata such as app ID, container name, line count, and whether redaction occurred. Live Unraid mode requires an API key with Docker permissions.
 
-LLM approval repair is narrower than manual Docker control. `POST /api/admin/agent/approval` accepts a server-issued `approval_token` plus `choice:"deny"` or `choice:"allow_once"`. `allow_once` can execute only `ask_admin_to_restart_container`, only when the current admin session is armed with `POST /api/admin/agent/arm`, and only for a currently resolved app that has `app_catalog.agent_repair_allowed["<app id>"]=true`. Tokens are short-lived and single-use; non-restart recommendations, unarmed sessions, hidden/replaced targets, blacklisted apps, missing app opt-in, token replay, the per-app 10-minute cooldown, and the global 5/hour repair limit are refused before Docker is called. Successful approvals return the Docker `result` plus an `outcome` object with `before_status`, `after_status`, `recovered`, `verified`, and a plain-language message; verification refreshes NoobBoard status once and does not auto-retry.
+LLM approval repair is narrower than manual Docker control. `POST /api/admin/agent/approval` accepts a server-issued `approval_token` plus `choice:"deny"` or `choice:"allow_once"`. `allow_once` can execute only `ask_admin_to_restart_container`, only when the current admin session is armed with `POST /api/admin/agent/arm`, and only for a currently resolved app that has `app_catalog.agent_repair_allowed["<app id>"]=true`. Tokens are short-lived and single-use; non-restart recommendations, unarmed sessions, hidden/replaced targets, blacklisted apps, missing app opt-in, token replay, the per-app 10-minute cooldown, and the global 5/hour repair limit are refused before Docker is called. Successful approvals return the Docker `result` plus an `outcome` object with `before_status`, `after_status`, `recovered`, `verified`, and a plain-language message; verification polls NoobBoard status and does not auto-retry.
+
+General-user repair requests are request-only. `POST /api/user/repair-request` accepts a visible `app_id`, `action_id:"ask_admin_to_restart_container"`, and optional `diagnosis_summary`; it stores a pending request and notifies admins through the configured notification backend. It does not start, stop, restart, or arm anything. Admins review requests with `GET /api/admin/repair-requests` and `POST /api/admin/repair-requests/{id}/decision` using `choice:"approve"` or `choice:"deny"`. Approval still requires the same admin arm, per-app `agent_repair_allowed` opt-in, blacklist, optional auto-review, cooldown, and global rate-limit checks before Docker is called. Request outcomes are stored on the request and can be read by the requester through `GET /api/user/repair-requests`.
 
 Runtime settings endpoints accept and return JSON:
 

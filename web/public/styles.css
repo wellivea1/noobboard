@@ -1099,6 +1099,71 @@ label {
   gap: 8px;
 }
 
+.user-repair-prompt {
+  margin-top: 10px;
+}
+
+.detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.detail-actions .command {
+  min-height: 44px;
+}
+
+.user-repair-state {
+  min-height: 32px;
+  align-content: center;
+}
+
+.repair-request-list {
+  display: grid;
+  gap: 10px;
+}
+
+.repair-request-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  padding: 12px;
+  background: var(--surface-alt);
+}
+
+.repair-request-main {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.repair-request-main p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.repair-request-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+@media (max-width: 720px) {
+  .repair-request-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .repair-request-actions {
+    justify-content: flex-start;
+  }
+}
+
 .agent-repair-outcome {
   display: grid;
   gap: 4px;

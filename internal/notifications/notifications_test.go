@@ -58,6 +58,53 @@ func (m *memoryStore) NotificationPreferencesForUser(userID string) ([]models.No
 func (m *memoryStore) AllNotificationPreferences() ([]models.NotificationPreference, error) {
 	return append([]models.NotificationPreference(nil), m.NotificationPreferences...), nil
 }
+func (m *memoryStore) AppendNotification(record db.NotificationRecord) error {
+	m.Notifications = append(m.Notifications, record)
+	return nil
+}
+func (m *memoryStore) NotificationsForUser(userID string, limit int) ([]db.NotificationRecord, error) {
+	var out []db.NotificationRecord
+	for i := len(m.Notifications) - 1; i >= 0; i-- {
+		record := m.Notifications[i]
+		if record.UserID == "" || record.UserID == userID {
+			out = append(out, record)
+			if limit > 0 && len(out) >= limit {
+				break
+			}
+		}
+	}
+	return out, nil
+}
+func (m *memoryStore) UpsertRepairRequest(request models.RepairRequest) error {
+	for i, existing := range m.State.RepairRequests {
+		if existing.ID == request.ID {
+			m.State.RepairRequests[i] = request
+			return nil
+		}
+	}
+	m.State.RepairRequests = append(m.State.RepairRequests, request)
+	return nil
+}
+func (m *memoryStore) RepairRequestByID(id string) (models.RepairRequest, error) {
+	for _, request := range m.State.RepairRequests {
+		if request.ID == id {
+			return request, nil
+		}
+	}
+	return models.RepairRequest{}, db.ErrNotFound
+}
+func (m *memoryStore) RepairRequests() ([]models.RepairRequest, error) {
+	return append([]models.RepairRequest(nil), m.State.RepairRequests...), nil
+}
+func (m *memoryStore) RepairRequestsForUser(userID string) ([]models.RepairRequest, error) {
+	var out []models.RepairRequest
+	for _, request := range m.State.RepairRequests {
+		if request.RequesterID == userID {
+			out = append(out, request)
+		}
+	}
+	return out, nil
+}
 func (m *memoryStore) RuntimeSettings() (db.RuntimeSettings, bool, error) {
 	if m.State.RuntimeSettings == nil {
 		return db.RuntimeSettings{}, false, nil

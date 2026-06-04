@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -171,6 +172,8 @@ func (a *App) AdminRouter() http.Handler {
 	mux.HandleFunc("POST /api/admin/settings/integrations", a.requireAdmin(a.updateIntegrationSettings))
 	mux.HandleFunc("GET /api/admin/settings/notifications", a.requireAdmin(a.getNotificationSettings))
 	mux.HandleFunc("POST /api/admin/settings/notifications", a.requireAdmin(a.updateNotificationSettings))
+	mux.HandleFunc("GET /api/admin/repair-requests", a.requireAdmin(a.adminRepairRequests))
+	mux.HandleFunc("POST /api/admin/repair-requests/{id}/decision", a.requireAdmin(a.decideRepairRequest))
 	mux.HandleFunc("GET /site-config.js", a.siteConfig(siteModeAdmin))
 	mux.Handle("GET /", a.staticFiles())
 	return securityHeaders(limitRequestBody(mux), a.deps.Config.Server)
@@ -198,6 +201,8 @@ func (a *App) registerSharedRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/infrastructure/history", a.requireAuth(a.infrastructureHistory))
 	mux.HandleFunc("POST /api/user/diagnose", a.requireAuth(a.userDiagnose))
 	mux.HandleFunc("POST /api/user/notify-admin", a.requireAuth(a.notifyAdmin))
+	mux.HandleFunc("GET /api/user/repair-requests", a.requireAuth(a.userRepairRequests))
+	mux.HandleFunc("POST /api/user/repair-request", a.requireAuth(a.createRepairRequest))
 	mux.HandleFunc("GET /api/user/notification-preferences", a.requireAuth(a.getNotificationPreferences))
 	mux.HandleFunc("POST /api/user/notification-preferences", a.requireAuth(a.saveNotificationPreferences))
 }
@@ -1356,6 +1361,9 @@ func (a *App) diagnose(w http.ResponseWriter, r *http.Request, mode llm.Mode, ro
 	response := diagnosisResponse{Diagnosis: diagnosis}
 	if mode == llm.ModeAdminRequested && role == models.RoleAdmin {
 		response.AgentPlan = a.llmAgentPlanResponse(diagnosis, full, mustUser(r).ID, mustSession(r))
+	} else if mode == llm.ModeGeneralUserRequested {
+		filtered := privacy.FilterSnapshotForRole(full, role, a.redactorSnapshot())
+		response.AgentPlan = a.llmUserRepairPlanResponse(diagnosis, filtered)
 	}
 	writeJSON(w, http.StatusOK, response)
 }
@@ -1428,6 +1436,42 @@ func (a *App) llmAgentPlanResponse(diagnosis llm.Diagnosis, snapshot models.Snap
 		})
 	}
 	return response
+}
+
+func (a *App) llmUserRepairPlanResponse(diagnosis llm.Diagnosis, snapshot models.Snapshot) *llmAgentPlanView {
+	action, known := agentActionDefinition(diagnosis.RecommendedActionID)
+	target := resolveAgentPlanTarget(action, diagnosis, snapshot)
+	canRequest := known && action.Executable && action.DockerAction == docker.ActionRestart && target.Resolved
+	status := "not_actionable"
+	reason := ""
+	if canRequest {
+		status = "request_available"
+	} else if known && action.RequiresAppTarget && !target.Resolved {
+		status = "target_unresolved"
+		reason = target.Reason
+	}
+	return &llmAgentPlanView{
+		ID:                    agentApprovalPlanID,
+		Title:                 action.Title,
+		Summary:               action.Summary,
+		RecommendedActionID:   action.ID,
+		ActionKnown:           known,
+		RequiresAdminApproval: false,
+		CanExecute:            false,
+		CanRequestRepair:      canRequest,
+		Status:                status,
+		Target:                target,
+		Options: []llmAgentPlanOptionView{
+			{
+				ID:          "request_admin",
+				Label:       "Ask admin",
+				Description: "Ask an admin to review and fix this app.",
+				Enabled:     canRequest,
+				Selected:    canRequest,
+				Reason:      reason,
+			},
+		},
+	}
 }
 
 type llmAgentActionDefinition struct {
@@ -2212,17 +2256,385 @@ func (a *App) notifyAdmin(w http.ResponseWriter, r *http.Request) {
 	}
 	var body struct {
 		Message string `json:"message"`
+		AppID   string `json:"app_id"`
+		Context string `json:"context"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	body.Message = strings.TrimSpace(body.Message)
-	if len(body.Message) > 1000 {
-		body.Message = body.Message[:1000]
+	message := strings.TrimSpace(body.Message)
+	if message == "" {
+		message = "A standard user reported a problem."
 	}
-	a.deps.Audit.Record(mustUser(r).ID, "user.notify_admin", map[string]interface{}{"message": body.Message})
-	writeJSON(w, http.StatusAccepted, map[string]string{"status": "queued"})
+	if contextText := strings.TrimSpace(body.Context); contextText != "" {
+		message += " " + contextText
+	}
+	if len(message) > 1000 {
+		message = message[:1000]
+	}
+	appID := strings.TrimSpace(body.AppID)
+	dedupe := "notify-admin:" + mustUser(r).ID + ":" + appID
+	sent, err := a.deps.Notifications.NotifyAdmins(r.Context(), "NoobBoard user report", message, appID, dedupe)
+	if err != nil {
+		a.deps.Audit.Record(mustUser(r).ID, "user.notify_admin.failed", map[string]interface{}{"app_id": appID, "error": err.Error()})
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	a.deps.Audit.Record(mustUser(r).ID, "user.notify_admin", map[string]interface{}{"message": message, "app_id": appID, "admin_notifications": sent})
+	writeJSON(w, http.StatusAccepted, map[string]interface{}{"status": "queued", "admin_notifications": sent})
+}
+
+func (a *App) createRepairRequest(w http.ResponseWriter, r *http.Request) {
+	if err := requireCSRF(r); err != nil {
+		writeError(w, http.StatusForbidden, err)
+		return
+	}
+	var body struct {
+		AppID            string `json:"app_id"`
+		ActionID         string `json:"action_id"`
+		DiagnosisSummary string `json:"diagnosis_summary"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	appID := strings.TrimSpace(body.AppID)
+	if appID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("app_id is required"))
+		return
+	}
+	actionID := strings.TrimSpace(body.ActionID)
+	if actionID == "" {
+		actionID = "ask_admin_to_restart_container"
+	}
+	action, ok := agentActionDefinition(actionID)
+	if !ok || !action.Executable || action.DockerAction != docker.ActionRestart {
+		writeError(w, http.StatusBadRequest, errors.New("requested repair action is not supported"))
+		return
+	}
+	visibleSnapshot, err := a.Snapshot(r.Context(), mustUser(r).Role)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	visibleApp, ok := findAppByID(visibleSnapshot.Apps, appID)
+	if !ok {
+		writeError(w, http.StatusNotFound, errors.New("app is not visible to this user"))
+		return
+	}
+	fullSnapshot, err := a.readOnlySnapshot(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	fullApp, ok := findAppByID(fullSnapshot.Apps, appID)
+	if !ok {
+		writeError(w, http.StatusNotFound, errors.New("app is not available in the current snapshot"))
+		return
+	}
+	if !isDockerRepairTarget(fullApp) {
+		writeError(w, http.StatusBadRequest, errors.New("this app cannot be restarted by NoobBoard"))
+		return
+	}
+	if existing, ok, err := a.pendingRepairRequestFor(mustUser(r).ID, fullApp.AppID, action.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	} else if ok {
+		writeJSON(w, http.StatusOK, map[string]interface{}{"status": "pending", "request": existing, "duplicate": true})
+		return
+	}
+	requestID, err := randomToken()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	user := mustUser(r)
+	now := time.Now().UTC()
+	request := models.RepairRequest{
+		ID:               "repair-" + sanitizeAgentRepairIDPart(requestID),
+		RequesterID:      user.ID,
+		RequesterName:    firstNonEmpty(user.DisplayName, user.Username, user.ID),
+		RequesterRole:    user.Role,
+		AppID:            fullApp.AppID,
+		AppLabel:         firstNonEmpty(visibleApp.DisplayName, fullApp.DisplayName, fullApp.ContainerName, fullApp.AppID),
+		ActionID:         action.ID,
+		DiagnosisSummary: strings.TrimSpace(body.DiagnosisSummary),
+		Status:           models.RepairRequestPending,
+		CreatedAt:        now,
+	}
+	if request.DiagnosisSummary == "" {
+		request.DiagnosisSummary = compactAppSummaryForRequest(visibleApp)
+	}
+	if err := a.deps.Store.UpsertRepairRequest(request); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	message := fmt.Sprintf("%s asked for help with %s. %s", request.RequesterName, request.AppLabel, request.DiagnosisSummary)
+	sent, err := a.deps.Notifications.NotifyAdmins(r.Context(), "Repair requested: "+request.AppLabel, message, request.AppID, "repair-request:"+request.ID)
+	if err != nil {
+		a.deps.Audit.Record(user.ID, "user.repair_request.notify_failed", map[string]interface{}{"request_id": request.ID, "app_id": request.AppID, "error": err.Error()})
+	}
+	a.deps.Audit.Record(user.ID, "user.repair_request.created", map[string]interface{}{"request_id": request.ID, "app_id": request.AppID, "action_id": request.ActionID, "admin_notifications": sent})
+	writeJSON(w, http.StatusAccepted, map[string]interface{}{"status": "pending", "request": request, "admin_notifications": sent})
+}
+
+func (a *App) userRepairRequests(w http.ResponseWriter, r *http.Request) {
+	requests, err := a.deps.Store.RepairRequestsForUser(mustUser(r).ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, repairRequestsNewestFirst(requests))
+}
+
+func (a *App) adminRepairRequests(w http.ResponseWriter, _ *http.Request) {
+	requests, err := a.deps.Store.RepairRequests()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, repairRequestsNewestFirst(requests))
+}
+
+func (a *App) decideRepairRequest(w http.ResponseWriter, r *http.Request) {
+	if err := requireCSRF(r); err != nil {
+		writeError(w, http.StatusForbidden, err)
+		return
+	}
+	requestID := strings.TrimSpace(r.PathValue("id"))
+	var body struct {
+		Choice string `json:"choice"`
+		Note   string `json:"note"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	choice := strings.TrimSpace(body.Choice)
+	if choice != "approve" && choice != "deny" {
+		writeError(w, http.StatusBadRequest, errors.New("choice must be approve or deny"))
+		return
+	}
+	request, err := a.deps.Store.RepairRequestByID(requestID)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, db.ErrNotFound) {
+			status = http.StatusNotFound
+		}
+		writeError(w, status, err)
+		return
+	}
+	if request.Status != models.RepairRequestPending {
+		writeError(w, http.StatusConflict, errors.New("repair request is no longer pending"))
+		return
+	}
+	if choice == "deny" {
+		resolved, err := a.resolveRepairRequest(r.Context(), request, models.RepairRequestDenied, mustUser(r).ID, strings.TrimSpace(body.Note), nil)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		a.deps.Audit.Record(mustUser(r).ID, "repair_request.denied", map[string]interface{}{"request_id": request.ID, "app_id": request.AppID, "requester_id": request.RequesterID})
+		writeJSON(w, http.StatusAccepted, map[string]interface{}{"status": "denied", "request": resolved})
+		return
+	}
+	a.approveRepairRequest(w, r, request)
+}
+
+func (a *App) approveRepairRequest(w http.ResponseWriter, r *http.Request, request models.RepairRequest) {
+	action, ok := agentActionDefinition(request.ActionID)
+	if !ok || !action.Executable || action.DockerAction != docker.ActionRestart {
+		if _, err := a.resolveRepairRequest(r.Context(), request, models.RepairRequestFailed, mustUser(r).ID, "Unsupported repair action.", nil); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeError(w, http.StatusConflict, errors.New("repair request action is not executable"))
+		return
+	}
+	a.settingsMu.RLock()
+	llmCfg := a.deps.Config.LLM
+	a.settingsMu.RUnlock()
+	agentArmed, agentArmedUntil := agentSessionArmed(llmCfg, mustSession(r))
+	details := map[string]interface{}{
+		"request_id":            request.ID,
+		"requester_id":          request.RequesterID,
+		"choice":                "approve",
+		"recommended_action_id": action.ID,
+		"target_kind":           "app",
+		"target_id":             request.AppID,
+		"agent_armed":           agentArmed,
+		"agent_armed_until":     agentArmedUntil,
+		"can_execute":           false,
+	}
+	if !agentArmed {
+		a.deps.Audit.Record(mustUser(r).ID, "repair_request.not_armed", details)
+		writeError(w, http.StatusConflict, errors.New("repair request approval must be armed in this admin session before a fix can run"))
+		return
+	}
+	snapshot, err := a.readOnlySnapshot(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	app, ok := findAppByID(snapshot.Apps, request.AppID)
+	if !ok {
+		details["reason"] = "target_unresolved"
+		a.deps.Audit.Record(mustUser(r).ID, "repair_request.refused", details)
+		writeError(w, http.StatusConflict, errors.New("repair request target is no longer present in the current app snapshot"))
+		return
+	}
+	details["app_id"] = app.AppID
+	details["container_name"] = app.ContainerName
+	details["docker_action"] = string(action.DockerAction)
+	if a.redactorSnapshot().IsBlacklistedApp(app) {
+		details["reason"] = "privacy_blacklisted"
+		a.deps.Audit.Record(mustUser(r).ID, "repair_request.refused", details)
+		writeError(w, http.StatusConflict, errors.New("automatic repair is unavailable for privacy-blacklisted apps"))
+		return
+	}
+	if !app.AgentRepairAllowed {
+		details["reason"] = "app_not_opted_in"
+		a.deps.Audit.Record(mustUser(r).ID, "repair_request.refused", details)
+		writeError(w, http.StatusConflict, errors.New("automatic repair is not enabled for this app"))
+		return
+	}
+	reviewDecision, reviewEnabled, err := a.reviewAgentAction(r.Context(), mustUser(r), snapshot, app, action, "repair_request")
+	if reviewEnabled {
+		details["auto_review_allow"] = reviewDecision.Allow
+		details["auto_review_confidence"] = reviewDecision.Confidence
+		details["auto_review_summary"] = reviewDecision.Summary
+	}
+	if err != nil {
+		details["reason"] = "auto_review_refused"
+		details["error"] = err.Error()
+		a.deps.Audit.Record(mustUser(r).ID, "repair_request.auto_review_refused", auditDetailsCopy(details))
+		writeError(w, http.StatusConflict, err)
+		return
+	}
+	limit := a.reserveAgentRepair(app.AppID, time.Now().UTC())
+	if !limit.Allowed {
+		details["reason"] = limit.Reason
+		details["retry_after_seconds"] = limit.RetryAfterSeconds
+		a.deps.Audit.Record(mustUser(r).ID, "repair_request.rate_limited", auditDetailsCopy(details))
+		writeError(w, http.StatusConflict, errors.New(limit.Message))
+		return
+	}
+	details["can_execute"] = true
+	a.deps.Audit.Record(mustUser(r).ID, "repair_request.approved", auditDetailsCopy(details))
+	result, err := a.deps.Collectors.Docker.ControlContainer(r.Context(), app, action.DockerAction)
+	if err != nil {
+		details["error"] = err.Error()
+		a.deps.Audit.Record(mustUser(r).ID, "repair_request.execute_failed", auditDetailsCopy(details))
+		if _, resolveErr := a.resolveRepairRequest(r.Context(), request, models.RepairRequestFailed, mustUser(r).ID, err.Error(), nil); resolveErr != nil {
+			writeError(w, http.StatusInternalServerError, resolveErr)
+			return
+		}
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	details["via"] = "repair_request"
+	a.invalidateSnapshot()
+	a.deps.Audit.Record(mustUser(r).ID, "repair_request.executed", auditDetailsCopy(details))
+	a.deps.Audit.Record(mustUser(r).ID, "app.container.action", map[string]interface{}{"app_id": app.AppID, "action": string(action.DockerAction), "container_name": app.ContainerName, "via": "repair_request", "request_id": request.ID, "recommended_action_id": action.ID})
+	outcome := a.verifyAgentRepairOutcome(r.Context(), app, action, result)
+	repairOutcome := repairRequestOutcomeFromAgent(outcome)
+	resolved, err := a.resolveRepairRequest(r.Context(), request, models.RepairRequestExecuted, mustUser(r).ID, outcome.Message, repairOutcome)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	verifyDetails := auditDetailsCopy(details)
+	verifyDetails["verified"] = outcome.Verified
+	verifyDetails["recovered"] = outcome.Recovered
+	verifyDetails["before_status"] = string(outcome.BeforeStatus)
+	verifyDetails["after_status"] = string(outcome.AfterStatus)
+	verifyDetails["history_event_id"] = outcome.HistoryEventID
+	if outcome.Verified {
+		a.deps.Audit.Record(mustUser(r).ID, "repair_request.verified", verifyDetails)
+	} else {
+		a.deps.Audit.Record(mustUser(r).ID, "repair_request.verify_failed", verifyDetails)
+	}
+	writeJSON(w, http.StatusAccepted, map[string]interface{}{
+		"status":  "executed",
+		"request": resolved,
+		"result":  result,
+		"outcome": outcome,
+	})
+}
+
+func (a *App) pendingRepairRequestFor(userID, appID, actionID string) (models.RepairRequest, bool, error) {
+	requests, err := a.deps.Store.RepairRequestsForUser(userID)
+	if err != nil {
+		return models.RepairRequest{}, false, err
+	}
+	for _, request := range requests {
+		if request.Status == models.RepairRequestPending && request.AppID == appID && request.ActionID == actionID {
+			return request, true, nil
+		}
+	}
+	return models.RepairRequest{}, false, nil
+}
+
+func (a *App) resolveRepairRequest(ctx context.Context, request models.RepairRequest, status models.RepairRequestStatus, actorID, note string, outcome *models.RepairRequestOutcome) (models.RepairRequest, error) {
+	now := time.Now().UTC()
+	request.Status = status
+	request.ResolvedAt = &now
+	request.ResolvedBy = actorID
+	request.ResolutionNote = strings.TrimSpace(note)
+	request.Outcome = outcome
+	if err := a.deps.Store.UpsertRepairRequest(request); err != nil {
+		return request, err
+	}
+	subject := "Repair request updated"
+	body := request.ResolutionNote
+	if body == "" && outcome != nil {
+		body = outcome.Message
+	}
+	if body == "" {
+		body = "An admin reviewed your request."
+	}
+	if err := a.deps.Notifications.NotifyUser(ctx, request.RequesterID, subject, body, request.AppID, "repair-request:"+request.ID+":resolved"); err != nil {
+		a.deps.Audit.Record(actorID, "repair_request.notify_user_failed", map[string]interface{}{"request_id": request.ID, "requester_id": request.RequesterID, "app_id": request.AppID, "error": err.Error()})
+	}
+	return request, nil
+}
+
+func repairRequestOutcomeFromAgent(outcome llmAgentRepairOutcomeView) *models.RepairRequestOutcome {
+	return &models.RepairRequestOutcome{
+		Verified:       outcome.Verified,
+		Recovered:      outcome.Recovered,
+		BeforeStatus:   outcome.BeforeStatus,
+		AfterStatus:    outcome.AfterStatus,
+		Message:        outcome.Message,
+		HistoryEventID: outcome.HistoryEventID,
+		CheckedAt:      outcome.CheckedAt,
+	}
+}
+
+func repairRequestsNewestFirst(requests []models.RepairRequest) []models.RepairRequest {
+	out := append([]models.RepairRequest(nil), requests...)
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	return out
+}
+
+func isDockerRepairTarget(app models.AppStatus) bool {
+	return strings.TrimSpace(app.ContainerID) != "" || strings.TrimSpace(app.ContainerName) != "" || app.DockerState != models.DockerUnknown || app.DataSource == "unraid-docker"
+}
+
+func compactAppSummaryForRequest(app models.AppStatus) string {
+	summary := strings.TrimSpace(app.ServerSummary)
+	if summary != "" {
+		return summary
+	}
+	status := currentStatusOrUnknown(app.CurrentStatus)
+	label := firstNonEmpty(app.DisplayName, app.AppID, "This app")
+	if status == models.StatusOnline {
+		return label + " was reported as working, but a user requested help."
+	}
+	return fmt.Sprintf("%s is %s.", label, status)
 }
 
 func (a *App) getNotificationPreferences(w http.ResponseWriter, r *http.Request) {
@@ -2622,6 +3034,7 @@ type llmAgentPlanView struct {
 	ApprovalExpiresAt     time.Time                `json:"approval_expires_at"`
 	RequiresAdminApproval bool                     `json:"requires_admin_approval"`
 	CanExecute            bool                     `json:"can_execute"`
+	CanRequestRepair      bool                     `json:"can_request_repair"`
 	Status                string                   `json:"status"`
 	Target                llmAgentPlanTargetView   `json:"target"`
 	Options               []llmAgentPlanOptionView `json:"options"`
