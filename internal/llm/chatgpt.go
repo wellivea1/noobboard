@@ -24,17 +24,37 @@ const (
 	OpenAIChatGPTClientID       = "app_EMoamEEZ73f0CkXaXp7hrann"
 	OpenAIChatGPTIssuer         = "https://auth.openai.com"
 	OpenAIChatGPTCodexEndpoint  = "https://chatgpt.com/backend-api/codex/responses"
-	DefaultChatGPTCodexModel    = "gpt-5.1-codex"
+	DefaultChatGPTCodexModel    = "gpt-5.5"
 	ChatGPTCodexReasoningHigh   = "high"
 	defaultChatGPTAccessSeconds = 3600
 )
 
 var chatGPTCodexAllowedModels = map[string]bool{
-	"gpt-5.2-codex":      true,
-	"gpt-5.1-codex":      true,
-	"gpt-5.1-codex-max":  true,
-	"gpt-5.1-codex-mini": true,
-	"gpt-5-codex":        true,
+	"gpt-5.5":      true,
+	"gpt-5.5-pro":  true,
+	"gpt-5.4":      true,
+	"gpt-5.4-pro":  true,
+	"gpt-5.4-mini": true,
+	"gpt-5.4-nano": true,
+	"gpt-5.2":      true,
+	"gpt-5.2-pro":  true,
+	"gpt-5.1":      true,
+	"gpt-5":        true,
+	"gpt-5-mini":   true,
+	"gpt-5-nano":   true,
+	"gpt-4.1":      true,
+	"gpt-4.1-mini": true,
+	"gpt-4o-mini":  true,
+}
+
+var chatGPTCodexModelFallbacks = []string{
+	"gpt-5.5",
+	"gpt-5.4",
+	"gpt-5.2",
+	"gpt-5.1",
+	"gpt-5",
+	"gpt-4.1",
+	"gpt-4o-mini",
 }
 
 type ChatGPTTokenResponse struct {
@@ -96,13 +116,25 @@ func (c *ChatGPTClient) Diagnose(ctx context.Context, req Request) (Diagnosis, e
 	headers.Set("Originator", "noobboard")
 	headers.Set("Session-Id", chatGPTSessionID())
 	headers.Set("User-Agent", "NoobBoard")
-	return runOpenAIResponsesDiagnosis(ctx, c.http, c.endpoint, headers, c.model, contextText, req, c.builder.redactor, "chatgpt codex responses api", openAIResponsesOptions{
+	opts := openAIResponsesOptions{
 		ReasoningEffort:           ChatGPTCodexReasoningHigh,
 		IncludeEncryptedReasoning: true,
 		InputAsList:               true,
 		StoreFalse:                true,
 		Stream:                    true,
-	})
+	}
+	var lastUnsupported error
+	for _, model := range chatGPTModelCandidates(c.model) {
+		diagnosis, err := runOpenAIResponsesDiagnosis(ctx, c.http, c.endpoint, headers, model, contextText, req, c.builder.redactor, "chatgpt codex responses api", opts)
+		if err == nil {
+			return diagnosis, nil
+		}
+		if !isChatGPTUnsupportedModelError(err) {
+			return Diagnosis{}, err
+		}
+		lastUnsupported = err
+	}
+	return Diagnosis{}, lastUnsupported
 }
 
 func (c *ChatGPTClient) ReviewAction(ctx context.Context, req ActionReviewRequest) (ActionReviewDecision, error) {
@@ -127,20 +159,28 @@ func (c *ChatGPTClient) ReviewAction(ctx context.Context, req ActionReviewReques
 		reasoning = ChatGPTCodexReasoningHigh
 	}
 	prompt := BuildActionReviewPrompt(req)
-	data, err := openAIActionReviewBody(c.model, prompt, openAIResponsesOptions{
+	opts := openAIResponsesOptions{
 		ReasoningEffort:           openAIReviewReasoning(reasoning),
 		IncludeEncryptedReasoning: true,
 		StoreFalse:                true,
 		Stream:                    true,
-	})
-	if err != nil {
-		return ActionReviewDecision{}, err
 	}
-	respData, err := postOpenAIResponses(ctx, c.http, c.endpoint, headers, data, "chatgpt action review api", openAIResponsesOptions{Stream: true})
-	if err != nil {
-		return ActionReviewDecision{}, err
+	var lastUnsupported error
+	for _, model := range chatGPTModelCandidates(c.model) {
+		data, err := openAIActionReviewBody(model, prompt, opts)
+		if err != nil {
+			return ActionReviewDecision{}, err
+		}
+		respData, err := postOpenAIResponses(ctx, c.http, c.endpoint, headers, data, "chatgpt action review api", openAIResponsesOptions{Stream: true})
+		if err == nil {
+			return actionReviewFromResponsesBody(respData)
+		}
+		if !isChatGPTUnsupportedModelError(err) {
+			return ActionReviewDecision{}, err
+		}
+		lastUnsupported = err
 	}
-	return actionReviewFromResponsesBody(respData)
+	return ActionReviewDecision{}, lastUnsupported
 }
 
 func (c *ChatGPTClient) ensureAccessToken(ctx context.Context) (string, error) {
@@ -272,6 +312,26 @@ func chatGPTModel(model string) string {
 
 func chatGPTCodexModelAllowed(model string) bool {
 	return chatGPTCodexAllowedModels[model]
+}
+
+func chatGPTModelCandidates(model string) []string {
+	primary := chatGPTModel(model)
+	candidates := []string{primary}
+	for _, fallback := range chatGPTCodexModelFallbacks {
+		if fallback != primary {
+			candidates = append(candidates, fallback)
+		}
+	}
+	return candidates
+}
+
+func isChatGPTUnsupportedModelError(err error) bool {
+	var providerErr *ProviderError
+	if !errors.As(err, &providerErr) || providerErr.StatusCode != http.StatusBadRequest {
+		return false
+	}
+	text := strings.ToLower(providerErr.Message + " " + providerErr.Body)
+	return strings.Contains(text, "not supported") && strings.Contains(text, "chatgpt account")
 }
 
 var _ Client = (*ChatGPTClient)(nil)

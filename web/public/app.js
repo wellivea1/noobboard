@@ -70,13 +70,7 @@ const OPENAI_MODEL_OPTIONS = [
   { value: "o3-pro", label: "o3-pro" },
   { value: "o3", label: "o3" },
 ];
-const CHATGPT_CODEX_MODEL_OPTIONS = [
-  { value: "gpt-5.2-codex", label: "GPT-5.2 Codex" },
-  { value: "gpt-5.1-codex", label: "GPT-5.1 Codex" },
-  { value: "gpt-5.1-codex-max", label: "GPT-5.1 Codex Max" },
-  { value: "gpt-5.1-codex-mini", label: "GPT-5.1 Codex mini" },
-  { value: "gpt-5-codex", label: "GPT-5 Codex" },
-];
+const CHATGPT_MODEL_OPTIONS = OPENAI_MODEL_OPTIONS.filter((option) => option.value.startsWith("gpt-"));
 const ANTHROPIC_MODEL_OPTIONS = [
   { value: "claude-sonnet-4-5", label: "Claude Sonnet 4.5" },
   { value: "claude-opus-4-1-20250805", label: "Claude Opus 4.1" },
@@ -3725,7 +3719,7 @@ function renderLLMSettings(item, data) {
     settingChoice(authMethodName, "api_key", "API key", "Uses a saved OpenAI API key.", selectedAuthMethod === "api_key"),
   ];
   const openAIModel = settingSelectField("OpenAI API model", knownModelValue(OPENAI_MODEL_OPTIONS, settings.openai_model, "gpt-5.5"), OPENAI_MODEL_OPTIONS);
-  const chatGPTModel = settingSelectField("ChatGPT Codex model", knownModelValue(CHATGPT_CODEX_MODEL_OPTIONS, settings.openai_model, "gpt-5.1-codex"), CHATGPT_CODEX_MODEL_OPTIONS);
+  const chatGPTModel = settingSelectField("ChatGPT model", knownModelValue(CHATGPT_MODEL_OPTIONS, settings.openai_model, "gpt-5.5"), CHATGPT_MODEL_OPTIONS);
   const anthropicModel = settingSelectField("Anthropic model", knownModelValue(ANTHROPIC_MODEL_OPTIONS, settings.anthropic_model, "claude-sonnet-4-5"), ANTHROPIC_MODEL_OPTIONS);
   const timeout = durationSecondsField("Timeout", settings.timeout || 45000000000);
   const agentControlEnabled = settingToggle("Enable action approval gate", !!settings.agent_control_enabled);
@@ -3771,7 +3765,7 @@ function renderLLMSettings(item, data) {
     node("div", { class: "settings-choice-list" }, authChoices.map((choice) => choice.element)),
     browserMessage,
     headlessMessage,
-    node("p", { class: "muted", text: "API-key mode uses OpenAI API models. ChatGPT login uses Codex models only; unsupported saved values fall back to the default Codex model." }),
+    node("p", { class: "muted", text: "API-key mode uses OpenAI API models. ChatGPT login uses current GPT models through the ChatGPT account connector; unsupported saved values fall back before a request is sent." }),
     node("div", { class: "settings-field-grid" }, openAIModel.element, chatGPTModel.element),
     apiKeyBlock,
     clearChatGPT.element,
@@ -3855,7 +3849,7 @@ function renderLLMSettings(item, data) {
 
 function actionReviewModelOptions(settings) {
   const openAIModel = knownModelValue(OPENAI_MODEL_OPTIONS, settings.openai_model, "gpt-5.5");
-  const chatGPTModel = knownModelValue(CHATGPT_CODEX_MODEL_OPTIONS, settings.openai_model, "gpt-5.1-codex");
+  const chatGPTModel = knownModelValue(CHATGPT_MODEL_OPTIONS, settings.openai_model, "gpt-5.5");
   const anthropicModel = knownModelValue(ANTHROPIC_MODEL_OPTIONS, settings.anthropic_model, "claude-sonnet-4-5");
   const options = [
     { value: "same", label: "Same as diagnosis" },
@@ -3880,7 +3874,7 @@ function isKnownActionReviewModel(value) {
   const options = provider === "openai"
     ? OPENAI_MODEL_OPTIONS
     : provider === "chatgpt"
-      ? CHATGPT_CODEX_MODEL_OPTIONS
+      ? CHATGPT_MODEL_OPTIONS
       : provider === "anthropic"
         ? ANTHROPIC_MODEL_OPTIONS
         : [];

@@ -454,7 +454,7 @@ func TestChatGPTConnectorRunsAllowedReadOnlyAgentToolStateless(t *testing.T) {
 	}
 }
 
-func TestChatGPTModelNormalizesUnsupportedCodexModels(t *testing.T) {
+func TestChatGPTModelNormalizesUnsupportedChatGPTModels(t *testing.T) {
 	tests := []struct {
 		name  string
 		model string
@@ -462,9 +462,10 @@ func TestChatGPTModelNormalizesUnsupportedCodexModels(t *testing.T) {
 	}{
 		{name: "empty", model: "", want: DefaultChatGPTCodexModel},
 		{name: "unsupported saved model", model: "unsupported-codex-model", want: DefaultChatGPTCodexModel},
-		{name: "allowed default", model: "gpt-5.1-codex", want: "gpt-5.1-codex"},
-		{name: "allowed codex model", model: "gpt-5.2-codex", want: "gpt-5.2-codex"},
+		{name: "allowed default", model: "gpt-5.5", want: "gpt-5.5"},
+		{name: "allowed current model", model: "gpt-5.4", want: "gpt-5.4"},
 		{name: "unsupported chatgpt account model", model: "gpt-5.3-codex", want: DefaultChatGPTCodexModel},
+		{name: "unsupported older codex model", model: "gpt-5.1-codex", want: DefaultChatGPTCodexModel},
 		{name: "future non-allowlisted model", model: "codex-preview-future", want: DefaultChatGPTCodexModel},
 		{name: "unknown", model: "gpt-chatgpt-test", want: DefaultChatGPTCodexModel},
 	}
@@ -474,6 +475,46 @@ func TestChatGPTModelNormalizesUnsupportedCodexModels(t *testing.T) {
 				t.Fatalf("chatGPTModel(%q) = %q, want %q", tt.model, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestChatGPTConnectorFallsBackWhenChatGPTAccountRejectsModel(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.LLM.OpenAIAuthMethod = config.OpenAIAuthMethodChatGPTBrowser
+	cfg.LLM.ChatGPTRefreshToken = "refresh-token"
+	cfg.LLM.ChatGPTAccessToken = "access-token"
+	cfg.LLM.ChatGPTAccountID = "account-123"
+	cfg.LLM.ChatGPTTokenExpiresAt = time.Now().UTC().Add(time.Hour)
+	cfg.LLM.OpenAIModel = "gpt-5.5"
+	client := NewChatGPTClient(cfg.LLM, privacy.NewRedactor(config.PrivacyConfig{}))
+	var models []string
+	client.http = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		var body map[string]interface{}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		model, _ := body["model"].(string)
+		models = append(models, model)
+		if model == "gpt-5.5" {
+			return jsonResponse(t, http.StatusBadRequest, map[string]interface{}{
+				"message": "The 'gpt-5.5' model is not supported when using Codex with a ChatGPT account.",
+			})
+		}
+		if model != "gpt-5.4" {
+			t.Fatalf("fallback model = %q, want gpt-5.4", model)
+		}
+		return streamResponse(t,
+			map[string]interface{}{
+				"type":  "response.output_text.delta",
+				"delta": validDiagnosisJSON(t),
+			},
+		)
+	})}
+	if _, err := client.Diagnose(context.Background(), sampleLLMRequest()); err != nil {
+		t.Fatal(err)
+	}
+	if len(models) != 2 || models[0] != "gpt-5.5" || models[1] != "gpt-5.4" {
+		t.Fatalf("models = %#v, want gpt-5.5 then gpt-5.4", models)
 	}
 }
 
