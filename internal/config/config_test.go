@@ -53,6 +53,40 @@ func TestConfigValidationRejectsUnsafeLLMPolicy(t *testing.T) {
 	}
 }
 
+func TestConfigValidationRejectsInvalidActionAutoReviewSettings(t *testing.T) {
+	cfg := Defaults()
+	cfg.LLM.ActionAutoReviewModel = "openai"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected provider without model to fail action auto-review validation")
+	}
+
+	cfg = Defaults()
+	cfg.LLM.ActionAutoReviewModel = "local/model"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected unsupported action auto-review provider to fail validation")
+	}
+
+	cfg = Defaults()
+	cfg.LLM.ActionAutoReviewReasoning = "extreme"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected invalid action auto-review reasoning to fail validation")
+	}
+
+	cfg = Defaults()
+	cfg.LLM.ActionAutoReviewReferencePaths = []string{"docs/security.md", "bad\npath"}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected invalid action auto-review reference path to fail validation")
+	}
+
+	cfg = Defaults()
+	cfg.LLM.ActionAutoReviewModel = "chatgpt/gpt-5.5"
+	cfg.LLM.ActionAutoReviewReasoning = "xhigh"
+	cfg.LLM.ActionAutoReviewReferencePaths = []string{"docs/security.md", "AGENTS.md"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("valid action auto-review settings should pass: %v", err)
+	}
+}
+
 func TestConfigValidationRejectsUnknownModes(t *testing.T) {
 	cfg := Defaults()
 	cfg.Integrations.Mode = "remote-control"
@@ -154,6 +188,39 @@ func TestNoobBoardEnvOverridesAndLegacyAliases(t *testing.T) {
 	}
 	if cfg.Integrations.Mode != "mixed" {
 		t.Fatalf("NOOBBOARD_INTEGRATION_MODE should override legacy alias, got %q", cfg.Integrations.Mode)
+	}
+}
+
+func TestActionAutoReviewConfigParsing(t *testing.T) {
+	t.Setenv("NOOBBOARD_ACTION_AUTO_REVIEW_ENABLED", "true")
+	t.Setenv("NOOBBOARD_ACTION_AUTO_REVIEW_MODEL", "anthropic/claude-sonnet-4-5")
+	t.Setenv("NOOBBOARD_ACTION_AUTO_REVIEW_REASONING", "high")
+	t.Setenv("NOOBBOARD_ACTION_AUTO_REVIEW_REFERENCES", "docs/security.md,AGENTS.md")
+
+	cfg := Defaults()
+	applyEnv(&cfg)
+	if !cfg.LLM.ActionAutoReviewEnabled ||
+		cfg.LLM.ActionAutoReviewModel != "anthropic/claude-sonnet-4-5" ||
+		cfg.LLM.ActionAutoReviewReasoning != "high" ||
+		len(cfg.LLM.ActionAutoReviewReferencePaths) != 2 ||
+		cfg.LLM.ActionAutoReviewReferencePaths[1] != "AGENTS.md" {
+		t.Fatalf("env action auto-review settings were not applied: %#v", cfg.LLM)
+	}
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte("llm:\n  action_auto_review_enabled: true\n  action_auto_review_model: chatgpt/gpt-5.5\n  action_auto_review_reasoning: xhigh\n  action_auto_review_reference_paths: docs/security.md,docs/llm-policy.md\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg = Defaults()
+	if err := applySimpleConfigFile(&cfg, configPath); err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.LLM.ActionAutoReviewEnabled ||
+		cfg.LLM.ActionAutoReviewModel != "chatgpt/gpt-5.5" ||
+		cfg.LLM.ActionAutoReviewReasoning != "xhigh" ||
+		len(cfg.LLM.ActionAutoReviewReferencePaths) != 2 ||
+		cfg.LLM.ActionAutoReviewReferencePaths[1] != "docs/llm-policy.md" {
+		t.Fatalf("file action auto-review settings were not applied: %#v", cfg.LLM)
 	}
 }
 

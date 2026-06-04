@@ -74,4 +74,11 @@ func (c DisabledClient) Diagnose(context.Context, Request) (Diagnosis, error) {
 	return Diagnosis{}, errors.New(c.reason)
 }
 
+func (c DisabledClient) ReviewAction(context.Context, ActionReviewRequest) (ActionReviewDecision, error) {
+	if c.reason == "" {
+		return ActionReviewDecision{}, errors.New("llm provider is disabled")
+	}
+	return ActionReviewDecision{}, errors.New(c.reason)
+}
+
 var _ Client = DisabledClient{}

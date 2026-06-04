@@ -93,21 +93,25 @@ type NotificationConfig struct {
 }
 
 type LLMConfig struct {
-	Enabled               bool                        `json:"enabled"`
-	Provider              string                      `json:"provider"`
-	OpenAIAuthMethod      string                      `json:"openai_auth_method"`
-	OpenAIAPIKey          string                      `json:"openai_api_key,omitempty"`
-	OpenAIModel           string                      `json:"openai_model"`
-	ChatGPTRefreshToken   string                      `json:"chatgpt_refresh_token,omitempty"`
-	ChatGPTAccessToken    string                      `json:"chatgpt_access_token,omitempty"`
-	ChatGPTTokenExpiresAt time.Time                   `json:"chatgpt_token_expires_at,omitempty"`
-	ChatGPTAccountID      string                      `json:"chatgpt_account_id,omitempty"`
-	AnthropicAPIKey       string                      `json:"anthropic_api_key,omitempty"`
-	AnthropicModel        string                      `json:"anthropic_model"`
-	Timeout               time.Duration               `json:"timeout"`
-	AgentControlEnabled   bool                        `json:"agent_control_enabled"`
-	AgentArmDuration      time.Duration               `json:"agent_arm_duration"`
-	Policies              map[string]models.LLMPolicy `json:"policies"`
+	Enabled                        bool                        `json:"enabled"`
+	Provider                       string                      `json:"provider"`
+	OpenAIAuthMethod               string                      `json:"openai_auth_method"`
+	OpenAIAPIKey                   string                      `json:"openai_api_key,omitempty"`
+	OpenAIModel                    string                      `json:"openai_model"`
+	ChatGPTRefreshToken            string                      `json:"chatgpt_refresh_token,omitempty"`
+	ChatGPTAccessToken             string                      `json:"chatgpt_access_token,omitempty"`
+	ChatGPTTokenExpiresAt          time.Time                   `json:"chatgpt_token_expires_at,omitempty"`
+	ChatGPTAccountID               string                      `json:"chatgpt_account_id,omitempty"`
+	AnthropicAPIKey                string                      `json:"anthropic_api_key,omitempty"`
+	AnthropicModel                 string                      `json:"anthropic_model"`
+	Timeout                        time.Duration               `json:"timeout"`
+	AgentControlEnabled            bool                        `json:"agent_control_enabled"`
+	AgentArmDuration               time.Duration               `json:"agent_arm_duration"`
+	ActionAutoReviewEnabled        bool                        `json:"action_auto_review_enabled"`
+	ActionAutoReviewModel          string                      `json:"action_auto_review_model,omitempty"`
+	ActionAutoReviewReasoning      string                      `json:"action_auto_review_reasoning,omitempty"`
+	ActionAutoReviewReferencePaths []string                    `json:"action_auto_review_reference_paths,omitempty"`
+	Policies                       map[string]models.LLMPolicy `json:"policies"`
 }
 
 const (
@@ -212,14 +216,20 @@ func Defaults() Config {
 			WholeOutageDeduping: true,
 		},
 		LLM: LLMConfig{
-			Enabled:          true,
-			Provider:         "disabled",
-			OpenAIAuthMethod: OpenAIAuthMethodAPIKey,
-			OpenAIModel:      "gpt-5",
-			AnthropicModel:   "claude-sonnet-4-5",
-			Timeout:          45 * time.Second,
-			AgentArmDuration: 10 * time.Minute,
-			Policies:         defaultLLMPolicies(),
+			Enabled:               true,
+			Provider:              "disabled",
+			OpenAIAuthMethod:      OpenAIAuthMethodAPIKey,
+			OpenAIModel:           "gpt-5",
+			AnthropicModel:        "claude-sonnet-4-5",
+			Timeout:               45 * time.Second,
+			AgentArmDuration:      10 * time.Minute,
+			ActionAutoReviewModel: "same",
+			ActionAutoReviewReferencePaths: []string{
+				"docs/feature-app-detail-history.md",
+				"docs/security.md",
+				"docs/llm-policy.md",
+			},
+			Policies: defaultLLMPolicies(),
 		},
 		Integrations: IntegrationConfig{
 			Mode:             "live",
@@ -418,6 +428,9 @@ func (c Config) Validate() error {
 	if c.LLM.AgentArmDuration > time.Hour {
 		return errors.New("llm agent_arm_duration must not exceed 1h")
 	}
+	if err := validateActionAutoReview(c.LLM); err != nil {
+		return err
+	}
 	for name, policy := range c.LLM.Policies {
 		if policy.MaxContextBytes <= 0 {
 			return fmt.Errorf("llm policy %s must have max_context_bytes", name)
@@ -442,6 +455,34 @@ func (c Config) Validate() error {
 			default:
 				return fmt.Errorf("llm policy %s has invalid agent tool action %q", name, rule.Action)
 			}
+		}
+	}
+	return nil
+}
+
+func validateActionAutoReview(settings LLMConfig) error {
+	model := strings.TrimSpace(settings.ActionAutoReviewModel)
+	if model == "" || model == "same" {
+		// Empty is normalized to "same"; accepting both keeps older runtime settings valid.
+	} else {
+		parts := strings.SplitN(model, "/", 2)
+		if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+			return fmt.Errorf("llm action_auto_review_model %q must be same or provider/model", model)
+		}
+		switch strings.TrimSpace(parts[0]) {
+		case "openai", "anthropic", "chatgpt":
+		default:
+			return fmt.Errorf("llm action_auto_review_model provider %q is invalid", parts[0])
+		}
+	}
+	switch strings.TrimSpace(settings.ActionAutoReviewReasoning) {
+	case "", "low", "medium", "high", "xhigh":
+	default:
+		return fmt.Errorf("llm action_auto_review_reasoning %q is invalid", settings.ActionAutoReviewReasoning)
+	}
+	for _, path := range settings.ActionAutoReviewReferencePaths {
+		if strings.ContainsAny(path, "\x00\r\n") {
+			return errors.New("llm action_auto_review_reference_paths contains an invalid path")
 		}
 	}
 	return nil
@@ -661,6 +702,18 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("ANTHROPIC_MODEL"); v != "" {
 		cfg.LLM.AnthropicModel = v
+	}
+	if v := envValue("NOOBBOARD_ACTION_AUTO_REVIEW_ENABLED", "HSD_ACTION_AUTO_REVIEW_ENABLED"); v != "" {
+		cfg.LLM.ActionAutoReviewEnabled = parseBool(v)
+	}
+	if v := envValue("NOOBBOARD_ACTION_AUTO_REVIEW_MODEL", "HSD_ACTION_AUTO_REVIEW_MODEL"); v != "" {
+		cfg.LLM.ActionAutoReviewModel = v
+	}
+	if v := envValue("NOOBBOARD_ACTION_AUTO_REVIEW_REASONING", "HSD_ACTION_AUTO_REVIEW_REASONING"); v != "" {
+		cfg.LLM.ActionAutoReviewReasoning = v
+	}
+	if v := envValue("NOOBBOARD_ACTION_AUTO_REVIEW_REFERENCES", "HSD_ACTION_AUTO_REVIEW_REFERENCES"); v != "" {
+		cfg.LLM.ActionAutoReviewReferencePaths = splitList(v)
 	}
 	if v := envValue("NOOBBOARD_INTEGRATION_MODE", "HSD_INTEGRATION_MODE"); v != "" {
 		cfg.Integrations.Mode = v
@@ -916,6 +969,14 @@ func applyConfigKey(cfg *Config, section, key, value string) {
 		cfg.LLM.AnthropicAPIKey = value
 	case "llm.anthropic_model":
 		cfg.LLM.AnthropicModel = value
+	case "llm.action_auto_review_enabled":
+		cfg.LLM.ActionAutoReviewEnabled = parseBool(value)
+	case "llm.action_auto_review_model":
+		cfg.LLM.ActionAutoReviewModel = value
+	case "llm.action_auto_review_reasoning":
+		cfg.LLM.ActionAutoReviewReasoning = value
+	case "llm.action_auto_review_reference_paths":
+		cfg.LLM.ActionAutoReviewReferencePaths = splitList(value)
 	case "integrations.mode":
 		cfg.Integrations.Mode = value
 	case "integrations.unraid_base_url":

@@ -3350,6 +3350,20 @@ function renderLLMSettings(item, data) {
   const timeout = durationSecondsField("Timeout", settings.timeout || 45000000000);
   const agentControlEnabled = settingToggle("Enable action approval gate", !!settings.agent_control_enabled);
   const agentArmDuration = durationSecondsField("Arm window", settings.agent_arm_duration || settings.agent_readiness?.agent_arm_duration || 600000000000);
+  const actionAutoReviewEnabled = settingToggle("Require auto-review before fixes", !!settings.action_auto_review_enabled);
+  const actionAutoReviewModel = settingSelectField("Auto-review model", settings.action_auto_review_model || "same", actionReviewModelOptions(settings));
+  const actionAutoReviewReasoning = settingSelectField("Auto-review reasoning", settings.action_auto_review_reasoning || "", [
+    { value: "", label: "Provider default" },
+    { value: "low", label: "Low" },
+    { value: "medium", label: "Medium" },
+    { value: "high", label: "High" },
+    { value: "xhigh", label: "Extra high" },
+  ]);
+  const actionAutoReviewReferences = listEditor(
+    "Reference files",
+    settings.action_auto_review_reference_paths || [],
+    "docs/security.md",
+  );
   const openAIKey = settingTextField("OpenAI API key", "", {
     type: "password",
     autocomplete: "new-password",
@@ -3409,6 +3423,13 @@ function renderLLMSettings(item, data) {
     ),
     openAISection,
     anthropicSection,
+    node("section", { class: "settings-subsection" },
+      node("h4", { text: "Action auto-review" }),
+      node("div", { class: "settings-toggle-grid" }, actionAutoReviewEnabled.element),
+      node("div", { class: "settings-field-grid" }, actionAutoReviewModel.element, actionAutoReviewReasoning.element),
+      actionAutoReviewReferences.element,
+      node("p", { class: "muted", text: "When enabled, NoobBoard asks the selected reviewer model to check the proposed fix against these local reference docs before any approved restart runs." }),
+    ),
     renderLLMAgentReadiness(settings.agent_readiness || {}, {
       controls: [agentControlEnabled.element, agentArmDuration.element],
     }),
@@ -3432,6 +3453,10 @@ function renderLLMSettings(item, data) {
       timeout: secondsToDuration(timeout.input.value),
       agent_control_enabled: agentControlEnabled.input.checked,
       agent_arm_duration: secondsToDuration(agentArmDuration.input.value),
+      action_auto_review_enabled: actionAutoReviewEnabled.input.checked,
+      action_auto_review_model: actionAutoReviewModel.input.value,
+      action_auto_review_reasoning: actionAutoReviewReasoning.input.value,
+      action_auto_review_reference_paths: actionAutoReviewReferences.values(),
       clear_openai_api_key: clearOpenAI.input.checked,
       clear_chatgpt_auth: clearChatGPT.input.checked,
       clear_anthropic_api_key: clearAnthropic.input.checked,
@@ -3442,6 +3467,21 @@ function renderLLMSettings(item, data) {
     for (const editor of policyEditors) payload.policies[editor.name] = editor.value();
     return saveSettingsPayload(item.title, item.path, payload, status);
   });
+}
+
+function actionReviewModelOptions(settings) {
+  const options = [
+    { value: "same", label: "Same as diagnosis" },
+    { value: `openai/${settings.openai_model || "gpt-5"}`, label: `OpenAI: ${settings.openai_model || "gpt-5"}` },
+    { value: "chatgpt/gpt-5.5", label: "ChatGPT connector: gpt-5.5" },
+    { value: "chatgpt/gpt-5.4", label: "ChatGPT connector: gpt-5.4" },
+    { value: `anthropic/${settings.anthropic_model || "claude-sonnet-4-5"}`, label: `Anthropic: ${settings.anthropic_model || "claude-sonnet-4-5"}` },
+  ];
+  const current = String(settings.action_auto_review_model || "same").trim() || "same";
+  if (!options.some((option) => option.value === current)) {
+    options.push({ value: current, label: current });
+  }
+  return options;
 }
 
 function renderLLMAgentReadiness(readiness, options = {}) {
@@ -3474,10 +3514,19 @@ function renderLLMAgentReadiness(readiness, options = {}) {
       settingsStatusRow("Read-only live tools", activeText, readiness.admin_tools_enabled ? "available" : "locked", readOnlyNames || "No read-only tools are registered."),
       settingsStatusRow("Action arm", agentArmStatusText(readiness), armed ? "armed" : controlEnabled ? "planned" : "locked", agentArmDetailText(readiness), armAction),
       settingsStatusRow("Automatic fixes", readiness.mutating_tools_available ? "Restart approval available" : "Locked", readiness.mutating_tools_available ? "available" : "locked", readiness.mutating_tools_available ? agentRepairLimitDetail(readiness) : "Chat cannot start, stop, restart, or change infrastructure yet."),
-      settingsStatusRow("Auto-review", autoReview.enabled ? "Available" : agentModeStatusText(autoReview.status), autoReview.status || "locked", reference.sufficient_reference ? "A separate reviewer model is a future guard; user approvals still use the normal popup." : "The reviewer-model reference is documented, but execution remains locked."),
+      settingsStatusRow("Auto-review", autoReview.enabled ? "Available" : agentModeStatusText(autoReview.status), autoReview.status || "locked", autoReviewDetail(reference)),
     ),
     node("p", { class: "muted agent-reference-note", text: reference.design_finding || "Future repair actions require schema validation, audit policy, and explicit approval." }),
   );
+}
+
+function autoReviewDetail(reference) {
+  if (!reference?.enabled) return "Optional reviewer gate is off; admin approval still uses the normal popup.";
+  const model = reference.model || "same";
+  const count = Number(reference.reference_count || 0);
+  const refText = count === 1 ? "1 reference" : `${count} references`;
+  const reasoning = reference.reasoning ? `, ${reference.reasoning} reasoning` : "";
+  return `Reviewer: ${model}${reasoning}; ${refText} configured. Fails closed before any approved restart runs.`;
 }
 
 function agentRepairLimitDetail(readiness) {

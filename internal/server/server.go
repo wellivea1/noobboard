@@ -13,6 +13,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -94,12 +96,16 @@ const (
 	maxLogLimit         = 200
 	agentApprovalPlanID = "current_recommendation"
 
-	agentRepairPerAppCooldown = 10 * time.Minute
-	agentRepairGlobalWindow   = time.Hour
-	agentRepairGlobalLimit    = 5
+	agentRepairPerAppCooldown      = 10 * time.Minute
+	agentRepairGlobalWindow        = time.Hour
+	agentRepairGlobalLimit         = 5
+	actionReviewReferenceLimit     = 6
+	actionReviewReferenceBytes     = 18 * 1024
+	actionReviewReferenceFileBytes = 8 * 1024
 )
 
-var agentRepairVerificationDelay = 2 * time.Second
+var agentRepairVerificationDelay = 5 * time.Second
+var agentRepairVerificationAttempts = 6
 
 func New(deps Dependencies) (*App, error) {
 	if deps.Store == nil || deps.Users == nil || deps.Redactor == nil || deps.LLM == nil {
@@ -1446,10 +1452,9 @@ var llmAgentActionRegistry = map[string]llmAgentActionDefinition{
 		Summary: "The model did not return a specific action that NoobBoard can place behind an approval popup.",
 	},
 	"ask_admin_to_check": {
-		ID:               "ask_admin_to_check",
-		Title:            "Manual check recommendation",
-		Summary:          "The model suggested an admin check. NoobBoard will not run a mutating action for this recommendation.",
-		ApprovalEligible: true,
+		ID:      "ask_admin_to_check",
+		Title:   "Manual check recommendation",
+		Summary: "The model suggested an admin check. NoobBoard will not run a mutating action for this recommendation.",
 	},
 	"ask_admin_to_restart_container": {
 		ID:                "ask_admin_to_restart_container",
@@ -1464,20 +1469,17 @@ var llmAgentActionRegistry = map[string]llmAgentActionDefinition{
 		ID:                "ask_admin_to_check_logs",
 		Title:             "Log check recommendation",
 		Summary:           "The model suggested checking logs. NoobBoard does not execute log-based repair actions.",
-		ApprovalEligible:  true,
 		RequiresAppTarget: true,
 	},
 	"ask_admin_to_check_unifi": {
-		ID:               "ask_admin_to_check_unifi",
-		Title:            "Network check recommendation",
-		Summary:          "The model suggested checking router or network status. NoobBoard does not execute network repair actions.",
-		ApprovalEligible: true,
+		ID:      "ask_admin_to_check_unifi",
+		Title:   "Network check recommendation",
+		Summary: "The model suggested checking router or network status. NoobBoard does not execute network repair actions.",
 	},
 	"ask_admin_to_check_storage": {
-		ID:               "ask_admin_to_check_storage",
-		Title:            "Storage check recommendation",
-		Summary:          "The model suggested checking server storage. Chat cannot run Unraid storage actions.",
-		ApprovalEligible: true,
+		ID:      "ask_admin_to_check_storage",
+		Title:   "Storage check recommendation",
+		Summary: "The model suggested checking server storage. Chat cannot run Unraid storage actions.",
 	},
 }
 
@@ -1558,6 +1560,146 @@ func (a *App) agentPlanExecutionState(action llmAgentActionDefinition, target ll
 		return "approval_rate_limited", false, limit.Message
 	}
 	return "approval_ready", true, ""
+}
+
+func (a *App) reviewAgentAction(ctx context.Context, actor users.User, snapshot models.Snapshot, app models.AppStatus, action llmAgentActionDefinition, via string) (llm.ActionReviewDecision, bool, error) {
+	a.settingsMu.RLock()
+	cfg := a.deps.Config.LLM
+	redactor := a.deps.Redactor
+	sameClient := a.deps.LLM
+	a.settingsMu.RUnlock()
+	if !cfg.ActionAutoReviewEnabled {
+		return llm.ActionReviewDecision{}, false, nil
+	}
+	reviewClient, model, err := actionAutoReviewClient(cfg, redactor, sameClient)
+	if err != nil {
+		return llm.ActionReviewDecision{}, true, err
+	}
+	filtered := privacy.FilterSnapshotForRole(snapshot, models.RoleAdmin, redactor)
+	refs := loadActionReviewReferences(cfg.ActionAutoReviewReferencePaths)
+	request := llm.ActionReviewRequest{
+		ActionID:      action.ID,
+		ActionTitle:   action.Title,
+		TargetID:      app.AppID,
+		TargetLabel:   firstNonEmpty(app.DisplayName, app.ContainerName, app.AppID),
+		CurrentStatus: currentStatusOrUnknown(app.CurrentStatus),
+		ActorRole:     actor.Role,
+		Via:           via,
+		Reasoning:     cfg.ActionAutoReviewReasoning,
+		References:    refs,
+		Snapshot:      filtered,
+	}
+	decision, err := reviewClient.ReviewAction(ctx, request)
+	if err != nil {
+		return llm.ActionReviewDecision{}, true, err
+	}
+	a.deps.Audit.Record(actor.ID, "llm.agent_plan.auto_reviewed", map[string]interface{}{
+		"app_id":                app.AppID,
+		"recommended_action_id": action.ID,
+		"via":                   via,
+		"review_model":          model,
+		"allow":                 decision.Allow,
+		"confidence":            decision.Confidence,
+		"summary":               decision.Summary,
+		"issues":                decision.Issues,
+		"reference_count":       len(refs),
+	})
+	if !decision.Allow {
+		return decision, true, errors.New("auto-review did not allow this repair: " + decision.Summary)
+	}
+	return decision, true, nil
+}
+
+func actionAutoReviewClient(cfg config.LLMConfig, redactor *privacy.Redactor, sameClient llm.Client) (llm.Client, string, error) {
+	reviewCfg := cfg
+	model := strings.TrimSpace(cfg.ActionAutoReviewModel)
+	if model == "" || model == "same" {
+		if sameClient != nil {
+			return sameClient, "same", nil
+		}
+		return llm.NewClient(reviewCfg, redactor), "same", nil
+	}
+	provider, modelID, ok := strings.Cut(model, "/")
+	if !ok || strings.TrimSpace(provider) == "" || strings.TrimSpace(modelID) == "" {
+		return nil, "", fmt.Errorf("invalid action auto-review model %q", model)
+	}
+	provider = strings.TrimSpace(provider)
+	modelID = strings.TrimSpace(modelID)
+	switch provider {
+	case "openai":
+		reviewCfg.Provider = "openai"
+		reviewCfg.OpenAIAuthMethod = config.OpenAIAuthMethodAPIKey
+		reviewCfg.OpenAIModel = modelID
+	case "chatgpt":
+		reviewCfg.Provider = "openai"
+		if reviewCfg.OpenAIAuthMethod == config.OpenAIAuthMethodAPIKey {
+			reviewCfg.OpenAIAuthMethod = config.OpenAIAuthMethodChatGPTHeadless
+		}
+		reviewCfg.OpenAIModel = modelID
+	case "anthropic":
+		reviewCfg.Provider = "anthropic"
+		reviewCfg.AnthropicModel = modelID
+	default:
+		return nil, "", fmt.Errorf("unsupported action auto-review provider %q", provider)
+	}
+	if !llm.ProviderAvailable(reviewCfg) {
+		return nil, "", fmt.Errorf("action auto-review provider %s is not available", model)
+	}
+	return llm.NewClient(reviewCfg, redactor), model, nil
+}
+
+func loadActionReviewReferences(paths []string) []llm.ActionReviewReference {
+	var refs []llm.ActionReviewReference
+	total := 0
+	for _, rawPath := range compactStrings(paths) {
+		if len(refs) >= actionReviewReferenceLimit || total >= actionReviewReferenceBytes {
+			break
+		}
+		resolved, ok := safeActionReviewReferencePath(rawPath)
+		if !ok {
+			continue
+		}
+		data, err := os.ReadFile(resolved)
+		if err != nil {
+			continue
+		}
+		if len(data) > actionReviewReferenceFileBytes {
+			data = data[:actionReviewReferenceFileBytes]
+		}
+		remaining := actionReviewReferenceBytes - total
+		if remaining <= 0 {
+			break
+		}
+		if len(data) > remaining {
+			data = data[:remaining]
+		}
+		content := strings.TrimSpace(string(data))
+		if content == "" {
+			continue
+		}
+		refs = append(refs, llm.ActionReviewReference{Path: filepath.ToSlash(filepath.Clean(rawPath)), Content: content})
+		total += len(data)
+	}
+	return refs
+}
+
+func safeActionReviewReferencePath(rawPath string) (string, bool) {
+	path := strings.TrimSpace(rawPath)
+	if path == "" || filepath.IsAbs(path) {
+		return "", false
+	}
+	clean := filepath.Clean(path)
+	if clean == "." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || clean == ".." {
+		return "", false
+	}
+	base := filepath.Base(clean)
+	if clean == "README.md" || clean == "AGENTS.md" || strings.HasPrefix(clean, "docs"+string(filepath.Separator)) {
+		return filepath.Join(".", clean), true
+	}
+	if strings.EqualFold(base, "README.md") || strings.EqualFold(base, "AGENTS.md") {
+		return filepath.Join(".", clean), true
+	}
+	return "", false
 }
 
 type agentRepairLimitDecision struct {
@@ -1742,6 +1884,19 @@ func (a *App) recordAgentApproval(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, errors.New("approval token is missing a replay nonce"))
 		return
 	}
+	reviewDecision, reviewEnabled, err := a.reviewAgentAction(r.Context(), mustUser(r), snapshot, app, action, "agent_plan")
+	if reviewEnabled {
+		details["auto_review_allow"] = reviewDecision.Allow
+		details["auto_review_confidence"] = reviewDecision.Confidence
+		details["auto_review_summary"] = reviewDecision.Summary
+	}
+	if err != nil {
+		details["reason"] = "auto_review_refused"
+		details["error"] = err.Error()
+		a.deps.Audit.Record(mustUser(r).ID, "llm.agent_plan.auto_review_refused", auditDetailsCopy(details))
+		writeError(w, http.StatusConflict, err)
+		return
+	}
 	if !a.consumeAgentApproval(payload) {
 		details["reason"] = "approval_replay"
 		a.deps.Audit.Record(mustUser(r).ID, "llm.agent_plan.replay_blocked", details)
@@ -1801,42 +1956,56 @@ func (a *App) verifyAgentRepairOutcome(ctx context.Context, before models.AppSta
 		Message:      "Restart was sent, but NoobBoard could not verify the app status yet.",
 		ResultStatus: strings.TrimSpace(result.Status),
 	}
-	if delay := agentRepairVerificationDelay; delay > 0 {
-		timer := time.NewTimer(delay)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			outcome.Message = "Restart was sent, but verification was cancelled before NoobBoard could refresh status."
-			return outcome
-		case <-timer.C:
+	var afterSnapshot models.Snapshot
+	var afterSnapshotSet bool
+	attempts := agentRepairVerificationAttempts
+	if attempts <= 0 || agentRepairVerificationDelay <= 0 {
+		attempts = 1
+	}
+	for attempt := 0; attempt < attempts; attempt++ {
+		if delay := agentRepairVerificationDelay; delay > 0 {
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				outcome.Message = "Restart was sent, but verification was cancelled before NoobBoard could refresh status."
+				return outcome
+			case <-timer.C:
+			}
 		}
-	}
-	a.invalidateSnapshot()
-	afterSnapshot, err := a.refreshSnapshot(ctx, false)
-	outcome.CheckedAt = time.Now().UTC()
-	if err != nil {
-		outcome.Message = "Restart was sent, but status verification failed: " + err.Error()
-		return outcome
-	}
-	afterApp, ok := findAppByID(afterSnapshot.Apps, before.AppID)
-	if !ok {
-		outcome.Verified = true
-		outcome.AfterStatus = models.StatusUnknown
-		outcome.Message = "Auto-repair: restarted - target app was not present after refresh."
-	} else {
+		a.invalidateSnapshot()
+		refreshed, err := a.refreshSnapshot(ctx, false)
+		outcome.CheckedAt = time.Now().UTC()
+		if err != nil {
+			outcome.Message = "Restart was sent, but status verification failed: " + err.Error()
+			return outcome
+		}
+		afterSnapshot = refreshed
+		afterSnapshotSet = true
+		afterApp, ok := findAppByID(afterSnapshot.Apps, before.AppID)
+		if !ok {
+			outcome.Verified = true
+			outcome.AfterStatus = models.StatusUnknown
+			outcome.Message = "Auto-repair: restarted - target app was not present after refresh."
+			break
+		}
 		outcome.Verified = true
 		outcome.AfterStatus = currentStatusOrUnknown(afterApp.CurrentStatus)
 		outcome.TargetLabel = firstNonEmpty(afterApp.DisplayName, afterApp.ContainerName, afterApp.AppID, targetLabel)
 		outcome.Recovered = outcome.AfterStatus == models.StatusOnline
 		if outcome.Recovered {
 			outcome.Message = "Auto-repair: restarted - recovered."
+			break
+		}
+		if attempt == attempts-1 {
+			outcome.Message = "Auto-repair: restarted - still coming up or not responding."
 		} else {
-			outcome.Message = "Auto-repair: restarted - still not responding."
+			outcome.Message = "Auto-repair: restarted - waiting for recovery."
 		}
 	}
 	if historyEventID, err := a.appendAgentRepairHistoryEvent(outcome); err == nil {
 		outcome.HistoryEventID = historyEventID
-		if a.historyRecorder != nil {
+		if a.historyRecorder != nil && afterSnapshotSet {
 			a.historyRecorder.Observe(afterSnapshot)
 		}
 	} else {
@@ -2373,21 +2542,25 @@ func (a *App) updateNotificationSettings(w http.ResponseWriter, r *http.Request)
 }
 
 type llmSettingsView struct {
-	Enabled               bool                        `json:"enabled"`
-	Provider              string                      `json:"provider"`
-	OpenAIAuthMethod      string                      `json:"openai_auth_method"`
-	OpenAIModel           string                      `json:"openai_model"`
-	OpenAIAPIKeySet       bool                        `json:"openai_api_key_set"`
-	ChatGPTConnected      bool                        `json:"chatgpt_connected"`
-	ChatGPTAccessTokenSet bool                        `json:"chatgpt_access_token_set"`
-	ChatGPTAccountIDSet   bool                        `json:"chatgpt_account_id_set"`
-	AnthropicModel        string                      `json:"anthropic_model"`
-	AnthropicAPIKeySet    bool                        `json:"anthropic_api_key_set"`
-	Timeout               time.Duration               `json:"timeout"`
-	AgentControlEnabled   bool                        `json:"agent_control_enabled"`
-	AgentArmDuration      time.Duration               `json:"agent_arm_duration"`
-	Policies              map[string]models.LLMPolicy `json:"policies"`
-	AgentReadiness        llmAgentReadinessView       `json:"agent_readiness"`
+	Enabled                        bool                        `json:"enabled"`
+	Provider                       string                      `json:"provider"`
+	OpenAIAuthMethod               string                      `json:"openai_auth_method"`
+	OpenAIModel                    string                      `json:"openai_model"`
+	OpenAIAPIKeySet                bool                        `json:"openai_api_key_set"`
+	ChatGPTConnected               bool                        `json:"chatgpt_connected"`
+	ChatGPTAccessTokenSet          bool                        `json:"chatgpt_access_token_set"`
+	ChatGPTAccountIDSet            bool                        `json:"chatgpt_account_id_set"`
+	AnthropicModel                 string                      `json:"anthropic_model"`
+	AnthropicAPIKeySet             bool                        `json:"anthropic_api_key_set"`
+	Timeout                        time.Duration               `json:"timeout"`
+	AgentControlEnabled            bool                        `json:"agent_control_enabled"`
+	AgentArmDuration               time.Duration               `json:"agent_arm_duration"`
+	ActionAutoReviewEnabled        bool                        `json:"action_auto_review_enabled"`
+	ActionAutoReviewModel          string                      `json:"action_auto_review_model"`
+	ActionAutoReviewReasoning      string                      `json:"action_auto_review_reasoning"`
+	ActionAutoReviewReferencePaths []string                    `json:"action_auto_review_reference_paths"`
+	Policies                       map[string]models.LLMPolicy `json:"policies"`
+	AgentReadiness                 llmAgentReadinessView       `json:"agent_readiness"`
 }
 
 type llmAgentReadinessView struct {
@@ -2426,6 +2599,10 @@ type llmAgentReviewModeView struct {
 type llmOpenCodeAutoReviewSummary struct {
 	ReferenceReviewed   bool   `json:"reference_reviewed"`
 	SufficientReference bool   `json:"sufficient_reference"`
+	Enabled             bool   `json:"enabled"`
+	Model               string `json:"model"`
+	Reasoning           string `json:"reasoning,omitempty"`
+	ReferenceCount      int    `json:"reference_count"`
 	ModelFinding        string `json:"model_finding"`
 	DesignFinding       string `json:"design_finding"`
 }
@@ -2494,20 +2671,24 @@ type agentApprovalTokenPayload struct {
 }
 
 type llmSettingsUpdate struct {
-	Enabled              *bool                       `json:"enabled"`
-	Provider             *string                     `json:"provider"`
-	OpenAIAuthMethod     *string                     `json:"openai_auth_method"`
-	OpenAIModel          *string                     `json:"openai_model"`
-	OpenAIAPIKey         *string                     `json:"openai_api_key"`
-	ClearOpenAIAPIKey    bool                        `json:"clear_openai_api_key"`
-	ClearChatGPTAuth     bool                        `json:"clear_chatgpt_auth"`
-	AnthropicModel       *string                     `json:"anthropic_model"`
-	AnthropicAPIKey      *string                     `json:"anthropic_api_key"`
-	ClearAnthropicAPIKey bool                        `json:"clear_anthropic_api_key"`
-	Timeout              *time.Duration              `json:"timeout"`
-	AgentControlEnabled  *bool                       `json:"agent_control_enabled"`
-	AgentArmDuration     *time.Duration              `json:"agent_arm_duration"`
-	Policies             map[string]models.LLMPolicy `json:"policies"`
+	Enabled                        *bool                       `json:"enabled"`
+	Provider                       *string                     `json:"provider"`
+	OpenAIAuthMethod               *string                     `json:"openai_auth_method"`
+	OpenAIModel                    *string                     `json:"openai_model"`
+	OpenAIAPIKey                   *string                     `json:"openai_api_key"`
+	ClearOpenAIAPIKey              bool                        `json:"clear_openai_api_key"`
+	ClearChatGPTAuth               bool                        `json:"clear_chatgpt_auth"`
+	AnthropicModel                 *string                     `json:"anthropic_model"`
+	AnthropicAPIKey                *string                     `json:"anthropic_api_key"`
+	ClearAnthropicAPIKey           bool                        `json:"clear_anthropic_api_key"`
+	Timeout                        *time.Duration              `json:"timeout"`
+	AgentControlEnabled            *bool                       `json:"agent_control_enabled"`
+	AgentArmDuration               *time.Duration              `json:"agent_arm_duration"`
+	ActionAutoReviewEnabled        *bool                       `json:"action_auto_review_enabled"`
+	ActionAutoReviewModel          *string                     `json:"action_auto_review_model"`
+	ActionAutoReviewReasoning      *string                     `json:"action_auto_review_reasoning"`
+	ActionAutoReviewReferencePaths []string                    `json:"action_auto_review_reference_paths"`
+	Policies                       map[string]models.LLMPolicy `json:"policies"`
 }
 
 type integrationSettingsView struct {
@@ -2562,21 +2743,25 @@ type integrationSettingsUpdate struct {
 
 func llmSettingsResponse(cfg config.LLMConfig, sess session) llmSettingsView {
 	return llmSettingsView{
-		Enabled:               cfg.Enabled,
-		Provider:              cfg.Provider,
-		OpenAIAuthMethod:      firstNonEmpty(strings.TrimSpace(cfg.OpenAIAuthMethod), config.OpenAIAuthMethodAPIKey),
-		OpenAIModel:           cfg.OpenAIModel,
-		OpenAIAPIKeySet:       strings.TrimSpace(cfg.OpenAIAPIKey) != "",
-		ChatGPTConnected:      strings.TrimSpace(cfg.ChatGPTRefreshToken) != "" && strings.TrimSpace(cfg.ChatGPTAccountID) != "",
-		ChatGPTAccessTokenSet: strings.TrimSpace(cfg.ChatGPTAccessToken) != "",
-		ChatGPTAccountIDSet:   strings.TrimSpace(cfg.ChatGPTAccountID) != "",
-		AnthropicModel:        cfg.AnthropicModel,
-		AnthropicAPIKeySet:    strings.TrimSpace(cfg.AnthropicAPIKey) != "",
-		Timeout:               cfg.Timeout,
-		AgentControlEnabled:   cfg.AgentControlEnabled,
-		AgentArmDuration:      cfg.AgentArmDuration,
-		Policies:              cfg.Policies,
-		AgentReadiness:        llmAgentReadinessResponse(cfg, sess),
+		Enabled:                        cfg.Enabled,
+		Provider:                       cfg.Provider,
+		OpenAIAuthMethod:               firstNonEmpty(strings.TrimSpace(cfg.OpenAIAuthMethod), config.OpenAIAuthMethodAPIKey),
+		OpenAIModel:                    cfg.OpenAIModel,
+		OpenAIAPIKeySet:                strings.TrimSpace(cfg.OpenAIAPIKey) != "",
+		ChatGPTConnected:               strings.TrimSpace(cfg.ChatGPTRefreshToken) != "" && strings.TrimSpace(cfg.ChatGPTAccountID) != "",
+		ChatGPTAccessTokenSet:          strings.TrimSpace(cfg.ChatGPTAccessToken) != "",
+		ChatGPTAccountIDSet:            strings.TrimSpace(cfg.ChatGPTAccountID) != "",
+		AnthropicModel:                 cfg.AnthropicModel,
+		AnthropicAPIKeySet:             strings.TrimSpace(cfg.AnthropicAPIKey) != "",
+		Timeout:                        cfg.Timeout,
+		AgentControlEnabled:            cfg.AgentControlEnabled,
+		AgentArmDuration:               cfg.AgentArmDuration,
+		ActionAutoReviewEnabled:        cfg.ActionAutoReviewEnabled,
+		ActionAutoReviewModel:          firstNonEmpty(strings.TrimSpace(cfg.ActionAutoReviewModel), "same"),
+		ActionAutoReviewReasoning:      cfg.ActionAutoReviewReasoning,
+		ActionAutoReviewReferencePaths: append([]string(nil), cfg.ActionAutoReviewReferencePaths...),
+		Policies:                       cfg.Policies,
+		AgentReadiness:                 llmAgentReadinessResponse(cfg, sess),
 	}
 }
 
@@ -2624,9 +2809,9 @@ func llmAgentReadinessResponse(cfg config.LLMConfig, sess session) llmAgentReadi
 			{
 				ID:          "auto_review",
 				Label:       "Auto-review",
-				Status:      "blocked",
-				Enabled:     false,
-				Description: "Future mode: a separate reviewer model validates proposed actions before approval or execution.",
+				Status:      actionAutoReviewStatus(cfg),
+				Enabled:     cfg.ActionAutoReviewEnabled,
+				Description: "A separate reviewer model can validate proposed actions against configured references before execution.",
 			},
 			{
 				ID:          "auto_action",
@@ -2639,10 +2824,21 @@ func llmAgentReadinessResponse(cfg config.LLMConfig, sess session) llmAgentReadi
 		OpenCodeAutoReview: llmOpenCodeAutoReviewSummary{
 			ReferenceReviewed:   true,
 			SufficientReference: true,
-			ModelFinding:        "The referenced package examples use gpt-5.5 with xhigh reasoning and dynamic different-family selection; this is not evidence that Codex auto-review uses 5.4 Thinking.",
-			DesignFinding:       "Useful as a review workflow reference, not as a direct infrastructure-action implementation.",
+			Enabled:             cfg.ActionAutoReviewEnabled,
+			Model:               firstNonEmpty(strings.TrimSpace(cfg.ActionAutoReviewModel), "same"),
+			Reasoning:           strings.TrimSpace(cfg.ActionAutoReviewReasoning),
+			ReferenceCount:      len(cfg.ActionAutoReviewReferencePaths),
+			ModelFinding:        "The OpenCode reference uses a configurable reviewer model and prefers cross-model review when auto-selecting.",
+			DesignFinding:       "NoobBoard uses the same idea as an optional fail-closed action gate with local reference docs, not as an autonomous execution path.",
 		},
 	}
+}
+
+func actionAutoReviewStatus(cfg config.LLMConfig) string {
+	if cfg.ActionAutoReviewEnabled {
+		return "available"
+	}
+	return "planned"
 }
 
 func agentSessionArmed(cfg config.LLMConfig, sess session) (bool, time.Time) {
@@ -2728,6 +2924,18 @@ func decodeLLMSettingsUpdate(r *http.Request, current config.LLMConfig) (config.
 	}
 	if update.AgentArmDuration != nil {
 		settings.AgentArmDuration = *update.AgentArmDuration
+	}
+	if update.ActionAutoReviewEnabled != nil {
+		settings.ActionAutoReviewEnabled = *update.ActionAutoReviewEnabled
+	}
+	if update.ActionAutoReviewModel != nil {
+		settings.ActionAutoReviewModel = *update.ActionAutoReviewModel
+	}
+	if update.ActionAutoReviewReasoning != nil {
+		settings.ActionAutoReviewReasoning = *update.ActionAutoReviewReasoning
+	}
+	if update.ActionAutoReviewReferencePaths != nil {
+		settings.ActionAutoReviewReferencePaths = append([]string(nil), update.ActionAutoReviewReferencePaths...)
 	}
 	if update.Policies != nil {
 		settings.Policies = update.Policies
@@ -3164,6 +3372,12 @@ func normalizeLLMSettings(settings config.LLMConfig) config.LLMConfig {
 	if settings.AgentArmDuration > time.Hour {
 		settings.AgentArmDuration = time.Hour
 	}
+	settings.ActionAutoReviewModel = strings.TrimSpace(settings.ActionAutoReviewModel)
+	if settings.ActionAutoReviewModel == "" {
+		settings.ActionAutoReviewModel = defaults.ActionAutoReviewModel
+	}
+	settings.ActionAutoReviewReasoning = strings.TrimSpace(settings.ActionAutoReviewReasoning)
+	settings.ActionAutoReviewReferencePaths = compactStrings(settings.ActionAutoReviewReferencePaths)
 	settings.Policies = normalizeLLMPolicies(settings.Policies, defaults.Policies)
 	return settings
 }
