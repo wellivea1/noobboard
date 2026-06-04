@@ -203,6 +203,7 @@ func (a *App) registerSharedRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/user/notify-admin", a.requireAuth(a.notifyAdmin))
 	mux.HandleFunc("GET /api/user/repair-requests", a.requireAuth(a.userRepairRequests))
 	mux.HandleFunc("POST /api/user/repair-request", a.requireAuth(a.createRepairRequest))
+	mux.HandleFunc("POST /api/user/apps/{id}/restart", a.requireAuth(a.restartUserApp))
 	mux.HandleFunc("GET /api/user/notification-preferences", a.requireAuth(a.getNotificationPreferences))
 	mux.HandleFunc("POST /api/user/notification-preferences", a.requireAuth(a.saveNotificationPreferences))
 }
@@ -518,6 +519,7 @@ func probeSourceHasData(source, name string) bool {
 func applyAppCatalog(apps []models.AppStatus, catalog config.AppCatalogConfig) {
 	for i := range apps {
 		apps[i].AgentRepairAllowed = appCatalogFlag(apps[i], catalog.AgentRepairAllowed)
+		apps[i].RestartAllowedGeneralUser = catalog.GeneralUserRestartsEnabled && appCatalogFlag(apps[i], catalog.RestartAllowedGeneralUser)
 		if iconURL := appIconOverride(apps[i], catalog.IconOverrides); iconURL != "" {
 			apps[i].IconURL = iconURL
 			apps[i].IconSource = "custom"
@@ -1988,8 +1990,16 @@ func (a *App) recordAgentApproval(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) verifyAgentRepairOutcome(ctx context.Context, before models.AppStatus, action llmAgentActionDefinition, result docker.ControlResult) llmAgentRepairOutcomeView {
+	return a.verifyRepairOutcome(ctx, before, action, result, "Auto-repair")
+}
+
+func (a *App) verifyRepairOutcome(ctx context.Context, before models.AppStatus, action llmAgentActionDefinition, result docker.ControlResult, label string) llmAgentRepairOutcomeView {
 	beforeStatus := currentStatusOrUnknown(before.CurrentStatus)
 	targetLabel := firstNonEmpty(before.DisplayName, before.ContainerName, before.AppID)
+	messagePrefix := strings.TrimSpace(label)
+	if messagePrefix == "" {
+		messagePrefix = "Auto-repair"
+	}
 	outcome := llmAgentRepairOutcomeView{
 		Action:       string(action.DockerAction),
 		TargetID:     before.AppID,
@@ -2030,7 +2040,7 @@ func (a *App) verifyAgentRepairOutcome(ctx context.Context, before models.AppSta
 		if !ok {
 			outcome.Verified = true
 			outcome.AfterStatus = models.StatusUnknown
-			outcome.Message = "Auto-repair: restarted - target app was not present after refresh."
+			outcome.Message = messagePrefix + ": restarted - target app was not present after refresh."
 			break
 		}
 		outcome.Verified = true
@@ -2038,13 +2048,13 @@ func (a *App) verifyAgentRepairOutcome(ctx context.Context, before models.AppSta
 		outcome.TargetLabel = firstNonEmpty(afterApp.DisplayName, afterApp.ContainerName, afterApp.AppID, targetLabel)
 		outcome.Recovered = outcome.AfterStatus == models.StatusOnline
 		if outcome.Recovered {
-			outcome.Message = "Auto-repair: restarted - recovered."
+			outcome.Message = messagePrefix + ": restarted - recovered."
 			break
 		}
 		if attempt == attempts-1 {
-			outcome.Message = "Auto-repair: restarted - still coming up or not responding."
+			outcome.Message = messagePrefix + ": restarted - still coming up or not responding."
 		} else {
-			outcome.Message = "Auto-repair: restarted - waiting for recovery."
+			outcome.Message = messagePrefix + ": restarted - waiting for recovery."
 		}
 	}
 	if historyEventID, err := a.appendAgentRepairHistoryEvent(outcome); err == nil {
@@ -2386,6 +2396,123 @@ func (a *App) userRepairRequests(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, repairRequestsNewestFirst(requests))
+}
+
+func (a *App) restartUserApp(w http.ResponseWriter, r *http.Request) {
+	if err := requireCSRF(r); err != nil {
+		writeError(w, http.StatusForbidden, err)
+		return
+	}
+	appID := strings.TrimSpace(r.PathValue("id"))
+	if appID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("app id is required"))
+		return
+	}
+	var body struct {
+		Confirmed    bool   `json:"confirmed"`
+		ConfirmAppID string `json:"confirm_app_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	user := mustUser(r)
+	visibleSnapshot, err := a.Snapshot(r.Context(), user.Role)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	visibleApp, ok := findAppByID(visibleSnapshot.Apps, appID)
+	if !ok {
+		writeError(w, http.StatusNotFound, errors.New("app is not visible to this user"))
+		return
+	}
+	if !sameAppIdentifier(body.ConfirmAppID, visibleApp.AppID) || !body.Confirmed {
+		writeError(w, http.StatusBadRequest, errors.New("restart requires confirmed=true with a matching confirm_app_id"))
+		return
+	}
+	if !visibleApp.RestartAllowedGeneralUser {
+		a.deps.Audit.Record(user.ID, "user.app.restart.refused", map[string]interface{}{"app_id": visibleApp.AppID, "reason": "app_not_opted_in"})
+		writeError(w, http.StatusConflict, errors.New("restart is not enabled for this app"))
+		return
+	}
+	snapshot, err := a.readOnlySnapshot(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	app, ok := findAppByID(snapshot.Apps, visibleApp.AppID)
+	if !ok {
+		writeError(w, http.StatusNotFound, errors.New("app is not available in the current snapshot"))
+		return
+	}
+	details := map[string]interface{}{
+		"app_id":       app.AppID,
+		"requester_id": user.ID,
+		"via":          "general_user_direct",
+		"action":       string(docker.ActionRestart),
+	}
+	if !isDockerRepairTarget(app) {
+		details["reason"] = "not_docker_target"
+		a.deps.Audit.Record(user.ID, "user.app.restart.refused", details)
+		writeError(w, http.StatusConflict, errors.New("this app cannot be restarted by NoobBoard"))
+		return
+	}
+	if a.redactorSnapshot().IsBlacklistedApp(app) {
+		details["reason"] = "privacy_blacklisted"
+		a.deps.Audit.Record(user.ID, "user.app.restart.refused", details)
+		writeError(w, http.StatusConflict, errors.New("restart is unavailable for this app"))
+		return
+	}
+	if !app.RestartAllowedGeneralUser {
+		details["reason"] = "app_not_opted_in"
+		a.deps.Audit.Record(user.ID, "user.app.restart.refused", details)
+		writeError(w, http.StatusConflict, errors.New("restart is not enabled for this app"))
+		return
+	}
+	if currentStatusOrUnknown(app.CurrentStatus) == models.StatusOnline {
+		details["reason"] = "app_online"
+		a.deps.Audit.Record(user.ID, "user.app.restart.refused", details)
+		writeError(w, http.StatusConflict, errors.New("this app is currently working"))
+		return
+	}
+	limit := a.reserveAgentRepair(app.AppID, time.Now().UTC())
+	if !limit.Allowed {
+		details["reason"] = limit.Reason
+		details["retry_after_seconds"] = limit.RetryAfterSeconds
+		a.deps.Audit.Record(user.ID, "user.app.restart.rate_limited", auditDetailsCopy(details))
+		writeError(w, http.StatusConflict, errors.New(limit.Message))
+		return
+	}
+	result, err := a.deps.Collectors.Docker.ControlContainer(r.Context(), app, docker.ActionRestart)
+	if err != nil {
+		details["error"] = err.Error()
+		a.deps.Audit.Record(user.ID, "user.app.restart.execute_failed", auditDetailsCopy(details))
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	details["container_name"] = app.ContainerName
+	a.invalidateSnapshot()
+	a.deps.Audit.Record(user.ID, "user.app.restart.executed", auditDetailsCopy(details))
+	a.deps.Audit.Record(user.ID, "app.container.action", map[string]interface{}{"app_id": app.AppID, "action": string(docker.ActionRestart), "container_name": app.ContainerName, "via": "general_user_direct"})
+	action, _ := agentActionDefinition("ask_admin_to_restart_container")
+	outcome := a.verifyRepairOutcome(r.Context(), app, action, result, "Restart")
+	verifyDetails := auditDetailsCopy(details)
+	verifyDetails["verified"] = outcome.Verified
+	verifyDetails["recovered"] = outcome.Recovered
+	verifyDetails["before_status"] = string(outcome.BeforeStatus)
+	verifyDetails["after_status"] = string(outcome.AfterStatus)
+	verifyDetails["history_event_id"] = outcome.HistoryEventID
+	if outcome.Verified {
+		a.deps.Audit.Record(user.ID, "user.app.restart.verified", verifyDetails)
+	} else {
+		a.deps.Audit.Record(user.ID, "user.app.restart.verify_failed", verifyDetails)
+	}
+	writeJSON(w, http.StatusAccepted, map[string]interface{}{
+		"status":  "executed",
+		"result":  result,
+		"outcome": outcome,
+	})
 }
 
 func (a *App) adminRepairRequests(w http.ResponseWriter, _ *http.Request) {
@@ -2842,7 +2969,7 @@ func (a *App) updateAppCatalogSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.invalidateSnapshot()
-	a.deps.Audit.Record(mustUser(r).ID, "settings.apps.saved", map[string]interface{}{"path": r.URL.Path, "icon_overrides": len(settings.IconOverrides), "agent_repair_allowed": len(settings.AgentRepairAllowed)})
+	a.deps.Audit.Record(mustUser(r).ID, "settings.apps.saved", map[string]interface{}{"path": r.URL.Path, "icon_overrides": len(settings.IconOverrides), "agent_repair_allowed": len(settings.AgentRepairAllowed), "general_user_restarts_enabled": settings.GeneralUserRestartsEnabled, "restart_allowed_general_user": len(settings.RestartAllowedGeneralUser)})
 	writeJSON(w, http.StatusOK, settings)
 }
 
@@ -3645,8 +3772,16 @@ func normalizeAppCatalogSettings(settings config.AppCatalogConfig) (config.AppCa
 			agentRepairAllowed[trimmedKey] = true
 		}
 	}
+	restartAllowedGeneralUser := map[string]bool{}
+	for key, allowed := range settings.RestartAllowedGeneralUser {
+		trimmedKey := strings.TrimSpace(key)
+		if trimmedKey != "" && allowed {
+			restartAllowedGeneralUser[trimmedKey] = true
+		}
+	}
 	settings.IconOverrides = iconOverrides
 	settings.AgentRepairAllowed = agentRepairAllowed
+	settings.RestartAllowedGeneralUser = restartAllowedGeneralUser
 	return settings, nil
 }
 

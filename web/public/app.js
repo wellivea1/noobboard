@@ -1371,10 +1371,17 @@ function renderAppDetail(app, history) {
 
 function userRepairDetailActions(app) {
   if (hasAdminSurface() || !isUserRepairCandidate(app)) return null;
+  const canRestart = !!app.restart_allowed_general_user;
   const request = latestUserRepairRequestForApp(app.app_id);
   const pending = request?.status === "pending";
   return node("section", { class: "detail-actions user-repair-actions" },
-    node("button", {
+    canRestart ? node("button", {
+      type: "button",
+      class: "primary command",
+      "data-glyph": "r",
+      onclick: (event) => runUserAppRestart(app, event.currentTarget),
+      text: "Restart now",
+    }) : node("button", {
       type: "button",
       class: "primary command",
       "data-glyph": "!",
@@ -1401,6 +1408,40 @@ function requestAdminRepairForApp(app, button = null) {
   }, {
     general_user_summary: plainAppSummary(app),
   }, button);
+}
+
+async function runUserAppRestart(app, button = null) {
+  const appID = app?.app_id || "";
+  const label = appDisplayName(app);
+  if (!appID) {
+    showNotice("App id is required.", "error");
+    return;
+  }
+  if (!confirm(`Restart ${label}?`)) return;
+  const original = button?.textContent || "";
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Restarting";
+  }
+  try {
+    const result = await api(`/api/user/apps/${encodeURIComponent(appID)}/restart`, {
+      method: "POST",
+      body: JSON.stringify({ confirmed: true, confirm_app_id: appID }),
+    });
+    if (result.outcome) {
+      showNotice(agentRepairOutcomeNotice(result.outcome), result.outcome.recovered ? "info" : "error");
+    } else {
+      showNotice(`Restart requested for ${label}.`);
+    }
+    await refresh();
+  } catch (error) {
+    showNotice(error.message, "error");
+  } finally {
+    if (button?.isConnected) {
+      button.disabled = false;
+      button.textContent = original;
+    }
+  }
 }
 
 function renderInfraDetail(history) {
@@ -3460,6 +3501,8 @@ function renderBlacklistSettings(item, data) {
 function renderAppImageSettings(item, data) {
   const overrides = { ...(data?.icon_overrides || {}) };
   const repairAllowed = { ...(data?.agent_repair_allowed || {}) };
+  const userRestartEnabled = settingToggle("Allow standard-user restart buttons", !!data?.general_user_restarts_enabled);
+  const userRestartAllowed = { ...(data?.restart_allowed_general_user || {}) };
   const apps = state.snapshot?.apps || [];
   const appRows = [];
   const appKeys = new Set();
@@ -3472,7 +3515,8 @@ function renderAppImageSettings(item, data) {
       inputmode: "url",
     });
     const repairToggle = settingToggle("Allow automatic repair", key ? !!repairAllowed[key] : false);
-    appRows.push({ key, input, repairInput: repairToggle.input });
+    const userRestartToggle = settingToggle("Allow user restart", key ? !!userRestartAllowed[key] : false);
+    appRows.push({ key, input, repairInput: repairToggle.input, userRestartInput: userRestartToggle.input });
     return node("div", { class: "settings-app-image-row" },
       renderAppLogo(app),
       node("span", { class: "settings-row-main" },
@@ -3482,6 +3526,7 @@ function renderAppImageSettings(item, data) {
       node("div", { class: "settings-app-controls" },
         input,
         repairToggle.element,
+        userRestartToggle.element,
       ),
     );
   });
@@ -3513,6 +3558,11 @@ function renderAppImageSettings(item, data) {
   extras.forEach(([key, url]) => addExtra(key, url));
   const body = node("div", { class: "settings-form" },
     node("section", { class: "settings-subsection" },
+      node("h4", { text: "Standard-user restarts" }),
+      userRestartEnabled.element,
+      node("p", { class: "muted", text: "When enabled, only apps with the per-app user restart toggle can show a compact-view restart button." }),
+    ),
+    node("section", { class: "settings-subsection" },
       node("h4", { text: "Known apps" }),
       node("div", { class: "settings-row-list" }, appList.length ? appList : node("div", { class: "empty", text: "No apps loaded." })),
     ),
@@ -3527,10 +3577,12 @@ function renderAppImageSettings(item, data) {
   return settingsCard(item, body, (status) => {
     const icon_overrides = {};
     const agent_repair_allowed = {};
+    const restart_allowed_general_user = {};
     for (const row of appRows) {
       const url = row.input.value.trim();
       if (row.key && url) icon_overrides[row.key] = url;
       if (row.key && row.repairInput.checked) agent_repair_allowed[row.key] = true;
+      if (row.key && row.userRestartInput.checked) restart_allowed_general_user[row.key] = true;
     }
     for (const row of extraRows) {
       const key = row.keyInput.value.trim();
@@ -3540,7 +3592,15 @@ function renderAppImageSettings(item, data) {
     for (const [key, allowed] of Object.entries(repairAllowed)) {
       if (allowed && !appKeys.has(key)) agent_repair_allowed[key] = true;
     }
-    return saveSettingsPayload(item.title, item.path, { icon_overrides, agent_repair_allowed }, status);
+    for (const [key, allowed] of Object.entries(userRestartAllowed)) {
+      if (allowed && !appKeys.has(key)) restart_allowed_general_user[key] = true;
+    }
+    return saveSettingsPayload(item.title, item.path, {
+      icon_overrides,
+      agent_repair_allowed,
+      general_user_restarts_enabled: userRestartEnabled.input.checked,
+      restart_allowed_general_user,
+    }, status);
   });
 }
 
