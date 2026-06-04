@@ -32,10 +32,30 @@ func TestValidateDiagnosisAcceptsStrictSchemaShape(t *testing.T) {
 		"general_user_summary":"Emby is offline.",
 		"admin_message":"Incident: Emby is offline.",
 		"recommended_action_id":"ask_admin_to_check_logs",
+		"recommended_action_target":{"kind":"app","id_or_name":"emby"},
 		"should_notify_admin":true
 	}`))
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestValidateDiagnosisRequiresAppTargetForAppActions(t *testing.T) {
+	_, err := ValidateDiagnosis([]byte(`{
+		"severity":"medium",
+		"confidence":0.7,
+		"incident_type":"app_down",
+		"affected_services":["emby"],
+		"diagnosis":"Emby is offline.",
+		"evidence":["container exited"],
+		"general_user_summary":"Emby is offline.",
+		"admin_message":"Incident: Emby is offline.",
+		"recommended_action_id":"ask_admin_to_restart_container",
+		"recommended_action_target":{"kind":"manual","id_or_name":""},
+		"should_notify_admin":true
+	}`))
+	if err == nil {
+		t.Fatal("expected restart recommendation without an app target to be rejected")
 	}
 }
 

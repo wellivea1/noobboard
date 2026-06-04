@@ -148,6 +148,13 @@ func infrastructureFacts(infra models.InfrastructureStatus, now time.Time) []mod
 	if unraidData && infra.UnraidAPIReachable && !infra.UnraidArrayHealthy {
 		add("array_degraded", models.IncidentStorageWarning, models.SeverityHigh, "Unraid array is degraded or warning.", []string{"Unraid API reports array health warning"}, true)
 	}
+	if unraidData && infra.UnraidAPIReachable && (infra.UnraidAlertCount > 0 || infra.UnraidWarningCount > 0) {
+		severity := models.SeverityMedium
+		if infra.UnraidAlertCount > 0 {
+			severity = models.SeverityHigh
+		}
+		add("unraid_notifications", models.IncidentStorageWarning, severity, "Unraid has unread alerts or warnings.", []string{fmt.Sprintf("%d alert(s), %d warning(s), %d total unread notification(s)", infra.UnraidAlertCount, infra.UnraidWarningCount, infra.UnraidNotificationCount)}, false)
+	}
 	if unraidData && dockerData && infra.NASReachable && infra.UnraidAPIReachable && !infra.DockerServiceAvailable {
 		add("docker_service_down", models.IncidentDockerServiceDown, models.SeverityHigh, "Docker service is unavailable on the NAS.", []string{"Unraid reachable", "Docker service unavailable"}, true)
 	}

@@ -141,7 +141,7 @@ func (a *App) finishOpenAIChatGPTBrowserAuth(w http.ResponseWriter, r *http.Requ
 			writeError(w, http.StatusBadGateway, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]interface{}{"status": "connected", "settings": llmSettingsResponse(a.configSnapshot().LLM)})
+		writeJSON(w, http.StatusOK, map[string]interface{}{"status": "connected", "settings": llmSettingsResponse(a.configSnapshot().LLM, mustSession(r))})
 		return
 	}
 	if hasPending {
@@ -233,7 +233,7 @@ func (a *App) pollOpenAIChatGPTHeadlessAuth(w http.ResponseWriter, r *http.Reque
 	a.openAIAuth.mu.Lock()
 	delete(a.openAIAuth.headless, pollID)
 	a.openAIAuth.mu.Unlock()
-	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "connected", "settings": llmSettingsResponse(a.configSnapshot().LLM)})
+	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "connected", "settings": llmSettingsResponse(a.configSnapshot().LLM, mustSession(r))})
 }
 
 func (a *App) ensureOpenAIChatGPTCallbackServer() error {
@@ -379,6 +379,7 @@ func (a *App) saveOpenAIChatGPTTokens(actorID, method string, tokens llm.ChatGPT
 	if err := a.deps.Store.SaveRuntimeSettings(runtimeSettings); err != nil {
 		return err
 	}
+	a.invalidateSnapshot()
 	a.deps.Audit.Record(actorID, "settings.llm.chatgpt.connected", map[string]interface{}{"method": method, "account_id_set": true})
 	return nil
 }

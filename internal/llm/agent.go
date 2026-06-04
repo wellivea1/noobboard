@@ -197,6 +197,10 @@ func allReadOnlyAgentToolNames() []string {
 	}
 }
 
+func ReadOnlyAgentToolNames() []string {
+	return allReadOnlyAgentToolNames()
+}
+
 func noArgToolParameters() map[string]interface{} {
 	return map[string]interface{}{
 		"type":                 "object",

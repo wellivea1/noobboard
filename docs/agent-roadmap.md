@@ -306,7 +306,12 @@ than a general coding agent.
 The baseline LLM returns a read-only `Diagnosis` (`internal/llm/schema.go`) with a
 `recommended_action_id` — it advises, it does not mutate anything. Agent mode lets the
 model call a small, vetted set of **tools** that map onto operations the app already
-performs safely.
+performs safely. Current baseline also requires a structured `recommended_action_target`;
+the server resolves app targets against the admin snapshot before showing an approval
+popup, and unresolved app targets stay non-actionable.
+The action-approval arm gate is also in place: it is disabled by default, requires
+`agent_control_enabled=true`, and arms only the current admin session for a bounded window.
+Mutating repair execution remains locked until the explicit tool implementations exist.
 
 **Design, grounded in the references:**
 - **Read-only live API tools (implemented first).** Admin-requested diagnosis can opt into
@@ -344,6 +349,12 @@ performs safely.
 - Codex: approval modes + sandbox + turn limits — adopt the approval-mode UX and turn
   budget; skip the general shell sandbox.
 
+OpenCode auto-review package note: useful for a future reviewer-model workflow because it
+deduplicates reviewed turns, skips child/review-loop sessions, and asks a different model
+family for PASS/FAIL/UNKNOWN evidence. It is not a NoobBoard action-control
+implementation. Its examples use `gpt-5.5` with `xhigh` reasoning; this is not proof that
+Codex auto-review uses "5.4 Thinking".
+
 **Likely files:** new `internal/llm/agent.go` (runner + tool schema), `internal/llm/
 schema.go` (tool-call validation), `internal/server/server.go` (arming + run endpoints,
 CSRF), `internal/audit/audit.go`, `internal/config/config.go` (feature flag + allowlist),
@@ -353,6 +364,8 @@ lands** — those docs currently state the LLM has no repair tools or Docker con
 ### Acceptance criteria
 - [ ] Part 1: roles/limits/provider/model are configurable from a structured UI; redaction
       and role scoping are provably unchanged.
+- [ ] Part 1: LLM settings show an agent-readiness/approval section that distinguishes
+      active read-only tools from the planned approval popup, auto-review, and auto-action modes.
 - [ ] Part 2: agent mode is off by default; enabling it requires both a config flag and an
       explicit in-app arm step.
 - [ ] Tool calls are schema-validated, restricted to the allowlist, audited with transcript,

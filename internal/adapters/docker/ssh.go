@@ -170,9 +170,9 @@ func dockerCLILabels(value string) map[string]string {
 }
 
 func sshContainerTarget(app models.AppStatus) string {
-	for _, value := range []string{app.ContainerID, app.ContainerName, app.DisplayName, app.AppID} {
+	for _, value := range []string{app.ContainerID, app.ContainerName} {
 		value = strings.TrimSpace(strings.TrimPrefix(value, "container:"))
-		if value != "" {
+		if safeContainerTarget(value) {
 			return value
 		}
 	}

@@ -20,6 +20,12 @@ is the compact app-detail and infra-detail pages.
 
 Grounded in the code as it stands today:
 
+Implementation update: Phase 1 has landed. `cmd/dashboard` starts
+`App.RunPoller(ctx, cfg.Polling.Interval)`, read handlers serve a cloned cached
+snapshot with a cold-start fallback, and normal HTTP reads no longer process
+notifications. The original poller/notification bullets below are retained as
+historical rationale for the phase.
+
 - **No background poller.** `config.PollingConfig.Interval` (default `30s`,
   `internal/config/config.go`) is validated but **never consumed**. Snapshots
   are built **on demand** in `App.collectSnapshot` (`internal/server/server.go`),
@@ -131,6 +137,7 @@ Infra subjects map booleans → `CurrentStatus` via a small normalizer:
 ## Backend work (phased)
 
 ### Phase 1 — Background poller + snapshot cache
+**Status:** implemented in `codex/api-coverage-safety-hardening`
 *(foundational; independently valuable: notifications fire continuously, fewer upstream API calls)*
 
 - Add `App.RunPoller(ctx, interval)` in `internal/server`. On each tick (and once
@@ -145,15 +152,29 @@ Infra subjects map booleans → `CurrentStatus` via a small normalizer:
 - **Notifications de-dup:** only the poller calls `ProcessSnapshot`. Per-request
   snapshot building uses `processNotifications=false` (handlers now read cache
   anyway). Prevents double notifications.
-- Optional "force refresh": a lightweight `POST`/internal trigger so the compact
-  "Check again" button can request an immediate poll instead of waiting for the
-  next tick. (If skipped, the button just re-reads the cache.)
+- Shared manual refresh: `POST /api/status/refresh` lets the compact "Check
+  again" button request an immediate collector refresh instead of waiting for
+  the next tick. The route is authenticated, CSRF-protected, records history
+  transitions, and returns the role-filtered snapshot.
 - **Cold start:** before the first tick completes, serve a freshly collected
   snapshot (or a "warming up" state) so the first page load isn't empty.
 - Tests: poller updates cache; handlers read cache; notifications processed once
   per tick.
 
 ### Phase 2 — History store + recorder
+**Status:** implemented in `codex/api-coverage-safety-hardening`
+Completed implementation notes: `RunPoller` performs the immediate/timed
+collections and stores a cloned full snapshot; `latestSnapshot` clones again
+before role filtering so general-user filtering cannot mutate cached admin data;
+runtime settings writes invalidate the cache. The shared manual refresh endpoint
+is implemented as `POST /api/status/refresh`.
+
+Phase 2 implementation update: status transition models, append-only
+`history.jsonl`, the in-memory recorder, retention config, poller wiring, and
+tests have landed. The store writes JSONL next to the configured database path
+and keeps an in-memory per-subject ring for reads; `Prune` compacts by age and
+per-subject cap.
+
 - `internal/db/history.go`: `HistoryStore` interface + `FileHistoryStore`
   (append-only `history.jsonl` next to `Database.Path`), with an in-memory ring
   buffer (cap per subject, e.g. 500) for reads and a `Prune(retention)` that
@@ -189,6 +210,8 @@ Infra subjects map booleans → `CurrentStatus` via a small normalizer:
   produces two events; prune drops old/over-cap events; JSONL survives restart.
 
 ### Phase 3 — History API
+**Status:** implemented in `codex/api-coverage-safety-hardening`
+
 - New shared routes (in `registerSharedRoutes`, behind `requireAuth`):
   - `GET /api/apps/{id}/history?window=7d&limit=100`
   - `GET /api/infrastructure/history?subject=internet&window=7d`
@@ -210,6 +233,13 @@ Infra subjects map booleans → `CurrentStatus` via a small normalizer:
 ---
 
 ## Frontend work
+**Status:** first compact slice implemented in `codex/api-coverage-safety-hardening`.
+Visible app cards open a compact detail page with current status, last-working
+metadata, uptime, and a plain-language history timeline. The visible router
+summary opens an internet detail page, and the visible server summary opens a
+server detail page backed by the infrastructure history API. "Check again" now
+uses the shared manual refresh endpoint. The optional 24-hour visual bar and
+broader infra subjects remain open.
 
 ### Make app cards open a detail page
 - In `renderUserAppCard` (`web/public/app.js`), render the card as an activatable

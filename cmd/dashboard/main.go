@@ -138,6 +138,7 @@ func runServers(ctx context.Context, cfg config.Config) error {
 	}
 	startServer("admin", adminSrv)
 	startServer("compact", compactSrv)
+	go app.RunPoller(ctx, cfg.Polling.Interval)
 
 	var serveErr error
 	select {
@@ -188,6 +189,10 @@ func buildApp(cfg config.Config) (*server.App, error) {
 	if err != nil {
 		return nil, err
 	}
+	historyStore, err := db.OpenFileHistoryStore(db.HistoryPathForDatabase(cfg.Database.Path), cfg.Retention.MaxStatusEventsPerSubject)
+	if err != nil {
+		return nil, err
+	}
 
 	registry := users.NewRegistry(store, cfg.Auth)
 	auditor := audit.New(store, redactor)
@@ -224,6 +229,7 @@ func buildApp(cfg config.Config) (*server.App, error) {
 		Config:        cfg,
 		Collectors:    collectors,
 		Store:         store,
+		History:       historyStore,
 		Users:         registry,
 		Audit:         auditor,
 		Notifications: notifier,

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -17,15 +18,26 @@ import (
 )
 
 type LiveClient struct {
-	baseURL string
-	apiKey  string
-	siteID  string
-	http    *http.Client
+	baseURL             string
+	apiKey              string
+	siteID              string
+	nasClientHint       string
+	expectedNASLinkMbps int
+	http                *http.Client
 }
 
 const unifiMaxPages = 20
 
-func NewLiveClient(baseURL, apiKey, siteID string, insecureTLS bool) LiveClient {
+type LiveOption func(*LiveClient)
+
+func WithNASLinkMonitoring(clientHint string, expectedMbps int) LiveOption {
+	return func(c *LiveClient) {
+		c.nasClientHint = strings.TrimSpace(clientHint)
+		c.expectedNASLinkMbps = expectedMbps
+	}
+}
+
+func NewLiveClient(baseURL, apiKey, siteID string, insecureTLS bool, opts ...LiveOption) LiveClient {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	if insecureTLS {
 		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
@@ -33,12 +45,18 @@ func NewLiveClient(baseURL, apiKey, siteID string, insecureTLS bool) LiveClient 
 	if siteID == "" {
 		siteID = "default"
 	}
-	return LiveClient{
+	client := LiveClient{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		apiKey:  apiKey,
 		siteID:  siteID,
 		http:    &http.Client{Timeout: 10 * time.Second, Transport: transport},
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&client)
+		}
+	}
+	return client
 }
 
 func (c LiveClient) Status(ctx context.Context) (models.InfrastructureStatus, error) {
@@ -109,6 +127,7 @@ func (c LiveClient) Status(ctx context.Context) (models.InfrastructureStatus, er
 			infra.UniFiWarnings = append(infra.UniFiWarnings, "clients: result may be truncated")
 		}
 		infra.UniFiClientCount = len(clients)
+		c.applyNASLinkTelemetry(&infra, clients)
 	}
 
 	wans, truncated, err := c.wans(ctx, site.ID)
@@ -142,10 +161,30 @@ type deviceOverview struct {
 }
 
 type clientOverview struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	IPAddress string `json:"ipAddress"`
-	Type      string `json:"type"`
+	ID            string                 `json:"id"`
+	Name          string                 `json:"name"`
+	IPAddress     string                 `json:"ipAddress"`
+	MACAddress    string                 `json:"macAddress"`
+	Type          string                 `json:"type"`
+	LinkSpeedMbps int                    `json:"linkSpeedMbps"`
+	Raw           map[string]interface{} `json:"-"`
+}
+
+func (c *clientOverview) UnmarshalJSON(data []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*c = clientOverview{
+		ID:            firstStringValue(raw, "id", "_id", "clientId", "client_id"),
+		Name:          firstStringValue(raw, "name", "displayName", "display_name", "hostname", "hostName"),
+		IPAddress:     firstStringValue(raw, "ipAddress", "ip_address", "ip", "address"),
+		MACAddress:    firstStringValue(raw, "macAddress", "mac_address", "mac", "hwaddr"),
+		Type:          firstStringValue(raw, "type", "networkType", "network_type"),
+		LinkSpeedMbps: firstMbpsValue(raw, "linkSpeedMbps", "link_speed_mbps", "linkSpeed", "link_speed", "speedMbps", "speed_mbps", "speed", "networkSpeed", "network_speed", "wiredRate", "wired_rate", "uplinkSpeed", "uplink_speed", "uplinkLinkSpeed", "uplink_link_speed"),
+		Raw:           raw,
+	}
+	return nil
 }
 
 type wanOverview struct {
@@ -199,6 +238,25 @@ func (c LiveClient) clients(ctx context.Context, siteID string) ([]clientOvervie
 
 func (c LiveClient) wans(ctx context.Context, siteID string) ([]wanOverview, bool, error) {
 	return getPages[wanOverview](ctx, c, "/proxy/network/integration/v1/sites/"+url.PathEscape(siteID)+"/wans", 25)
+}
+
+func (c LiveClient) applyNASLinkTelemetry(infra *models.InfrastructureStatus, clients []clientOverview) {
+	if c.expectedNASLinkMbps > 0 {
+		infra.ExpectedNASLinkMbps = c.expectedNASLinkMbps
+	}
+	hint := normalizedClientHint(c.nasClientHint)
+	if hint == "" {
+		return
+	}
+	for _, client := range clients {
+		if !clientMatchesHint(client, hint) {
+			continue
+		}
+		if client.LinkSpeedMbps > 0 {
+			infra.NASLinkSpeedMbps = client.LinkSpeedMbps
+		}
+		return
+	}
 }
 
 type optionalBool struct {
@@ -282,6 +340,106 @@ func applyWANStatus(infra *models.InfrastructureStatus, wans []wanOverview) {
 		infra.UniFiWANUp = false
 		infra.UniFiWarnings = append(infra.UniFiWarnings, "WAN issue: no enabled WAN definitions reported")
 	}
+}
+
+func clientMatchesHint(client clientOverview, hint string) bool {
+	if hint == "" {
+		return false
+	}
+	values := []string{
+		client.ID,
+		client.Name,
+		client.IPAddress,
+		client.MACAddress,
+		firstStringValue(client.Raw, "hostname", "hostName", "displayName", "display_name", "localDnsRecord"),
+	}
+	for _, value := range values {
+		normalized := normalizedClientHint(value)
+		if normalized == hint || shortClientHint(normalized) == shortClientHint(hint) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizedClientHint(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if parsed, err := url.Parse(value); err == nil && parsed.Host != "" {
+		value = parsed.Hostname()
+	}
+	value = strings.Trim(strings.ToLower(value), "[]")
+	if host, _, err := net.SplitHostPort(value); err == nil {
+		value = host
+	}
+	return strings.Trim(strings.TrimSpace(value), "[]")
+}
+
+func shortClientHint(value string) string {
+	value = normalizedClientHint(value)
+	if value == "" || net.ParseIP(value) != nil || !strings.Contains(value, ".") {
+		return value
+	}
+	return strings.SplitN(value, ".", 2)[0]
+}
+
+func firstStringValue(values map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := values[key].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func firstMbpsValue(values map[string]interface{}, keys ...string) int {
+	for _, key := range keys {
+		if mbps := mbpsValue(values[key]); mbps > 0 {
+			return mbps
+		}
+	}
+	return 0
+}
+
+func mbpsValue(value interface{}) int {
+	switch v := value.(type) {
+	case float64:
+		if v > 0 {
+			return int(v)
+		}
+	case int:
+		if v > 0 {
+			return v
+		}
+	case json.Number:
+		if parsed, err := strconv.ParseFloat(string(v), 64); err == nil && parsed > 0 {
+			return int(parsed)
+		}
+	case string:
+		return parseMbpsText(v)
+	}
+	return 0
+}
+
+func parseMbpsText(value string) int {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if normalized == "" {
+		return 0
+	}
+	multiplier := 1.0
+	if strings.Contains(normalized, "gb") || strings.Contains(normalized, "gbit") {
+		multiplier = 1000
+	}
+	replacer := strings.NewReplacer(",", "", "mbps", " ", "mbit/s", " ", "mbit", " ", "mps", " ", "gbps", " ", "gbit/s", " ", "gbit", " ", "gb", " ", "fdx", " ", "hdx", " ")
+	parts := strings.Fields(replacer.Replace(normalized))
+	for _, part := range parts {
+		if number, err := strconv.ParseFloat(part, 64); err == nil && number > 0 {
+			return int(number * multiplier)
+		}
+	}
+	return 0
 }
 
 func wanSignal(wan wanOverview) string {

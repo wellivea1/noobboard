@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestDefaultConfigValidation(t *testing.T) {
@@ -22,6 +23,9 @@ func TestDefaultConfigValidation(t *testing.T) {
 	}
 	if cfg.LLM.OpenAIAuthMethod != OpenAIAuthMethodAPIKey {
 		t.Fatalf("default OpenAI auth method = %q, want api_key", cfg.LLM.OpenAIAuthMethod)
+	}
+	if cfg.Retention.MaxStatusEventAge != 90*24*time.Hour || cfg.Retention.MaxStatusEventsPerSubject != 500 {
+		t.Fatalf("default status history retention = %s/%d", cfg.Retention.MaxStatusEventAge, cfg.Retention.MaxStatusEventsPerSubject)
 	}
 }
 
@@ -129,6 +133,12 @@ func TestIntegrationBaseURLNormalizationAndValidation(t *testing.T) {
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected UniFi base URL credentials to fail validation")
 	}
+
+	cfg = Defaults()
+	cfg.Integrations.ExpectedNASLinkMbps = -1
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected negative expected NAS link speed to fail validation")
+	}
 }
 
 func TestNoobBoardEnvOverridesAndLegacyAliases(t *testing.T) {
@@ -154,6 +164,53 @@ func TestLegacyEnvAliasStillWorks(t *testing.T) {
 	applyEnv(&cfg)
 	if cfg.Server.CompactPort != 8899 {
 		t.Fatalf("legacy HSD_COMPACT_PORT alias was not applied, got %d", cfg.Server.CompactPort)
+	}
+}
+
+func TestStatusHistoryRetentionConfigParsing(t *testing.T) {
+	t.Setenv("NOOBBOARD_MAX_STATUS_EVENT_AGE", "14d")
+	t.Setenv("NOOBBOARD_MAX_STATUS_EVENTS_PER_SUBJECT", "42")
+	cfg := Defaults()
+	applyEnv(&cfg)
+	if cfg.Retention.MaxStatusEventAge != 14*24*time.Hour || cfg.Retention.MaxStatusEventsPerSubject != 42 {
+		t.Fatalf("env retention = %s/%d", cfg.Retention.MaxStatusEventAge, cfg.Retention.MaxStatusEventsPerSubject)
+	}
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte("retention:\n  max_status_event_age: 6h\n  max_status_events_per_subject: 7\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg = Defaults()
+	if err := applySimpleConfigFile(&cfg, configPath); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Retention.MaxStatusEventAge != 6*time.Hour || cfg.Retention.MaxStatusEventsPerSubject != 7 {
+		t.Fatalf("file retention = %s/%d", cfg.Retention.MaxStatusEventAge, cfg.Retention.MaxStatusEventsPerSubject)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("retention config should validate: %v", err)
+	}
+}
+
+func TestNASLinkIntegrationConfigParsing(t *testing.T) {
+	t.Setenv("NOOBBOARD_UNIFI_NAS_CLIENT_HINT", "192.168.0.214")
+	t.Setenv("NOOBBOARD_EXPECTED_NAS_LINK_MBPS", "2500")
+	cfg := Defaults()
+	applyEnv(&cfg)
+	if cfg.Integrations.UniFiNASClientHint != "192.168.0.214" || cfg.Integrations.ExpectedNASLinkMbps != 2500 {
+		t.Fatalf("env NAS link settings = %q/%d", cfg.Integrations.UniFiNASClientHint, cfg.Integrations.ExpectedNASLinkMbps)
+	}
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte("integrations:\n  unifi_nas_client_hint: tower.local\n  expected_nas_link_mbps: 1000\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg = Defaults()
+	if err := applySimpleConfigFile(&cfg, configPath); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Integrations.UniFiNASClientHint != "tower.local" || cfg.Integrations.ExpectedNASLinkMbps != 1000 {
+		t.Fatalf("file NAS link settings = %q/%d", cfg.Integrations.UniFiNASClientHint, cfg.Integrations.ExpectedNASLinkMbps)
 	}
 }
 

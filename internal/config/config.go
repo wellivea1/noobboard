@@ -104,6 +104,8 @@ type LLMConfig struct {
 	AnthropicAPIKey       string                      `json:"anthropic_api_key,omitempty"`
 	AnthropicModel        string                      `json:"anthropic_model"`
 	Timeout               time.Duration               `json:"timeout"`
+	AgentControlEnabled   bool                        `json:"agent_control_enabled"`
+	AgentArmDuration      time.Duration               `json:"agent_arm_duration"`
 	Policies              map[string]models.LLMPolicy `json:"policies"`
 }
 
@@ -114,25 +116,27 @@ const (
 )
 
 type IntegrationConfig struct {
-	Mode              string `json:"mode"`
-	UnraidBaseURL     string `json:"unraid_base_url"`
-	UnraidAPIKey      string `json:"unraid_api_key,omitempty"`
-	UnraidAPIKeyFile  string `json:"unraid_api_key_file,omitempty"`
-	UnraidSSHFallback bool   `json:"unraid_ssh_fallback"`
-	UnraidSSHHost     string `json:"unraid_ssh_host,omitempty"`
-	UnraidSSHPort     int    `json:"unraid_ssh_port"`
-	UnraidSSHUser     string `json:"unraid_ssh_user,omitempty"`
-	UnraidSSHKeyFile  string `json:"unraid_ssh_key_file,omitempty"`
-	UnraidSSHCommand  string `json:"unraid_ssh_command,omitempty"`
-	UniFiBaseURL      string `json:"unifi_base_url"`
-	UniFiAPIKey       string `json:"unifi_api_key,omitempty"`
-	UniFiAPIKeyFile   string `json:"unifi_api_key_file,omitempty"`
-	UniFiSiteID       string `json:"unifi_site_id"`
-	UniFiInsecureTLS  bool   `json:"unifi_insecure_tls"`
-	InternetProbeURL  string `json:"internet_probe_url"`
-	DNSProbeHost      string `json:"dns_probe_host"`
-	RouterProbeTarget string `json:"router_probe_target"`
-	NASProbeTarget    string `json:"nas_probe_target"`
+	Mode                string `json:"mode"`
+	UnraidBaseURL       string `json:"unraid_base_url"`
+	UnraidAPIKey        string `json:"unraid_api_key,omitempty"`
+	UnraidAPIKeyFile    string `json:"unraid_api_key_file,omitempty"`
+	UnraidSSHFallback   bool   `json:"unraid_ssh_fallback"`
+	UnraidSSHHost       string `json:"unraid_ssh_host,omitempty"`
+	UnraidSSHPort       int    `json:"unraid_ssh_port"`
+	UnraidSSHUser       string `json:"unraid_ssh_user,omitempty"`
+	UnraidSSHKeyFile    string `json:"unraid_ssh_key_file,omitempty"`
+	UnraidSSHCommand    string `json:"unraid_ssh_command,omitempty"`
+	UniFiBaseURL        string `json:"unifi_base_url"`
+	UniFiAPIKey         string `json:"unifi_api_key,omitempty"`
+	UniFiAPIKeyFile     string `json:"unifi_api_key_file,omitempty"`
+	UniFiSiteID         string `json:"unifi_site_id"`
+	UniFiInsecureTLS    bool   `json:"unifi_insecure_tls"`
+	UniFiNASClientHint  string `json:"unifi_nas_client_hint,omitempty"`
+	ExpectedNASLinkMbps int    `json:"expected_nas_link_mbps,omitempty"`
+	InternetProbeURL    string `json:"internet_probe_url"`
+	DNSProbeHost        string `json:"dns_probe_host"`
+	RouterProbeTarget   string `json:"router_probe_target"`
+	NASProbeTarget      string `json:"nas_probe_target"`
 }
 
 type PollingConfig struct {
@@ -140,10 +144,12 @@ type PollingConfig struct {
 }
 
 type RetentionConfig struct {
-	MaxAuditEntries        int
-	MaxNotificationHistory int
-	MaxLogLinesPerSource   int
-	MaxIncidentAge         time.Duration
+	MaxAuditEntries           int
+	MaxNotificationHistory    int
+	MaxLogLinesPerSource      int
+	MaxIncidentAge            time.Duration
+	MaxStatusEventAge         time.Duration
+	MaxStatusEventsPerSubject int
 }
 
 func Load(path string) (Config, error) {
@@ -210,6 +216,7 @@ func Defaults() Config {
 			OpenAIModel:      "gpt-5",
 			AnthropicModel:   "claude-sonnet-4-5",
 			Timeout:          45 * time.Second,
+			AgentArmDuration: 10 * time.Minute,
 			Policies:         defaultLLMPolicies(),
 		},
 		Integrations: IntegrationConfig{
@@ -227,10 +234,12 @@ func Defaults() Config {
 			Interval: 30 * time.Second,
 		},
 		Retention: RetentionConfig{
-			MaxAuditEntries:        1000,
-			MaxNotificationHistory: 1000,
-			MaxLogLinesPerSource:   200,
-			MaxIncidentAge:         30 * 24 * time.Hour,
+			MaxAuditEntries:           1000,
+			MaxNotificationHistory:    1000,
+			MaxLogLinesPerSource:      200,
+			MaxIncidentAge:            30 * 24 * time.Hour,
+			MaxStatusEventAge:         90 * 24 * time.Hour,
+			MaxStatusEventsPerSubject: 500,
 		},
 	}
 }
@@ -338,6 +347,12 @@ func (c Config) Validate() error {
 	if c.Polling.Interval < time.Second {
 		return errors.New("polling interval must be at least one second")
 	}
+	if c.Retention.MaxStatusEventAge <= 0 {
+		return errors.New("retention max_status_event_age must be positive")
+	}
+	if c.Retention.MaxStatusEventsPerSubject <= 0 {
+		return errors.New("retention max_status_events_per_subject must be positive")
+	}
 	if err := validateRoleVisibility(c.Visibility); err != nil {
 		return err
 	}
@@ -377,6 +392,9 @@ func (c Config) Validate() error {
 	if err := validateIntegrationBaseURL("unifi_base_url", c.Integrations.UniFiBaseURL); err != nil {
 		return err
 	}
+	if c.Integrations.ExpectedNASLinkMbps < 0 || c.Integrations.ExpectedNASLinkMbps > 100000 {
+		return fmt.Errorf("expected NAS link Mbps %d is invalid", c.Integrations.ExpectedNASLinkMbps)
+	}
 	switch c.LLM.Provider {
 	case "disabled", "openai", "anthropic":
 	default:
@@ -386,6 +404,12 @@ func (c Config) Validate() error {
 	case "", OpenAIAuthMethodAPIKey, OpenAIAuthMethodChatGPTBrowser, OpenAIAuthMethodChatGPTHeadless:
 	default:
 		return fmt.Errorf("openai auth method %q is invalid", c.LLM.OpenAIAuthMethod)
+	}
+	if c.LLM.AgentArmDuration <= 0 {
+		return errors.New("llm agent_arm_duration must be positive")
+	}
+	if c.LLM.AgentArmDuration > time.Hour {
+		return errors.New("llm agent_arm_duration must not exceed 1h")
 	}
 	for name, policy := range c.LLM.Policies {
 		if policy.MaxContextBytes <= 0 {
@@ -675,6 +699,14 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("UNIFI_SITE_ID"); v != "" {
 		cfg.Integrations.UniFiSiteID = v
 	}
+	if v := envValue("NOOBBOARD_UNIFI_NAS_CLIENT_HINT", "HSD_UNIFI_NAS_CLIENT_HINT"); v != "" {
+		cfg.Integrations.UniFiNASClientHint = v
+	}
+	if v := envValue("NOOBBOARD_EXPECTED_NAS_LINK_MBPS", "HSD_EXPECTED_NAS_LINK_MBPS"); v != "" {
+		if mbps, err := strconv.Atoi(v); err == nil {
+			cfg.Integrations.ExpectedNASLinkMbps = mbps
+		}
+	}
 	if v := envValue("NOOBBOARD_INTERNET_PROBE_URL", "HSD_INTERNET_PROBE_URL"); v != "" {
 		cfg.Integrations.InternetProbeURL = strings.TrimRight(v, "/")
 	}
@@ -686,6 +718,16 @@ func applyEnv(cfg *Config) {
 	}
 	if v := envValue("NOOBBOARD_NAS_PROBE_TARGET", "HSD_NAS_PROBE_TARGET"); v != "" {
 		cfg.Integrations.NASProbeTarget = strings.TrimRight(v, "/")
+	}
+	if v := envValue("NOOBBOARD_MAX_STATUS_EVENT_AGE", "HSD_MAX_STATUS_EVENT_AGE"); v != "" {
+		if duration, err := parseDurationValue(v); err == nil {
+			cfg.Retention.MaxStatusEventAge = duration
+		}
+	}
+	if v := envValue("NOOBBOARD_MAX_STATUS_EVENTS_PER_SUBJECT", "HSD_MAX_STATUS_EVENTS_PER_SUBJECT"); v != "" {
+		if count, err := strconv.Atoi(v); err == nil {
+			cfg.Retention.MaxStatusEventsPerSubject = count
+		}
 	}
 }
 
@@ -897,6 +939,12 @@ func applyConfigKey(cfg *Config, section, key, value string) {
 		cfg.Integrations.UniFiAPIKeyFile = value
 	case "integrations.unifi_site_id":
 		cfg.Integrations.UniFiSiteID = value
+	case "integrations.unifi_nas_client_hint":
+		cfg.Integrations.UniFiNASClientHint = value
+	case "integrations.expected_nas_link_mbps":
+		if mbps, err := strconv.Atoi(value); err == nil {
+			cfg.Integrations.ExpectedNASLinkMbps = mbps
+		}
 	case "integrations.internet_probe_url":
 		cfg.Integrations.InternetProbeURL = strings.TrimRight(value, "/")
 	case "integrations.dns_probe_host":
@@ -905,6 +953,14 @@ func applyConfigKey(cfg *Config, section, key, value string) {
 		cfg.Integrations.RouterProbeTarget = strings.TrimRight(value, "/")
 	case "integrations.nas_probe_target":
 		cfg.Integrations.NASProbeTarget = strings.TrimRight(value, "/")
+	case "retention.max_status_event_age":
+		if duration, err := parseDurationValue(value); err == nil {
+			cfg.Retention.MaxStatusEventAge = duration
+		}
+	case "retention.max_status_events_per_subject":
+		if count, err := strconv.Atoi(value); err == nil {
+			cfg.Retention.MaxStatusEventsPerSubject = count
+		}
 	}
 }
 
@@ -928,4 +984,26 @@ func parseBool(v string) bool {
 	default:
 		return false
 	}
+}
+
+func parseDurationValue(value string) (time.Duration, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, errors.New("duration is empty")
+	}
+	if strings.HasSuffix(strings.ToLower(value), "d") {
+		days, err := strconv.Atoi(strings.TrimSpace(value[:len(value)-1]))
+		if err != nil {
+			return 0, err
+		}
+		return time.Duration(days) * 24 * time.Hour, nil
+	}
+	if duration, err := time.ParseDuration(value); err == nil {
+		return duration, nil
+	}
+	nanos, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	return time.Duration(nanos), nil
 }

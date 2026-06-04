@@ -12,6 +12,8 @@ data/
 logs/
 state/
 .cache/
+history.jsonl
+history.jsonl.tmp
 
 # Build outputs
 bin/

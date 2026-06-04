@@ -66,6 +66,24 @@ func FilterSnapshotForRole(snapshot models.Snapshot, role models.Role, redactor 
 	snapshot.AdminSummary = ""
 	snapshot.AuditTail = nil
 	snapshot.LLMPolicies = nil
+	snapshot.Infrastructure.UnraidUptimeSeconds = 0
+	snapshot.Infrastructure.UnraidCPUBrand = ""
+	snapshot.Infrastructure.UnraidCPUCores = 0
+	snapshot.Infrastructure.UnraidCPUThreads = 0
+	snapshot.Infrastructure.UnraidMemoryTotalBytes = 0
+	snapshot.Infrastructure.UnraidMemoryUsedBytes = 0
+	snapshot.Infrastructure.UnraidMemoryUsedPct = 0
+	snapshot.Infrastructure.UnraidNotificationCount = 0
+	snapshot.Infrastructure.UnraidAlertCount = 0
+	snapshot.Infrastructure.UnraidWarningCount = 0
+	snapshot.Infrastructure.UnraidVMCount = 0
+	snapshot.Infrastructure.UnraidVMRunningCount = 0
+	snapshot.Infrastructure.UnraidVMStoppedCount = 0
+	snapshot.Infrastructure.UnraidVMNames = nil
+	snapshot.Infrastructure.UnraidShareCount = 0
+	snapshot.Infrastructure.UnraidShareNames = nil
+	snapshot.Infrastructure.DockerNetworkCount = 0
+	snapshot.Infrastructure.DockerNetworkNames = nil
 	return snapshot
 }
 

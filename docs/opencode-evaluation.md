@@ -1,7 +1,8 @@
 # OpenCode Evaluation Notes
 
-Checked against current OpenCode docs on 2026-06-01 and the `sst/opencode`
-source on 2026-06-03.
+Checked against current OpenCode docs on 2026-06-01, the `sst/opencode`
+source on 2026-06-03, and the `opencode-auto-review` package source on
+2026-06-04.
 
 Relevant ideas worth copying:
 
@@ -9,15 +10,18 @@ Relevant ideas worth copying:
 - Tool permissions: OpenCode exposes tools such as `webfetch` and `websearch` behind configurable permissions. If this dashboard later adds web access for ChatGPT-style incident research, it should be a separate tool with explicit admin enablement, audit logging, redaction before outbound requests, URL allow/deny controls, and no access to local secret files.
 - MCP extensibility: OpenCode supports MCP servers for external tools, but its own docs warn that MCP tools add context. For this app, MCP is a future extension point, not a default path for Unraid/UniFi diagnostics.
 - Web access split: copy the distinction between discovery and retrieval. A future implementation should separate search from fetching a specific URL, and the LLM policy should be able to enable one without the other.
-- Action guard from source: OpenCode's browser/headless OpenAI connector only handles credentials. Tool safety lives elsewhere: agent/session permission rules decide which tools are advertised, and tool implementations call the permission service again before side effects. NoobBoard copies that split by keeping ChatGPT browser auth as credential transport and putting live API tool access behind LLM policy rules.
+- Action guard from source: OpenCode's browser/headless OpenAI connector only handles credentials. Tool safety lives elsewhere: agent/session permission rules decide which tools are advertised, and tool implementations call the permission service again before side effects. NoobBoard copies that split by keeping ChatGPT browser auth as credential transport, putting live API tool access behind LLM policy rules, and showing a separate approval popup before any future automatic fix can run.
 - Codex request shape: OpenCode routes ChatGPT-account requests to `https://chatgpt.com/backend-api/codex/responses`, sends the ChatGPT account header plus `originator` and `session-id`, omits max output token overrides, sets `store: false`, streams Responses output, includes `reasoning.encrypted_content` for stateless Responses continuation, and strips stored response item ids unless storage is explicitly enabled.
 - Context overflow: OpenCode does not split one oversized request into model-call chunks. It detects overflow against the model context window, compacts/summarizes older session history, prunes old tool output when configured, and retries with a single smaller request. NoobBoard follows the same principle for compact diagnostics by shrinking the structured general-user status report before sending it.
 - Current NoobBoard implementation: admin diagnosis can opt into read-only live status tools (`noobboard_current_status`, `noobboard_server_status`, `noobboard_network_status`, `noobboard_app_status`). These tools refresh sanitized NoobBoard snapshots and do not expose shell, filesystem, raw API clients, credentials, Docker control, Unraid mutations, or UniFi configuration mutation. General-user policies never receive tools.
+- Auto-review package: `dzianisv/opencode-plugins/packages/auto-review` is sufficient as a workflow reference for NoobBoard's future reviewer model. It listens for completed non-trivial turns, skips aborted/child/review-loop sessions, deduplicates reviewed messages, creates a child `AUTO-REVIEW` session, and asks a different model family to return PASS/FAIL/UNKNOWN evidence. It is not sufficient as a direct implementation for NoobBoard repair actions because it reviews OpenCode session evidence; it does not validate infrastructure tool calls, enforce NoobBoard allowlists, audit device actions, rate-limit repairs, or perform admin approvals.
+- Auto-review model note: the package examples use `github-copilot/gpt-5.5` with `reasoning=xhigh`, and its auto-selection code prefers a different configured model family while ranking stronger model names. This is not evidence that Codex auto-review uses "5.4 Thinking".
 
 Security decision:
 
 - Do not give automatic incident diagnosis open web access by default. The app handles LAN infrastructure state, local API keys, logs, and redacted service names. Web access should be opt-in per policy and fail closed when redaction finds sensitive content.
 - Do not treat ChatGPT browser login as an authorization boundary for actions. It proves only that a credential exists; NoobBoard still enforces admin role, CSRF/same-origin on settings, policy allowlists, redaction, and hard tool-call limits.
+- Do not expose an auto-review or auto-action toggle as active until a non-read-only agent pathway exists. The settings UI may show the planned modes, and admin chat may show the approval popup, but server metadata must keep mutating tools unavailable and auto-review locked.
 
 References:
 
@@ -32,3 +36,4 @@ References:
 - `sst/opencode`: `packages/opencode/src/tool/registry.ts`
 - `sst/opencode`: `packages/opencode/src/tool/shell.ts`
 - `sst/opencode`: `packages/opencode/src/tool/edit.ts`
+- `dzianisv/opencode-plugins`: `packages/auto-review/auto-review.ts`

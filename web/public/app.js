@@ -23,7 +23,11 @@ const state = {
   userDrawerActiveSection: "settings",
   userDrawerLastFocus: null,
   userView: "status",
+  userDetailID: "",
+  userDetailSubject: "",
+  userDetailReturnFocus: null,
   openAIAuthDialog: null,
+  agentApprovalDialog: null,
   chatBusy: {
     diagnostic: false,
     user: false,
@@ -667,21 +671,33 @@ function setActiveTab(tabName) {
 
 function setCompactView(view) {
   if (hasAdminSurface()) return;
-  state.userView = view === "chat" ? "chat" : "status";
+  const nextView = ["chat", "app-detail", "infra-detail"].includes(view) ? view : "status";
+  state.userView = nextView;
   document.body.dataset.compactView = state.userView;
-  $("page-title").textContent = state.userView === "chat" ? "Ask what's wrong" : "Home status";
+  const titles = {
+    status: "Home status",
+    chat: "Ask what's wrong",
+    "app-detail": "App details",
+    "infra-detail": "Internet details",
+  };
+  $("page-title").textContent = titles[state.userView] || titles.status;
   const statusButton = $("user-status-open");
   const chatButton = $("user-chat-open");
+  const tabSelectedView = state.userView === "chat" ? "chat" : "status";
   if (statusButton) {
-    statusButton.classList.toggle("active", state.userView === "status");
-    statusButton.setAttribute("aria-selected", String(state.userView === "status"));
+    statusButton.classList.toggle("active", tabSelectedView === "status");
+    statusButton.setAttribute("aria-selected", String(tabSelectedView === "status"));
   }
   if (chatButton) {
-    chatButton.classList.toggle("active", state.userView === "chat");
-    chatButton.setAttribute("aria-selected", String(state.userView === "chat"));
+    chatButton.classList.toggle("active", tabSelectedView === "chat");
+    chatButton.setAttribute("aria-selected", String(tabSelectedView === "chat"));
   }
   const chatPanel = document.querySelector(".panel.user-chat");
   if (chatPanel) chatPanel.hidden = state.userView !== "chat";
+  const appDetail = $("user-app-detail");
+  const infraDetail = $("user-infra-detail");
+  if (appDetail) appDetail.hidden = state.userView !== "app-detail";
+  if (infraDetail) infraDetail.hidden = state.userView !== "infra-detail";
   document.querySelectorAll("[data-user-status-view]").forEach((element) => {
     element.hidden = state.userView !== "status";
   });
@@ -700,7 +716,7 @@ async function refresh() {
     button.setAttribute("aria-busy", "true");
   }
   try {
-    const snapshot = await api("/api/status/summary");
+    const snapshot = await api("/api/status/refresh", { method: "POST" });
     state.snapshot = snapshot;
     renderSourcePill(snapshot);
     renderSnapshot(snapshot);
@@ -824,10 +840,10 @@ function renderUserHome(snapshot) {
     userStatusCard("Overall", snapshot.overall_status || "unknown", compactOverallSummary(snapshot)),
   ];
   if (snapshot.visibility?.show_nas_status_to_users !== false) {
-    statusCards.push(userStatusCard("Server", serverRollupStatus(infra), compactServerSummary(infra)));
+    statusCards.push(userStatusCard("Server", serverRollupStatus(infra), compactServerSummary(infra), { subject: "nas", detailLabel: "Open server details" }));
   }
   if (snapshot.visibility?.show_wan_status_to_users !== false) {
-    statusCards.push(userStatusCard("Router", routerRollupStatus(infra), compactRouterSummary(infra)));
+    statusCards.push(userStatusCard("Router", routerRollupStatus(infra), compactRouterSummary(infra), { subject: "internet", detailLabel: "Open internet details" }));
   }
   $("user-status-grid").replaceChildren(...statusCards);
   $("user-app-count").textContent = `${apps.length} app${apps.length === 1 ? "" : "s"}`;
@@ -837,6 +853,11 @@ function renderUserHome(snapshot) {
     return;
   }
   $("user-apps").replaceChildren(...apps.map(renderUserAppCard));
+  if (state.userView === "app-detail" && state.userDetailID) {
+    loadAppDetail(state.userDetailID, { focus: false });
+  } else if (state.userView === "infra-detail" && state.userDetailSubject) {
+    loadInfraDetail(state.userDetailSubject, { focus: false });
+  }
   if (isUserMenuOpen()) renderUserDrawer();
 }
 
@@ -1132,6 +1153,7 @@ function diagnosticsAvailable(snapshot) {
 }
 
 function diagnosticsUnavailableMessage(snapshot) {
+  if (!hasAdminSurface()) return "Status chat is not set up yet.";
   const provider = snapshot.diagnostics_provider || "disabled";
   if (provider === "openai") return "Status chat requires OPENAI_API_KEY.";
   if (provider === "anthropic") return "Status chat requires ANTHROPIC_API_KEY.";
@@ -1188,13 +1210,22 @@ function submitOnEnter(event, handler) {
   handler();
 }
 
-function userStatusCard(label, value, summary) {
+function userStatusCard(label, value, summary, options = {}) {
   const status = normalizeStatus(value);
-  return node("article", {
-    class: `user-status-card status-row ${status}`,
+  const clickable = !!options.subject;
+  const attrs = {
+    class: `user-status-card status-row ${status}${clickable ? " has-detail" : ""}`,
     "data-status-kind": statusIconClass(label),
     "aria-label": `${label}: ${value}. ${summary || ""}`,
-  },
+  };
+  if (clickable) {
+    attrs.role = "button";
+    attrs.tabindex = "0";
+    attrs["aria-label"] = options.detailLabel || attrs["aria-label"];
+    attrs.onclick = (event) => openInfraDetail(options.subject, event.currentTarget);
+    attrs.onkeydown = (event) => activateCardOnKey(event, () => openInfraDetail(options.subject, event.currentTarget));
+  }
+  return node("article", attrs,
     statusArtwork(label),
     node("div", { class: "status-copy" },
       node("span", { class: "status-title-line" },
@@ -1203,13 +1234,21 @@ function userStatusCard(label, value, summary) {
       ),
       node("p", { class: "status-note", text: summary || "" }),
     ),
+    clickable ? node("span", { class: "detail-chevron", "aria-hidden": "true", text: ">" }) : null,
   );
 }
 
 function renderUserAppCard(app) {
   const status = normalizeStatus(app.current_status);
   const statusText = plainAppStatus(app);
-  return node("article", { class: `user-app-card app-row ${status}`, "aria-label": `${appDisplayName(app)}: ${statusText}` },
+  return node("article", {
+    class: `user-app-card app-row ${status}`,
+    role: "button",
+    tabindex: "0",
+    "aria-label": `${appDisplayName(app)}: ${statusText}. Open details.`,
+    onclick: (event) => openAppDetail(app.app_id, event.currentTarget),
+    onkeydown: (event) => activateCardOnKey(event, () => openAppDetail(app.app_id, event.currentTarget)),
+  },
     renderAppLogo(app),
     node("div", { class: "user-app-main" },
       node("div", { class: "app-title-line" },
@@ -1218,7 +1257,222 @@ function renderUserAppCard(app) {
       ),
       node("p", { class: "muted", text: plainAppSummary(app) }),
     ),
+    node("span", { class: "detail-chevron", "aria-hidden": "true", text: ">" }),
   );
+}
+
+function activateCardOnKey(event, action) {
+  if (event.key !== "Enter" && event.key !== " ") return;
+  event.preventDefault();
+  action();
+}
+
+function openAppDetail(appID, returnFocus = null) {
+  const id = String(appID || "").trim();
+  if (!id) return;
+  state.userDetailID = id;
+  state.userDetailSubject = "";
+  state.userDetailReturnFocus = returnFocus instanceof HTMLElement ? returnFocus : document.activeElement;
+  setCompactView("app-detail");
+  loadAppDetail(id, { focus: true });
+}
+
+async function loadAppDetail(appID, options = {}) {
+  const body = $("user-app-detail-body");
+  if (!body) return;
+  body.replaceChildren(node("div", { class: "detail-empty", text: "Loading details..." }));
+  try {
+    const encoded = encodeURIComponent(appID);
+    const [app, history] = await Promise.all([
+      api(`/api/apps/${encoded}`),
+      api(`/api/apps/${encoded}/history?window=7d&limit=50`),
+    ]);
+    body.replaceChildren(renderAppDetail(app, history));
+    $("page-title").textContent = appDisplayName(app);
+    if (options.focus) $("user-app-detail-back")?.focus({ preventScroll: true });
+  } catch (error) {
+    body.replaceChildren(
+      node("div", { class: "detail-empty" },
+        node("strong", { text: "Could not load details." }),
+        node("p", { text: "Go back and try again." }),
+      ),
+    );
+    showNotice(error.message, "error");
+  }
+}
+
+function openInfraDetail(subject, returnFocus = null) {
+  const id = String(subject || "").trim().toLowerCase();
+  if (!id) return;
+  state.userDetailSubject = id;
+  state.userDetailID = "";
+  state.userDetailReturnFocus = returnFocus instanceof HTMLElement ? returnFocus : document.activeElement;
+  setCompactView("infra-detail");
+  loadInfraDetail(id, { focus: true });
+}
+
+async function loadInfraDetail(subject, options = {}) {
+  const body = $("user-infra-detail-body");
+  if (!body) return;
+  body.replaceChildren(node("div", { class: "detail-empty", text: "Loading details..." }));
+  try {
+    const history = await api(`/api/infrastructure/history?subject=${encodeURIComponent(subject)}&window=7d&limit=50`);
+    body.replaceChildren(renderInfraDetail(history));
+    $("page-title").textContent = plainInfraSubjectName(subject);
+    if (options.focus) $("user-infra-detail-back")?.focus({ preventScroll: true });
+  } catch (error) {
+    body.replaceChildren(
+      node("div", { class: "detail-empty" },
+        node("strong", { text: "Could not load details." }),
+        node("p", { text: "Go back and try again." }),
+      ),
+    );
+    showNotice(error.message, "error");
+  }
+}
+
+function closeCompactDetail() {
+  const returnFocus = state.userDetailReturnFocus;
+  state.userDetailID = "";
+  state.userDetailSubject = "";
+  state.userDetailReturnFocus = null;
+  setCompactView("status");
+  if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
+}
+
+function renderAppDetail(app, history) {
+  const status = normalizeStatus(app.current_status || history?.current);
+  return node("div", { class: "detail-stack" },
+    node("header", { class: "detail-header" },
+      renderAppLogo(app),
+      node("div", { class: "detail-title" },
+        node("h2", { text: appDisplayName(app) }),
+        statusIndicator(plainAppStatus(app), status, "compact-app-status"),
+      ),
+    ),
+    node("section", { class: "detail-summary" },
+      detailMetric("Right now", plainAppSummary(app)),
+      detailMetric("Last working", relativeTime(history?.last_seen_online)),
+      detailMetric("Last 7 days", uptimeText(history?.uptime_pct_7d)),
+    ),
+    node("section", { class: "detail-history" },
+      node("h3", { text: "Recent changes" }),
+      renderHistoryTimeline(history, "app"),
+    ),
+  );
+}
+
+function renderInfraDetail(history) {
+  const status = normalizeStatus(history?.current);
+  const subject = String(history?.subject_id || "").toLowerCase();
+  const label = plainInfraSubjectName(subject);
+  return node("div", { class: "detail-stack" },
+    node("header", { class: "detail-header" },
+      statusArtwork(subject === "nas" ? "Server" : "Router"),
+      node("div", { class: "detail-title" },
+        node("h2", { text: label }),
+        statusIndicator(status === "online" ? "Working" : status === "offline" ? "Not working" : status === "degraded" ? "Problem" : "Unknown", status, "compact-app-status"),
+      ),
+    ),
+    node("section", { class: "detail-summary" },
+      detailMetric("Right now", infraStatusSummary(status)),
+      detailMetric("Last 24 hours", uptimeText(history?.uptime_pct_24h)),
+      detailMetric("Last 7 days", uptimeText(history?.uptime_pct_7d)),
+    ),
+    node("section", { class: "detail-history" },
+      node("h3", { text: "Recent changes" }),
+      renderHistoryTimeline(history, subject || "internet"),
+    ),
+  );
+}
+
+function detailMetric(label, value) {
+  return node("div", { class: "detail-metric" },
+    node("span", { text: label }),
+    node("strong", { text: value || "Not enough history yet." }),
+  );
+}
+
+function renderHistoryTimeline(history, kind) {
+  const events = Array.isArray(history?.events) ? history.events : [];
+  if (!events.length) return node("div", { class: "detail-empty", text: "No changes recorded yet." });
+  return node("ol", { class: "history-list" },
+    events.map((event) => {
+      const status = normalizeStatus(event.to);
+      return node("li", { class: `history-event ${status}` },
+        node("span", { class: "history-dot", "aria-hidden": "true" }),
+        node("span", { class: "history-copy" },
+          node("strong", { text: historyEventText(event, kind) }),
+          node("small", { text: relativeTime(event.at) }),
+        ),
+      );
+    }),
+  );
+}
+
+function historyEventText(event, kind) {
+  const status = normalizeStatus(event?.to);
+  if (kind === "nas") {
+    if (status === "online") return "Server came back";
+    if (status === "offline") return "Server stopped responding";
+    if (status === "degraded") return "Server had a problem";
+    return "Server status changed";
+  }
+  if (kind === "internet") {
+    if (status === "online") return "Internet came back";
+    if (status === "offline") return "Internet stopped working";
+    if (status === "degraded") return "Internet had a problem";
+    return "Internet status changed";
+  }
+  if (status === "online") return "Came back";
+  if (status === "offline") return "Stopped working";
+  if (status === "degraded") return "Had a problem";
+  return "Status changed";
+}
+
+function plainInfraSubjectName(subject) {
+  if (subject === "internet") return "Internet details";
+  if (subject === "nas") return "Server details";
+  return "Connection details";
+}
+
+function infraStatusSummary(status) {
+  if (status === "online") return "Working normally.";
+  if (status === "offline") return "Not responding.";
+  if (status === "degraded") return "Having a problem.";
+  return "Status unknown.";
+}
+
+function uptimeText(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "Not enough history yet.";
+  return `Working ${Math.max(0, Math.min(100, number)).toFixed(number >= 99 ? 1 : 0)}% of the time.`;
+}
+
+function relativeTime(value) {
+  if (!value) return "Not recorded yet.";
+  const date = new Date(value);
+  const then = date.getTime();
+  if (Number.isNaN(then)) return "Not recorded yet.";
+  const diffMs = Date.now() - then;
+  const absMs = Math.abs(diffMs);
+  const minute = 60 * 1000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+  if (absMs < minute) return "Just now";
+  if (absMs < hour) {
+    const minutes = Math.max(1, Math.round(absMs / minute));
+    return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+  }
+  if (absMs < day) {
+    const hours = Math.round(absMs / hour);
+    return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  }
+  if (absMs < 7 * day) {
+    const days = Math.round(absMs / day);
+    return `${days} day${days === 1 ? "" : "s"} ago`;
+  }
+  return date.toLocaleDateString();
 }
 
 function plainAppStatus(app) {
@@ -1262,12 +1516,10 @@ function compactOverallSummary(snapshot) {
 
 function compactServerSummary(infra) {
   if (!infra.nas_reachable) return "Not reachable from this dashboard.";
-  if (!infra.unraid_api_reachable) return "Reachable; Unraid API unavailable.";
-  if (infra.unraid_array_state && infra.unraid_array_healthy === false) return `Array ${infra.unraid_array_state}; storage needs attention.`;
-  if (infra.docker_service_available === false) return "Reachable; Docker unavailable.";
-  const array = infra.unraid_array_state ? `Array ${infra.unraid_array_state}` : "Array status unknown";
-  const docker = infra.docker_service_available ? "Docker running" : "Docker status unknown";
-  return `${array}; ${docker}.`;
+  if (!infra.unraid_api_reachable) return "Reachable, but status checks are unavailable.";
+  if (infra.unraid_array_state && infra.unraid_array_healthy === false) return "Needs attention.";
+  if (infra.docker_service_available === false) return "Apps are unavailable.";
+  return "Server checks look normal.";
 }
 
 function compactRouterSummary(infra) {
@@ -1275,13 +1527,13 @@ function compactRouterSummary(infra) {
   const internetProbeKnown = hasProbeData(infra, "internet");
   const dnsProbeKnown = hasProbeData(infra, "dns");
   const unifiKnown = hasCollectorData(infra, "unifi");
-  if (!routerProbeKnown && !internetProbeKnown && !dnsProbeKnown && !unifiKnown) return "No live network probe data.";
-  if (routerProbeKnown && !infra.router_reachable) return "Gateway unreachable from this dashboard.";
-  if (internetProbeKnown && !infra.internet_reachable) return "Local gateway reachable; internet check failed.";
-  if (dnsProbeKnown && !infra.dns_ok) return "DNS check failed.";
-  if (unifiKnown && !infra.unifi_gateway_reachable) return "UniFi gateway unavailable.";
-  if (unifiKnown && infra.unifi_wan_up === false) return "UniFi reports WAN down.";
-  return "Internet, DNS, and UniFi responding.";
+  if (!routerProbeKnown && !internetProbeKnown && !dnsProbeKnown && !unifiKnown) return "No live connection data.";
+  if (routerProbeKnown && !infra.router_reachable) return "Home connection device is not reachable.";
+  if (internetProbeKnown && !infra.internet_reachable) return "Home connection is reachable; internet check failed.";
+  if (dnsProbeKnown && !infra.dns_ok) return "Name lookup check failed.";
+  if (unifiKnown && !infra.unifi_gateway_reachable) return "Network status is unavailable.";
+  if (unifiKnown && infra.unifi_wan_up === false) return "Internet link is down.";
+  return "Internet checks look normal.";
 }
 
 function renderOverviewCards(snapshot) {
@@ -1671,8 +1923,9 @@ function appControlButton(app, action, label, disabled) {
     disabled,
     onclick: (event) => {
       event.preventDefault();
-      if (["restart", "stop"].includes(action) && !confirm(`${label} ${app.display_name || app.app_id}?`)) return;
-      runAppAction(app, action, event.currentTarget);
+      const requiresConfirmation = ["restart", "stop"].includes(action);
+      if (requiresConfirmation && !confirm(`${label} ${app.display_name || app.app_id}?`)) return;
+      runAppAction(app, action, event.currentTarget, requiresConfirmation);
     },
   }, controlIcon(action));
 }
@@ -1749,7 +2002,7 @@ function statusIconClass(label) {
   return "status-icon-overall";
 }
 
-async function runAppAction(app, action, button) {
+async function runAppAction(app, action, button, confirmed = false) {
   const appID = app.app_id || app.container_name || app.display_name;
   if (!appID) {
     showNotice("App id is required.", "error");
@@ -1758,9 +2011,14 @@ async function runAppAction(app, action, button) {
   const previous = button?.disabled;
   if (button) button.disabled = true;
   try {
+    const payload = { action };
+    if (confirmed) {
+      payload.confirmed = true;
+      payload.confirm_app_id = app.app_id || appID;
+    }
     await api(`/api/admin/apps/${encodeURIComponent(appID)}/action`, {
       method: "POST",
-      body: JSON.stringify({ action }),
+      body: JSON.stringify(payload),
     });
     showNotice(`${action} requested for ${app.display_name || appID}.`);
     await refresh();
@@ -1909,7 +2167,9 @@ async function runDiagnosis(question, output, options = {}) {
         node("p", { text: result.diagnosis || result.general_user_summary || "No diagnosis returned." }),
         result.evidence?.length ? node("p", { class: "muted", text: `Evidence: ${result.evidence.join("; ")}` }) : null,
         result.admin_message ? node("p", { class: "muted", text: result.admin_message }) : null,
+        result.agent_plan ? renderAgentPlanPrompt(result.agent_plan) : null,
       );
+      maybeOpenAgentApprovalDialog(result.agent_plan);
     } else {
       output.replaceChildren(
         node("strong", { text: "Answer" }),
@@ -1925,6 +2185,267 @@ async function runDiagnosis(question, output, options = {}) {
   } finally {
     if (options.busyKey) state.chatBusy[options.busyKey] = false;
     setChatControlsBusy(options.input, options.button, false);
+  }
+}
+
+function renderAgentPlanPrompt(plan) {
+  const requiresApproval = !!plan.requires_admin_approval;
+  const statusText = plan.can_execute ? "Approval required" : "Fixes locked";
+  const targetText = agentPlanTargetText(plan);
+  return node("section", { class: "agent-plan-prompt" },
+    node("div", { class: "agent-plan-head" },
+      node("span", {},
+        node("strong", { text: plan.title || "Agent fix plan" }),
+        node("small", { text: plan.summary || "Review the model recommendation before allowing any action." }),
+        targetText ? node("small", { text: targetText }) : null,
+      ),
+      node("span", { class: `settings-state-pill ${plan.can_execute ? "state-warn" : "state-muted"}`, text: statusText }),
+    ),
+    requiresApproval ? node("div", { class: "agent-plan-actions" },
+      node("button", {
+        type: "button",
+        class: "command",
+        "data-glyph": "?",
+        onclick: () => openAgentApprovalDialog(plan),
+        text: "Open approval",
+      }),
+    ) : null,
+  );
+}
+
+function agentPlanTargetText(plan) {
+  const target = plan?.target || {};
+  if (target.resolved && target.label) return `Target: ${target.label}`;
+  if (target.resolved && target.id) return `Target: ${target.id}`;
+  if (target.reason && target.kind === "app") return `Target not resolved: ${target.reason}`;
+  return "";
+}
+
+function normalizeAgentApprovalOptions(plan) {
+  const rawOptions = Array.isArray(plan?.options) ? plan.options : [];
+  const options = [];
+  const seen = new Set();
+  for (const raw of rawOptions) {
+    const id = String(raw?.id || "").trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    options.push({
+      id,
+      label: String(raw?.label || id).trim(),
+      description: String(raw?.description || "").trim(),
+      enabled: raw?.enabled !== false,
+      selected: !!raw?.selected,
+      reason: String(raw?.reason || "").trim(),
+    });
+  }
+  if (options.length) return options;
+  return [
+    {
+      id: "deny",
+      label: "Do not allow",
+      description: "Keep the diagnosis and do not permit an automatic fix.",
+      enabled: true,
+      selected: true,
+      reason: "",
+    },
+    {
+      id: "allow_once",
+      label: "Allow fix",
+      description: "Permit this single fix attempt.",
+      enabled: !!plan?.can_execute,
+      selected: false,
+      reason: plan?.can_execute ? "" : "Locked until repair tools are implemented.",
+    },
+  ];
+}
+
+function initialAgentApprovalChoice(options) {
+  return (options.find((option) => option.enabled && option.selected) || options.find((option) => option.enabled) || options[0] || {}).id || "deny";
+}
+
+function maybeOpenAgentApprovalDialog(plan) {
+  if (!plan || !plan.requires_admin_approval) return;
+  window.setTimeout(() => {
+    if (state.agentApprovalDialog) return;
+    openAgentApprovalDialog(plan);
+  }, 0);
+}
+
+function openAgentApprovalDialog(plan) {
+  closeAgentApprovalDialog({ returnFocus: false });
+  const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const approvalOptions = normalizeAgentApprovalOptions(plan);
+  let selectedChoice = initialAgentApprovalChoice(approvalOptions);
+  const optionRows = [];
+  const closeButton = node("button", {
+    type: "button",
+    class: "command ghost",
+    "data-glyph": "x",
+    "aria-label": "Close fix approval dialog",
+    onclick: () => closeAgentApprovalDialog(),
+    text: "Close",
+  });
+  const submitButton = node("button", {
+    type: "button",
+    class: "primary command",
+    "data-glyph": "v",
+    onclick: () => submitAgentApproval(plan, selectedChoice, submitButton),
+    text: "Submit choice",
+  });
+  const statusNode = node("p", {
+    class: "openai-auth-status",
+    "aria-live": "polite",
+    "data-tone": plan.can_execute ? "info" : "bad",
+    text: plan.can_execute ? "Approval is required before any fix runs." : "Automatic fixes are locked until repair tools are implemented.",
+  });
+  const updateSelection = () => {
+    const selectedOption = approvalOptions.find((option) => option.id === selectedChoice);
+    const enabled = !!selectedOption?.enabled;
+    submitButton.disabled = !enabled;
+    submitButton.textContent = selectedChoice === "deny" ? "Do not allow" : selectedOption?.label || "Submit choice";
+    for (const item of optionRows) {
+      item.row.classList.toggle("selected", item.option.id === selectedChoice);
+    }
+    if (selectedOption?.reason) {
+      statusNode.dataset.tone = "bad";
+      statusNode.textContent = selectedOption.reason;
+    } else if (selectedChoice === "deny") {
+      statusNode.dataset.tone = "info";
+      statusNode.textContent = "No automatic fix will run.";
+    } else {
+      statusNode.dataset.tone = "info";
+      statusNode.textContent = "Approval is required before any fix runs.";
+    }
+  };
+  const optionNodes = approvalOptions.map((option) => {
+    const input = node("input", {
+      type: "radio",
+      name: "agent-approval-choice",
+      value: option.id,
+      checked: option.id === selectedChoice,
+      disabled: !option.enabled,
+      onchange: () => {
+        selectedChoice = option.id;
+        updateSelection();
+      },
+    });
+    const row = node("label", { class: `agent-approval-option${option.enabled ? "" : " disabled"}${option.id === selectedChoice ? " selected" : ""}` },
+      input,
+      node("span", { class: "agent-approval-option-text" },
+        node("strong", { text: option.label || option.id }),
+        option.description ? node("small", { text: option.description }) : null,
+        option.reason ? node("small", { class: "agent-approval-option-reason", text: option.reason }) : null,
+      ),
+    );
+    optionRows.push({ option, row, input });
+    return row;
+  });
+  const dialog = node("section", {
+    class: "openai-auth-dialog agent-approval-dialog",
+    role: "dialog",
+    "aria-modal": "true",
+    "aria-labelledby": "agent-approval-title",
+  },
+    node("header", { class: "openai-auth-head" },
+      node("div", { class: "openai-auth-title-group" },
+        node("span", { class: "openai-auth-mark", "aria-hidden": "true", text: "AI" }),
+        node("div", {},
+          node("p", { class: "eyebrow", text: "Agent approval" }),
+          node("h2", { id: "agent-approval-title", text: "Allow automatic fix?" }),
+        ),
+      ),
+      closeButton,
+    ),
+    node("div", { class: "openai-auth-content agent-approval-content" },
+      node("p", { class: "openai-auth-copy", text: plan.summary || "The model suggested a fix. Approve or deny before allowing any automatic action." }),
+      node("div", { class: "agent-approval-request" },
+        node("span", { class: "openai-auth-label", text: "Requested fix" }),
+        node("strong", { text: plan.title || plan.recommended_action_id || "Unknown action" }),
+        agentPlanTargetText(plan) ? node("small", { text: agentPlanTargetText(plan) }) : null,
+      ),
+      node("fieldset", { class: "agent-approval-options" },
+        node("legend", { class: "openai-auth-label", text: "Approval choice" }),
+        optionNodes,
+      ),
+      node("div", { class: "openai-auth-actions" },
+        submitButton,
+        node("button", { type: "button", class: "command", "data-glyph": "x", onclick: () => closeAgentApprovalDialog(), text: "Close" }),
+      ),
+    ),
+    statusNode,
+  );
+  const backdrop = node("div", { class: "openai-auth-backdrop agent-approval-backdrop" }, dialog);
+  backdrop.addEventListener("click", (event) => {
+    if (event.target === backdrop) closeAgentApprovalDialog();
+  });
+  backdrop.addEventListener("keydown", handleAgentApprovalDialogKeydown);
+  document.body.append(backdrop);
+  document.body.classList.add("agent-approval-open");
+  state.agentApprovalDialog = { backdrop, dialog, previousFocus };
+  updateSelection();
+  const selectedInput = optionRows.find((item) => item.option.id === selectedChoice && !item.input.disabled)?.input;
+  (selectedInput || closeButton).focus({ preventScroll: true });
+}
+
+async function submitAgentApproval(plan, choice, button) {
+  const selectedChoice = String(choice || "deny").trim();
+  const originalText = button?.textContent || "";
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Recording";
+  }
+  try {
+    await api("/api/admin/agent/approval", {
+      method: "POST",
+      body: JSON.stringify({
+        approval_token: plan.approval_token || "",
+        choice: selectedChoice,
+      }),
+    });
+    showNotice(selectedChoice === "deny" ? "Automatic fix was not allowed." : "Approval recorded.");
+    closeAgentApprovalDialog();
+  } catch (error) {
+    showNotice(error.message, "error");
+  } finally {
+    if (button?.isConnected) {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+  }
+}
+
+function closeAgentApprovalDialog(options = {}) {
+  const current = state.agentApprovalDialog;
+  if (!current) return;
+  current.backdrop.remove();
+  document.body.classList.remove("agent-approval-open");
+  state.agentApprovalDialog = null;
+  if (options.returnFocus !== false && current.previousFocus?.isConnected) {
+    current.previousFocus.focus({ preventScroll: true });
+  }
+}
+
+function handleAgentApprovalDialogKeydown(event) {
+  const current = state.agentApprovalDialog;
+  if (!current) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeAgentApprovalDialog();
+    return;
+  }
+  if (event.key !== "Tab") return;
+  const focusable = openAIAuthDialogFocusableElements(current.dialog);
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+    return;
+  }
+  if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
   }
 }
 
@@ -2780,6 +3301,8 @@ function renderLLMSettings(item, data) {
   const openAIModel = settingTextField("OpenAI model", settings.openai_model || "gpt-5");
   const anthropicModel = settingTextField("Anthropic model", settings.anthropic_model || "claude-sonnet-4-5");
   const timeout = durationSecondsField("Timeout", settings.timeout || 45000000000);
+  const agentControlEnabled = settingToggle("Enable action approval gate", !!settings.agent_control_enabled);
+  const agentArmDuration = durationSecondsField("Arm window", settings.agent_arm_duration || settings.agent_readiness?.agent_arm_duration || 600000000000);
   const openAIKey = settingTextField("OpenAI API key", "", {
     type: "password",
     autocomplete: "new-password",
@@ -2839,6 +3362,9 @@ function renderLLMSettings(item, data) {
     ),
     openAISection,
     anthropicSection,
+    renderLLMAgentReadiness(settings.agent_readiness || {}, {
+      controls: [agentControlEnabled.element, agentArmDuration.element],
+    }),
     node("section", { class: "settings-subsection" },
       node("h4", { text: "Who can ask" }),
       node("div", { class: "settings-policy-list" }, policyEditors.map((editor) => editor.element)),
@@ -2857,6 +3383,8 @@ function renderLLMSettings(item, data) {
       openai_model: openAIModel.input.value.trim(),
       anthropic_model: anthropicModel.input.value.trim(),
       timeout: secondsToDuration(timeout.input.value),
+      agent_control_enabled: agentControlEnabled.input.checked,
+      agent_arm_duration: secondsToDuration(agentArmDuration.input.value),
       clear_openai_api_key: clearOpenAI.input.checked,
       clear_chatgpt_auth: clearChatGPT.input.checked,
       clear_anthropic_api_key: clearAnthropic.input.checked,
@@ -2867,6 +3395,126 @@ function renderLLMSettings(item, data) {
     for (const editor of policyEditors) payload.policies[editor.name] = editor.value();
     return saveSettingsPayload(item.title, item.path, payload, status);
   });
+}
+
+function renderLLMAgentReadiness(readiness, options = {}) {
+  const modes = readiness.review_modes || [];
+  const tools = readiness.read_only_tools || [];
+  const activeText = readiness.admin_tools_enabled
+    ? `On, up to ${readiness.admin_tool_call_limit || 0} calls`
+    : "Off";
+  const readOnlyNames = tools.map((tool) => tool.label).filter(Boolean).join(", ");
+  const autoReview = modes.find((mode) => mode.id === "auto_review") || {};
+  const reference = readiness.opencode_auto_review || {};
+  const controlEnabled = !!readiness.agent_control_enabled;
+  const armed = !!readiness.agent_armed;
+  const armSeconds = durationToSeconds(readiness.agent_arm_duration) || 600;
+  const armAction = node("button", {
+    type: "button",
+    class: `command ${armed ? "ghost" : "primary"}`,
+    "data-glyph": armed ? "x" : "v",
+    disabled: !controlEnabled,
+    onclick: () => setAgentArm(!armed, armSeconds, armAction),
+    text: armed ? "Disarm" : "Arm",
+  });
+  return node("section", { class: "settings-subsection agent-readiness" },
+    node("div", { class: "settings-section-title-row" },
+      node("h4", { text: "Agent approval" }),
+      settingsStatePill(readiness.mutating_tools_available ? "available" : "locked", readiness.mutating_tools_available ? "Actions available" : "Actions locked"),
+    ),
+    options.controls?.length ? node("div", { class: "settings-field-grid" }, options.controls) : null,
+    node("div", { class: "settings-status-list" },
+      settingsStatusRow("Read-only live tools", activeText, readiness.admin_tools_enabled ? "available" : "locked", readOnlyNames || "No read-only tools are registered."),
+      settingsStatusRow("Action arm", agentArmStatusText(readiness), armed ? "armed" : controlEnabled ? "planned" : "locked", agentArmDetailText(readiness), armAction),
+      settingsStatusRow("Automatic fixes", readiness.mutating_tools_available ? "Available" : "Locked", readiness.mutating_tools_available ? "available" : "locked", "Chat cannot start, stop, restart, or change infrastructure yet."),
+      settingsStatusRow("Auto-review", autoReview.enabled ? "Available" : agentModeStatusText(autoReview.status), autoReview.status || "locked", reference.sufficient_reference ? "A separate reviewer model is a future guard; user approvals still use the normal popup." : "The reviewer-model reference is documented, but execution remains locked."),
+    ),
+    node("p", { class: "muted agent-reference-note", text: reference.design_finding || "Future repair actions require schema validation, audit policy, and explicit approval." }),
+  );
+}
+
+function agentArmStatusText(readiness) {
+  if (readiness.agent_armed) return "Armed";
+  return readiness.agent_control_enabled ? "Disarmed" : "Off";
+}
+
+function agentArmDetailText(readiness) {
+  if (!readiness.agent_control_enabled) return "Enable the action approval gate and save before this session can be armed.";
+  if (readiness.agent_armed && readiness.agent_armed_until) return `This admin session is armed until ${timeOnly(readiness.agent_armed_until)}.`;
+  return "Arm only when you are ready to approve a specific automatic fix.";
+}
+
+function timeOnly(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "the configured expiry";
+  return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+async function setAgentArm(armed, durationSeconds, button) {
+  const originalText = button?.textContent || "";
+  if (button) {
+    button.disabled = true;
+    button.textContent = armed ? "Arming" : "Disarming";
+  }
+  try {
+    await api("/api/admin/agent/arm", {
+      method: "POST",
+      body: JSON.stringify({ armed: !!armed, duration_seconds: durationSeconds || 0 }),
+    });
+    showNotice(armed ? "Agent approval armed for this admin session." : "Agent approval disarmed.");
+    await loadSettings();
+  } catch (error) {
+    showNotice(error.message, "error");
+  } finally {
+    if (button?.isConnected) {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+  }
+}
+
+function settingsStatusRow(label, value, status, detail, action = null) {
+  return node("div", { class: "settings-status-row" },
+    node("span", { class: "settings-status-main" },
+      node("strong", { text: label }),
+      detail ? node("small", { text: detail }) : null,
+    ),
+    action ? node("span", { class: "settings-status-side" }, settingsStatePill(status, value), action) : settingsStatePill(status, value),
+  );
+}
+
+function settingsStatePill(status, text) {
+  return node("span", { class: `settings-state-pill ${settingsStateClass(status)}`, text });
+}
+
+function settingsStateClass(status) {
+  switch (String(status || "").toLowerCase()) {
+    case "available":
+      return "state-ok";
+    case "planned":
+    case "armed":
+      return "state-warn";
+    case "blocked":
+    case "locked":
+      return "state-muted";
+    default:
+      return "state-muted";
+  }
+}
+
+function agentModeStatusText(status) {
+  switch (String(status || "").toLowerCase()) {
+    case "available":
+      return "Available";
+    case "planned":
+      return "Planned";
+    case "armed":
+      return "Armed";
+    case "blocked":
+      return "Locked";
+    default:
+      return "Off";
+  }
 }
 
 function settingChoice(name, value, title, description, checked, action = null) {
@@ -3029,6 +3677,8 @@ function renderIntegrationSettings(item, data) {
   const unifiKeyFile = settingTextField("UniFi key file", settings.unifi_api_key_file || "", { placeholder: "C:\\path\\to\\unifi.key" });
   const unifiSite = settingTextField("UniFi site ID", settings.unifi_site_id || "default");
   const unifiTLS = settingToggle("Allow self-signed UniFi TLS", settings.unifi_insecure_tls !== false);
+  const nasClientHint = settingTextField("NAS client hint", settings.unifi_nas_client_hint || "", { placeholder: "IP, hostname, MAC, or UniFi client name" });
+  const expectedNASLink = settingNumberField("Expected NAS link Mbps", settings.expected_nas_link_mbps || 0, { min: 0, max: 100000, step: 1, inputmode: "numeric" });
   const internetProbe = settingTextField("Internet probe URL", settings.internet_probe_url || "", { inputmode: "url" });
   const dnsProbe = settingTextField("DNS probe host", settings.dns_probe_host || "");
   const routerProbe = settingTextField("Router probe target", settings.router_probe_target || "", { inputmode: "url" });
@@ -3047,6 +3697,7 @@ function renderIntegrationSettings(item, data) {
     node("section", { class: "settings-subsection" },
       node("h4", { text: "UniFi" }),
       node("div", { class: "settings-field-grid" }, unifiURL.element, keyFieldWithState(unifiKey, settings.unifi_api_key_set), unifiKeyFile.element, unifiSite.element),
+      node("div", { class: "settings-field-grid" }, nasClientHint.element, expectedNASLink.element),
       node("div", { class: "settings-toggle-grid" }, clearUniFiKey.element, unifiTLS.element),
     ),
     node("section", { class: "settings-subsection" },
@@ -3071,6 +3722,8 @@ function renderIntegrationSettings(item, data) {
       unifi_api_key_file: unifiKeyFile.input.value.trim(),
       unifi_site_id: unifiSite.input.value.trim(),
       unifi_insecure_tls: unifiTLS.input.checked,
+      unifi_nas_client_hint: nasClientHint.input.value.trim(),
+      expected_nas_link_mbps: parseInt(expectedNASLink.input.value, 10) || 0,
       internet_probe_url: internetProbe.input.value.trim(),
       dns_probe_host: dnsProbe.input.value.trim(),
       router_probe_target: routerProbe.input.value.trim(),
@@ -3222,7 +3875,7 @@ function policyEditor(name, policy) {
   const failClosed = settingToggle("Fail closed", current.fail_closed_on_redaction !== false);
   const maxContext = settingNumberField("Max context bytes", current.max_context_bytes || 8000, { min: 1, step: 1000, inputmode: "numeric" });
   const maxLogs = settingNumberField("Max log lines", current.max_log_lines || 0, { min: 0, step: 1, inputmode: "numeric" });
-  const agentTools = settingToggle("Live API tools", !!current.agent_tools_enabled);
+  const agentTools = settingToggle("Read-only live tools", !!current.agent_tools_enabled);
   const agentMaxCalls = settingNumberField("Max tool calls", current.agent_max_tool_calls || 0, { min: 0, step: 1, inputmode: "numeric" });
   const canUseTools = (current.recipient_role || meta.recipient) === "admin";
   agentTools.input.disabled = !canUseTools;
@@ -3245,8 +3898,8 @@ function policyEditor(name, policy) {
         node("div", { class: "settings-field-grid" }, maxContext.element, maxLogs.element),
         logSources.element,
         node("section", { class: "settings-subsection" },
-          node("h4", { text: "Agent tools" }),
-          node("p", { class: "muted", text: "Read-only live status tools for admin diagnosis. Requests still use role filtering and redaction." }),
+          node("h4", { text: "Read-only live tools" }),
+          node("p", { class: "muted", text: "Admin diagnosis can refresh sanitized live status. These tools cannot start, stop, restart, repair, or change settings." }),
           node("div", { class: "settings-toggle-grid" }, agentTools.element),
           node("div", { class: "settings-field-grid" }, agentMaxCalls.element),
         ),
@@ -3492,6 +4145,8 @@ $("user-chat-open").addEventListener("click", focusUserChat);
 $("user-chat-send").addEventListener("click", runUserChat);
 $("user-chat-input").addEventListener("keydown", (event) => submitOnEnter(event, runUserChat));
 $("user-notify-admin").addEventListener("click", () => notifyAdmin("A standard user reported a problem."));
+$("user-app-detail-back").addEventListener("click", closeCompactDetail);
+$("user-infra-detail-back").addEventListener("click", closeCompactDetail);
 $("audit-refresh").addEventListener("click", loadAudit);
 $("audit-filter").addEventListener("input", renderAuditTable);
 $("settings-refresh").addEventListener("click", loadSettings);

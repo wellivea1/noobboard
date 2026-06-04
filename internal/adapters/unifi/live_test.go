@@ -132,6 +132,71 @@ func TestLiveStatusKeepsWANUpWhenAnotherWANReportsUp(t *testing.T) {
 	}
 }
 
+func TestLiveStatusReportsNASLinkSpeedFromClientHint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/proxy/network/integration/v1/info":
+			_, _ = w.Write([]byte(`{"application":"network"}`))
+		case "/proxy/network/integration/v1/sites":
+			_, _ = w.Write([]byte(`{"data":[{"id":"site-1","internalReference":"default","name":"Home"}]}`))
+		case "/proxy/network/integration/v1/sites/site-1/devices":
+			_, _ = w.Write([]byte(`{"data":[{"id":"gateway-1","name":"Dream Machine","model":"UDM","state":"ONLINE","features":["gateway"]}]}`))
+		case "/proxy/network/integration/v1/sites/site-1/clients":
+			_, _ = w.Write([]byte(`{"data":[
+				{"id":"client-1","name":"Laptop","ipAddress":"192.168.0.20","type":"WIRED","linkSpeedMbps":1000},
+				{"id":"client-2","name":"Tower","ipAddress":"192.168.0.214","macAddress":"aa:bb:cc:dd:ee:ff","type":"WIRED","linkSpeed":"100 Mbps"}
+			]}`))
+		case "/proxy/network/integration/v1/sites/site-1/wans":
+			_, _ = w.Write([]byte(`{"data":[]}`))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := NewLiveClient(server.URL, "test-key", "default", false, WithNASLinkMonitoring("http://192.168.0.214", 1000))
+	client.http = server.Client()
+	infra, err := client.Status(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if infra.NASLinkSpeedMbps != 100 || infra.ExpectedNASLinkMbps != 1000 {
+		t.Fatalf("NAS link telemetry = %d/%d, want 100/1000", infra.NASLinkSpeedMbps, infra.ExpectedNASLinkMbps)
+	}
+}
+
+func TestLiveStatusParsesNASGigabitTextSpeed(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/proxy/network/integration/v1/info":
+			_, _ = w.Write([]byte(`{"application":"network"}`))
+		case "/proxy/network/integration/v1/sites":
+			_, _ = w.Write([]byte(`{"data":[{"id":"site-1","internalReference":"default","name":"Home"}]}`))
+		case "/proxy/network/integration/v1/sites/site-1/devices":
+			_, _ = w.Write([]byte(`{"data":[{"id":"gateway-1","name":"Dream Machine","model":"UDM","state":"ONLINE","features":["gateway"]}]}`))
+		case "/proxy/network/integration/v1/sites/site-1/clients":
+			_, _ = w.Write([]byte(`{"data":[{"id":"client-1","name":"Tower","ipAddress":"192.168.0.214","type":"WIRED","speed":"1 Gbps"}]}`))
+		case "/proxy/network/integration/v1/sites/site-1/wans":
+			_, _ = w.Write([]byte(`{"data":[]}`))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := NewLiveClient(server.URL, "test-key", "default", false, WithNASLinkMonitoring("tower.local", 2500))
+	client.http = server.Client()
+	infra, err := client.Status(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if infra.NASLinkSpeedMbps != 1000 || infra.ExpectedNASLinkMbps != 2500 {
+		t.Fatalf("NAS link telemetry = %d/%d, want 1000/2500", infra.NASLinkSpeedMbps, infra.ExpectedNASLinkMbps)
+	}
+}
+
 func TestWANStatusTextDoesNotTreatBackupAsUp(t *testing.T) {
 	if got := wanSignal(wanOverview{Status: "backup"}); got != "unknown" {
 		t.Fatalf("wanSignal backup = %q, want unknown", got)
