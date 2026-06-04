@@ -1550,6 +1550,115 @@ func TestGeneralUserDirectRestartCanRestartOptedInApp(t *testing.T) {
 	}
 }
 
+func TestGeneralUserDirectControlsCanStartAndStopOptedInApp(t *testing.T) {
+	oldDelay := agentRepairVerificationDelay
+	agentRepairVerificationDelay = 0
+	t.Cleanup(func() { agentRepairVerificationDelay = oldDelay })
+
+	cases := []struct {
+		name        string
+		action      docker.ContainerAction
+		before      models.AppStatus
+		after       models.AppStatus
+		wantMessage string
+	}{
+		{
+			name:   "start stopped app",
+			action: docker.ActionStart,
+			before: models.AppStatus{
+				AppID:                 "emby",
+				DisplayName:           "Emby",
+				ContainerID:           "container:Emby",
+				ContainerName:         "Emby",
+				Category:              "docker",
+				DockerState:           models.DockerExited,
+				CurrentStatus:         models.StatusOffline,
+				VisibleToGeneralUsers: true,
+			},
+			after: models.AppStatus{
+				AppID:                 "emby",
+				DisplayName:           "Emby",
+				ContainerID:           "container:Emby",
+				ContainerName:         "Emby",
+				Category:              "docker",
+				DockerState:           models.DockerRunning,
+				CurrentStatus:         models.StatusOnline,
+				VisibleToGeneralUsers: true,
+			},
+			wantMessage: "Start: started - running.",
+		},
+		{
+			name:   "stop running app",
+			action: docker.ActionStop,
+			before: models.AppStatus{
+				AppID:                 "emby",
+				DisplayName:           "Emby",
+				ContainerID:           "container:Emby",
+				ContainerName:         "Emby",
+				Category:              "docker",
+				DockerState:           models.DockerRunning,
+				CurrentStatus:         models.StatusOnline,
+				VisibleToGeneralUsers: true,
+			},
+			after: models.AppStatus{
+				AppID:                 "emby",
+				DisplayName:           "Emby",
+				ContainerID:           "container:Emby",
+				ContainerName:         "Emby",
+				Category:              "docker",
+				DockerState:           models.DockerExited,
+				CurrentStatus:         models.StatusOffline,
+				VisibleToGeneralUsers: true,
+			},
+			wantMessage: "Stop: stopped - stopped.",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.Defaults()
+			cfg.Database.Path = serverCacheTestPath(t, "general-user-direct-"+strings.ReplaceAll(tc.name, " ", "-"))
+			cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+			cfg.AppCatalog.GeneralUserRestartsEnabled = true
+			cfg.AppCatalog.RestartAllowedGeneralUser = map[string]bool{"emby": true}
+
+			app := newTestApp(t, cfg)
+			collector := &recordingDockerCollector{
+				apps:             []models.AppStatus{tc.before},
+				afterControlApps: []models.AppStatus{tc.after},
+			}
+			app.deps.Collectors.Docker = collector
+
+			router := app.Router()
+			viewerCookie, viewerCSRF := loginAs(t, router, "viewer", "change-me-now")
+
+			rec := httptest.NewRecorder()
+			body := fmt.Sprintf(`{"action":%q,"confirmed":true,"confirm_app_id":"emby"}`, tc.action)
+			req := httptest.NewRequest(http.MethodPost, "/api/user/apps/emby/action", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-CSRF-Token", viewerCSRF)
+			req.AddCookie(viewerCookie)
+			router.ServeHTTP(rec, req)
+			if rec.Code != http.StatusAccepted {
+				t.Fatalf("direct %s status = %d, body = %s", tc.action, rec.Code, rec.Body.String())
+			}
+			var response struct {
+				Status  string                    `json:"status"`
+				Outcome llmAgentRepairOutcomeView `json:"outcome"`
+			}
+			if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+				t.Fatal(err)
+			}
+			if response.Status != "executed" || !response.Outcome.Verified || !response.Outcome.Recovered || response.Outcome.Message != tc.wantMessage {
+				t.Fatalf("direct %s outcome = %#v", tc.action, response)
+			}
+			if collector.callCount != 1 || collector.called != tc.action || collector.app.AppID != "emby" || !collector.app.RestartAllowedGeneralUser {
+				t.Fatalf("direct %s did not control opted-in app once: count=%d action=%q app=%#v", tc.action, collector.callCount, collector.called, collector.app)
+			}
+		})
+	}
+}
+
 func TestGeneralUserDirectRestartAutoReviewDenialBlocksDocker(t *testing.T) {
 	oldDelay := agentRepairVerificationDelay
 	agentRepairVerificationDelay = 0

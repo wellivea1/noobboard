@@ -109,7 +109,7 @@ The LLM that diagnosed the issue cannot execute anything. The server will only r
 
 Rules:
 - Use the references as policy context when they are relevant.
-- Approve only if the action is restart-only, target-specific, visible in the current snapshot, and consistent with the evidence.
+- Approve only if the action is a server-allowlisted app start, stop, or restart; target-specific; visible in the current snapshot; and consistent with the evidence.
 - Do not invent extra actions, shell commands, Docker names, or infrastructure changes.
 - If the evidence is ambiguous, the target is unclear, or the action conflicts with policy, set allow=false.
 - Return only the JSON object required by the schema.
@@ -141,7 +141,7 @@ func compactActionReviewApps(apps []models.AppStatus, targetID string) string {
 		if !isTarget && app.CurrentStatus == models.StatusOnline {
 			continue
 		}
-		fmt.Fprintf(&b, "- app_id=%s name=%s status=%s visible=%t agent_repair_allowed=%t user_restart_allowed=%t\n",
+		fmt.Fprintf(&b, "- app_id=%s name=%s status=%s visible=%t agent_repair_allowed=%t user_control_allowed=%t\n",
 			app.AppID,
 			firstNonEmpty(app.DisplayName, app.ContainerName, app.AppID),
 			app.CurrentStatus,

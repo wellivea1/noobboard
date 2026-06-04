@@ -204,6 +204,7 @@ func (a *App) registerSharedRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/user/repair-requests", a.requireAuth(a.userRepairRequests))
 	mux.HandleFunc("POST /api/user/repair-request", a.requireAuth(a.createRepairRequest))
 	mux.HandleFunc("POST /api/user/apps/{id}/restart", a.requireAuth(a.restartUserApp))
+	mux.HandleFunc("POST /api/user/apps/{id}/action", a.requireAuth(a.controlUserApp))
 	mux.HandleFunc("GET /api/user/notification-preferences", a.requireAuth(a.getNotificationPreferences))
 	mux.HandleFunc("POST /api/user/notification-preferences", a.requireAuth(a.saveNotificationPreferences))
 }
@@ -1683,6 +1684,34 @@ func agentActionDefinition(id string) (llmAgentActionDefinition, bool) {
 	return llmAgentActionRegistry["unknown"], false
 }
 
+func userAppControlActionDefinition(action docker.ContainerAction) (llmAgentActionDefinition, bool) {
+	switch action {
+	case docker.ActionStart:
+		return llmAgentActionDefinition{
+			ID:                "general_user_start_container",
+			Title:             "Start app",
+			Summary:           "A standard user requested that NoobBoard start one opted-in app.",
+			RequiresAppTarget: true,
+			Executable:        true,
+			DockerAction:      docker.ActionStart,
+		}, true
+	case docker.ActionStop:
+		return llmAgentActionDefinition{
+			ID:                "general_user_stop_container",
+			Title:             "Stop app",
+			Summary:           "A standard user requested that NoobBoard stop one opted-in app.",
+			RequiresAppTarget: true,
+			Executable:        true,
+			DockerAction:      docker.ActionStop,
+		}, true
+	case docker.ActionRestart:
+		action, _ := agentActionDefinition("ask_admin_to_restart_container")
+		return action, true
+	default:
+		return llmAgentActionDefinition{}, false
+	}
+}
+
 func resolveAgentPlanTarget(action llmAgentActionDefinition, diagnosis llm.Diagnosis, snapshot models.Snapshot) llmAgentPlanTargetView {
 	target := llmAgentPlanTargetView{
 		Kind:   firstNonEmpty(strings.TrimSpace(diagnosis.RecommendedTarget.Kind), "none"),
@@ -2149,7 +2178,7 @@ func (a *App) verifyRepairOutcome(ctx context.Context, before models.AppStatus, 
 		BeforeStatus: beforeStatus,
 		AfterStatus:  models.StatusUnknown,
 		CheckedAt:    time.Now().UTC(),
-		Message:      "Restart was sent, but NoobBoard could not verify the app status yet.",
+		Message:      dockerActionDisplayName(action.DockerAction) + " was sent, but NoobBoard could not verify the app status yet.",
 		ResultStatus: strings.TrimSpace(result.Status),
 	}
 	var afterSnapshot models.Snapshot
@@ -2164,7 +2193,7 @@ func (a *App) verifyRepairOutcome(ctx context.Context, before models.AppStatus, 
 			select {
 			case <-ctx.Done():
 				timer.Stop()
-				outcome.Message = "Restart was sent, but verification was cancelled before NoobBoard could refresh status."
+				outcome.Message = dockerActionDisplayName(action.DockerAction) + " was sent, but verification was cancelled before NoobBoard could refresh status."
 				return outcome
 			case <-timer.C:
 			}
@@ -2173,7 +2202,7 @@ func (a *App) verifyRepairOutcome(ctx context.Context, before models.AppStatus, 
 		refreshed, err := a.refreshSnapshot(ctx, false)
 		outcome.CheckedAt = time.Now().UTC()
 		if err != nil {
-			outcome.Message = "Restart was sent, but status verification failed: " + err.Error()
+			outcome.Message = dockerActionDisplayName(action.DockerAction) + " was sent, but status verification failed: " + err.Error()
 			return outcome
 		}
 		afterSnapshot = refreshed
@@ -2182,21 +2211,22 @@ func (a *App) verifyRepairOutcome(ctx context.Context, before models.AppStatus, 
 		if !ok {
 			outcome.Verified = true
 			outcome.AfterStatus = models.StatusUnknown
-			outcome.Message = messagePrefix + ": restarted - target app was not present after refresh."
+			outcome.Recovered = action.DockerAction == docker.ActionStop
+			outcome.Message = messagePrefix + ": " + dockerActionPastTense(action.DockerAction) + " - target app was not present after refresh."
 			break
 		}
 		outcome.Verified = true
 		outcome.AfterStatus = currentStatusOrUnknown(afterApp.CurrentStatus)
 		outcome.TargetLabel = firstNonEmpty(afterApp.DisplayName, afterApp.ContainerName, afterApp.AppID, targetLabel)
-		outcome.Recovered = outcome.AfterStatus == models.StatusOnline
+		outcome.Recovered = dockerActionReachedExpectedState(action.DockerAction, afterApp)
 		if outcome.Recovered {
-			outcome.Message = messagePrefix + ": restarted - recovered."
+			outcome.Message = messagePrefix + ": " + dockerActionSuccessPhrase(action.DockerAction) + "."
 			break
 		}
 		if attempt == attempts-1 {
-			outcome.Message = messagePrefix + ": restarted - still coming up or not responding."
+			outcome.Message = messagePrefix + ": " + dockerActionFinalWaitingPhrase(action.DockerAction) + "."
 		} else {
-			outcome.Message = messagePrefix + ": restarted - waiting for recovery."
+			outcome.Message = messagePrefix + ": " + dockerActionWaitingPhrase(action.DockerAction) + "."
 		}
 	}
 	if historyEventID, err := a.appendAgentRepairHistoryEvent(outcome); err == nil {
@@ -2545,17 +2575,48 @@ func (a *App) restartUserApp(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, err)
 		return
 	}
-	appID := strings.TrimSpace(r.PathValue("id"))
-	if appID == "" {
-		writeError(w, http.StatusBadRequest, errors.New("app id is required"))
-		return
-	}
 	var body struct {
 		Confirmed    bool   `json:"confirmed"`
 		ConfirmAppID string `json:"confirm_app_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	a.executeUserAppAction(w, r, docker.ActionRestart, body.Confirmed, body.ConfirmAppID)
+}
+
+func (a *App) controlUserApp(w http.ResponseWriter, r *http.Request) {
+	if err := requireCSRF(r); err != nil {
+		writeError(w, http.StatusForbidden, err)
+		return
+	}
+	var body struct {
+		Action       string `json:"action"`
+		Confirmed    bool   `json:"confirmed"`
+		ConfirmAppID string `json:"confirm_app_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	action, err := docker.ParseContainerAction(body.Action)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	a.executeUserAppAction(w, r, action, body.Confirmed, body.ConfirmAppID)
+}
+
+func (a *App) executeUserAppAction(w http.ResponseWriter, r *http.Request, action docker.ContainerAction, confirmed bool, confirmAppID string) {
+	appID := strings.TrimSpace(r.PathValue("id"))
+	if appID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("app id is required"))
+		return
+	}
+	actionDef, ok := userAppControlActionDefinition(action)
+	if !ok {
+		writeError(w, http.StatusBadRequest, errors.New("app action is not supported"))
 		return
 	}
 	user := mustUser(r)
@@ -2569,13 +2630,13 @@ func (a *App) restartUserApp(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, errors.New("app is not visible to this user"))
 		return
 	}
-	if !sameAppIdentifier(body.ConfirmAppID, visibleApp.AppID) || !body.Confirmed {
-		writeError(w, http.StatusBadRequest, errors.New("restart requires confirmed=true with a matching confirm_app_id"))
+	if !sameAppIdentifier(confirmAppID, visibleApp.AppID) || !confirmed {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("%s requires confirmed=true with a matching confirm_app_id", action))
 		return
 	}
 	if !visibleApp.RestartAllowedGeneralUser {
-		a.deps.Audit.Record(user.ID, "user.app.restart.refused", map[string]interface{}{"app_id": visibleApp.AppID, "reason": "app_not_opted_in"})
-		writeError(w, http.StatusConflict, errors.New("restart is not enabled for this app"))
+		a.deps.Audit.Record(user.ID, userAppActionAudit(action, "refused"), map[string]interface{}{"app_id": visibleApp.AppID, "reason": "app_not_opted_in", "action": string(action)})
+		writeError(w, http.StatusConflict, errors.New("user app controls are not enabled for this app"))
 		return
 	}
 	snapshot, err := a.readOnlySnapshot(r.Context())
@@ -2592,34 +2653,33 @@ func (a *App) restartUserApp(w http.ResponseWriter, r *http.Request) {
 		"app_id":       app.AppID,
 		"requester_id": user.ID,
 		"via":          "general_user_direct",
-		"action":       string(docker.ActionRestart),
+		"action":       string(action),
 	}
 	if !isDockerRepairTarget(app) {
 		details["reason"] = "not_docker_target"
-		a.deps.Audit.Record(user.ID, "user.app.restart.refused", details)
-		writeError(w, http.StatusConflict, errors.New("this app cannot be restarted by NoobBoard"))
+		a.deps.Audit.Record(user.ID, userAppActionAudit(action, "refused"), details)
+		writeError(w, http.StatusConflict, errors.New("this app cannot be controlled by NoobBoard"))
 		return
 	}
 	if a.redactorSnapshot().IsBlacklistedApp(app) {
 		details["reason"] = "privacy_blacklisted"
-		a.deps.Audit.Record(user.ID, "user.app.restart.refused", details)
-		writeError(w, http.StatusConflict, errors.New("restart is unavailable for this app"))
+		a.deps.Audit.Record(user.ID, userAppActionAudit(action, "refused"), details)
+		writeError(w, http.StatusConflict, errors.New("app controls are unavailable for this app"))
 		return
 	}
 	if !app.RestartAllowedGeneralUser {
 		details["reason"] = "app_not_opted_in"
-		a.deps.Audit.Record(user.ID, "user.app.restart.refused", details)
-		writeError(w, http.StatusConflict, errors.New("restart is not enabled for this app"))
+		a.deps.Audit.Record(user.ID, userAppActionAudit(action, "refused"), details)
+		writeError(w, http.StatusConflict, errors.New("user app controls are not enabled for this app"))
 		return
 	}
-	if currentStatusOrUnknown(app.CurrentStatus) == models.StatusOnline {
-		details["reason"] = "app_online"
-		a.deps.Audit.Record(user.ID, "user.app.restart.refused", details)
-		writeError(w, http.StatusConflict, errors.New("this app is currently working"))
+	if err := validateGeneralUserAppActionState(action, app); err != nil {
+		details["reason"] = "action_state_refused"
+		a.deps.Audit.Record(user.ID, userAppActionAudit(action, "refused"), details)
+		writeError(w, http.StatusConflict, err)
 		return
 	}
-	action, _ := agentActionDefinition("ask_admin_to_restart_container")
-	reviewDecision, reviewEnabled, err := a.reviewAgentAction(r.Context(), user, snapshot, app, action, "general_user_direct")
+	reviewDecision, reviewEnabled, err := a.reviewAgentAction(r.Context(), user, snapshot, app, actionDef, "general_user_direct")
 	if reviewEnabled {
 		details["auto_review_allow"] = reviewDecision.Allow
 		details["auto_review_confidence"] = reviewDecision.Confidence
@@ -2628,7 +2688,7 @@ func (a *App) restartUserApp(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		details["reason"] = "auto_review_refused"
 		details["error"] = err.Error()
-		a.deps.Audit.Record(user.ID, "user.app.restart.auto_review_refused", auditDetailsCopy(details))
+		a.deps.Audit.Record(user.ID, userAppActionAudit(action, "auto_review_refused"), auditDetailsCopy(details))
 		writeError(w, http.StatusConflict, err)
 		return
 	}
@@ -2636,22 +2696,22 @@ func (a *App) restartUserApp(w http.ResponseWriter, r *http.Request) {
 	if !limit.Allowed {
 		details["reason"] = limit.Reason
 		details["retry_after_seconds"] = limit.RetryAfterSeconds
-		a.deps.Audit.Record(user.ID, "user.app.restart.rate_limited", auditDetailsCopy(details))
+		a.deps.Audit.Record(user.ID, userAppActionAudit(action, "rate_limited"), auditDetailsCopy(details))
 		writeError(w, http.StatusConflict, errors.New(limit.Message))
 		return
 	}
-	result, err := a.deps.Collectors.Docker.ControlContainer(r.Context(), app, docker.ActionRestart)
+	result, err := a.deps.Collectors.Docker.ControlContainer(r.Context(), app, action)
 	if err != nil {
 		details["error"] = err.Error()
-		a.deps.Audit.Record(user.ID, "user.app.restart.execute_failed", auditDetailsCopy(details))
+		a.deps.Audit.Record(user.ID, userAppActionAudit(action, "execute_failed"), auditDetailsCopy(details))
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
 	details["container_name"] = app.ContainerName
 	a.invalidateSnapshot()
-	a.deps.Audit.Record(user.ID, "user.app.restart.executed", auditDetailsCopy(details))
-	a.deps.Audit.Record(user.ID, "app.container.action", map[string]interface{}{"app_id": app.AppID, "action": string(docker.ActionRestart), "container_name": app.ContainerName, "via": "general_user_direct"})
-	outcome := a.verifyRepairOutcome(r.Context(), app, action, result, "Restart")
+	a.deps.Audit.Record(user.ID, userAppActionAudit(action, "executed"), auditDetailsCopy(details))
+	a.deps.Audit.Record(user.ID, "app.container.action", map[string]interface{}{"app_id": app.AppID, "action": string(action), "container_name": app.ContainerName, "via": "general_user_direct"})
+	outcome := a.verifyRepairOutcome(r.Context(), app, actionDef, result, dockerActionDisplayName(action))
 	verifyDetails := auditDetailsCopy(details)
 	verifyDetails["verified"] = outcome.Verified
 	verifyDetails["recovered"] = outcome.Recovered
@@ -2659,15 +2719,121 @@ func (a *App) restartUserApp(w http.ResponseWriter, r *http.Request) {
 	verifyDetails["after_status"] = string(outcome.AfterStatus)
 	verifyDetails["history_event_id"] = outcome.HistoryEventID
 	if outcome.Verified {
-		a.deps.Audit.Record(user.ID, "user.app.restart.verified", verifyDetails)
+		a.deps.Audit.Record(user.ID, userAppActionAudit(action, "verified"), verifyDetails)
 	} else {
-		a.deps.Audit.Record(user.ID, "user.app.restart.verify_failed", verifyDetails)
+		a.deps.Audit.Record(user.ID, userAppActionAudit(action, "verify_failed"), verifyDetails)
 	}
 	writeJSON(w, http.StatusAccepted, map[string]interface{}{
 		"status":  "executed",
 		"result":  result,
 		"outcome": outcome,
 	})
+}
+
+func validateGeneralUserAppActionState(action docker.ContainerAction, app models.AppStatus) error {
+	status := currentStatusOrUnknown(app.CurrentStatus)
+	switch action {
+	case docker.ActionStart:
+		if app.DockerState == models.DockerRunning || status == models.StatusOnline || status == models.StatusDegraded {
+			return errors.New("this app is already running")
+		}
+	case docker.ActionStop:
+		if app.DockerState == models.DockerExited || (status == models.StatusOffline && app.DockerState != models.DockerRunning) {
+			return errors.New("this app is already stopped")
+		}
+	case docker.ActionRestart:
+		if status == models.StatusOnline {
+			return errors.New("this app is currently working")
+		}
+	default:
+		return errors.New("app action is not supported")
+	}
+	return nil
+}
+
+func userAppActionAudit(action docker.ContainerAction, suffix string) string {
+	actionName := strings.TrimSpace(string(action))
+	if actionName == "" {
+		actionName = "unknown"
+	}
+	return "user.app." + actionName + "." + suffix
+}
+
+func dockerActionDisplayName(action docker.ContainerAction) string {
+	switch action {
+	case docker.ActionStart:
+		return "Start"
+	case docker.ActionStop:
+		return "Stop"
+	case docker.ActionRestart:
+		return "Restart"
+	default:
+		return "Action"
+	}
+}
+
+func dockerActionPastTense(action docker.ContainerAction) string {
+	switch action {
+	case docker.ActionStart:
+		return "started"
+	case docker.ActionStop:
+		return "stopped"
+	case docker.ActionRestart:
+		return "restarted"
+	default:
+		return "sent"
+	}
+}
+
+func dockerActionSuccessPhrase(action docker.ContainerAction) string {
+	switch action {
+	case docker.ActionStart:
+		return "started - running"
+	case docker.ActionStop:
+		return "stopped - stopped"
+	case docker.ActionRestart:
+		return "restarted - recovered"
+	default:
+		return "completed"
+	}
+}
+
+func dockerActionWaitingPhrase(action docker.ContainerAction) string {
+	switch action {
+	case docker.ActionStart:
+		return "started - waiting for the app to report online"
+	case docker.ActionStop:
+		return "stopped - waiting for the app to stop"
+	case docker.ActionRestart:
+		return "restarted - waiting for recovery"
+	default:
+		return "sent - waiting for status"
+	}
+}
+
+func dockerActionFinalWaitingPhrase(action docker.ContainerAction) string {
+	switch action {
+	case docker.ActionStart:
+		return "started - still coming up or not responding"
+	case docker.ActionStop:
+		return "stopped - still appears to be running"
+	case docker.ActionRestart:
+		return "restarted - still coming up or not responding"
+	default:
+		return "sent - status did not settle"
+	}
+}
+
+func dockerActionReachedExpectedState(action docker.ContainerAction, app models.AppStatus) bool {
+	status := currentStatusOrUnknown(app.CurrentStatus)
+	switch action {
+	case docker.ActionStart, docker.ActionRestart:
+		return status == models.StatusOnline
+	case docker.ActionStop:
+		return app.DockerState == models.DockerExited || status == models.StatusOffline
+	default:
+		return false
+	}
 }
 
 func (a *App) adminRepairRequests(w http.ResponseWriter, _ *http.Request) {

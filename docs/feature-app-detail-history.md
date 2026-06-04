@@ -45,7 +45,7 @@ repair. Verified on this machine: `go build ./...` ✓, `go test ./...` ✓,
 - **Approval-gated repair v1:** the diagnosis schema returns a closed-set
   `recommended_action_id` + `recommended_action_target`; the server builds an
   `llmAgentPlanView` with an HMAC-signed, 5-min, actor/action/target/nonce-bound
-  approval token; chat renders a normal approval popup; admin can **Arm** a
+  approval token; chat renders a normal approval popup; admin can enable fixes for the current
   session (`AgentControlEnabled` gate, `AgentArmDuration` ≤1h). `allow_once`
   now executes only `ask_admin_to_restart_container`, only for a currently
   resolved, opted-in, non-blacklisted app, and only once per token. Non-restart
@@ -64,11 +64,11 @@ repair. Verified on this machine: `go build ./...` ✓, `go test ./...` ✓,
 - The approval-gated repair path now includes per-app `agent_repair_allowed`
   settings, restart-only server-side execution, single-use approval tokens,
   cooldown/rate-limit enforcement, post-restart verification, inline chat
-  outcome reporting, history notes, and lifecycle audit coverage. Armed
+  outcome reporting, history notes, and lifecycle audit coverage. Session-enabled
   autonomous restart repair is now implemented behind explicit admin enablement,
-  session arm, per-app opt-in, auto-review, and the same repair limits.
+  session fix enablement, per-app opt-in, auto-review, and the same repair limits.
 - The visual harness now includes the LLM settings limit copy plus a rendered
-  approval dialog/outcome state, so regressions in the armed/approved chat UI are
+  approval dialog/outcome state, so regressions in the session-enabled/approved chat UI are
   caught without live LLM credentials.
 - **Still optional:** the 24-hour status bar remains a nice-to-have.
 
@@ -422,7 +422,7 @@ weakening it.
 ## Defense-in-depth gates (all must hold to execute)
 
 1. `LLM.AgentControlEnabled` is **on** (admin setting, default **off**).
-2. The admin **armed** this session (`AgentArmDuration` ≤ 1h, auto-expires).
+2. The admin enabled fixes for this session (`AgentArmDuration` <= 1h, auto-expires).
 3. A valid, **single-use**, unexpired approval token bound to actor + action +
    target.
 4. The action is in the **executable allowlist** (v1: `restart` only).
@@ -440,11 +440,11 @@ weakening it.
   the current full snapshot (`findAppByID`), apply the stop/restart confirmation
   rule, and audit `app.container.action` with `actor` = approving admin +
   `via:"agent_plan"`, `plan_id`, `recommended_action_id`.
-- In `recordAgentApproval`, when `choice=allow_once` + token valid + armed +
+- In `recordAgentApproval`, when `choice=allow_once` + token valid + session enabled +
   action executable + target resolved: call the executor and return the result,
   replacing today's `409 "locked"`. Compute `CanExecute` from
   (`AgentControlEnabled` && action∈allowlist && target resolved && app opted-in);
-  enable the chat "Allow fix" button only when armed.
+  enable the chat "Allow fix" button only when the session is enabled.
 
 ## R2 — Safety envelope
 - **Per-app opt-in:** add `AgentRepairAllowed bool` to the app catalog entry
@@ -457,8 +457,8 @@ weakening it.
 - **Cooldown + rate limit:** at most 1 agent restart per app per 10 min and 5
   agent actions per hour globally; over-limit is an audited refusal surfaced in
   chat.
-- **Kill switch:** disarm or `AgentControlEnabled=off` disables instantly; arm
-  auto-expires. One target per approval (no bulk).
+- **Kill switch:** disable the session or set `AgentControlEnabled=off` to stop fixes instantly;
+  session enablement auto-expires. One target per approval (no bulk).
 
 ## R3 — Outcome verification & reporting
 - After executing, force a `refreshSnapshot` after a short delay, compare the
@@ -469,18 +469,18 @@ weakening it.
 - Audit the full lifecycle: proposed → approved (by whom) → executed → verified.
 
 ## R4 — UI completion
-- Enable "Allow fix" only when `can_execute` && armed; show the resolved app +
+- Enable "Allow fix" only when `can_execute` && session enabled; show the resolved app +
   action and a confirm affordance consistent with `controlApp`.
 - Show the execution outcome inline in the chat thread.
 - Admin settings: expose the `AgentControlEnabled` switch and per-app
-  "Allow automatic repair" toggles alongside the existing Arm control; show
-  cooldown/rate-limit + armed-until state.
+  "Allow admin/AI restart" toggles alongside the session enable control; show
+  cooldown/rate-limit + enabled-until state.
 
 ## R5 — Tests, security review, docs
 - Unit: action→op mapping; rejects non-allowlisted actions; single-use token;
-  cooldown/rate-limit; per-app opt-in; disarmed/disabled/non-admin paths refuse
+  cooldown/rate-limit; per-app opt-in; session-disabled/disabled/non-admin paths refuse
   **without** calling the Docker client.
-- Integration: armed + approved + eligible restart calls a mock `ControlContainer`
+- Integration: session enabled + approved + eligible restart calls a mock `ControlContainer`
   exactly once; replay blocked; cooldown blocks the second; verification re-poll
   records the outcome event.
 - Run `/security-review` on the actuation path (trust boundary, no model→command
@@ -497,16 +497,16 @@ weakening it.
   **Landed for restart-only approval-gated v1.**
 - **AR3:** cooldown/rate-limit + outcome verification re-poll + chat outcome UI.
   **Landed for approval-gated restart v1.**
-- **AR4:** security review + docs + harness coverage for the armed/approved flow.
+- **AR4:** security review + docs + harness coverage for the session-enabled/approved flow.
   **Landed for approval-gated restart v1.**
-- **AR5:** armed-autonomous restart repair using the same server-side restart path,
+- **AR5:** session-enabled autonomous restart repair using the same server-side restart path,
   plus mandatory auto-review and no popup after execution/refusal.
   **Landed for restart-only autonomous repair.**
 
 ## Repair-specific open choices
-- **Autonomy level (key decision).** v1 shipped as **approval-gated while
-  armed**. Armed-autonomous restart repair is now available for one non-online
-  opted-in app during the arm window, with mandatory auto-review and the same
+- **Autonomy level (key decision).** v1 shipped as **approval-gated with current-session
+  fix enablement**. Session-enabled autonomous restart repair is now available for one non-online
+  opted-in app during the enabled session window, with mandatory auto-review and the same
   cooldown/rate-limit checks.
 - **Executable action scope for v1:** restart-only (recommended) vs. also
   start/stop.
@@ -610,6 +610,9 @@ executed as a command.
   wired through app catalog settings, snapshot projection, and the compact app
   detail "Restart now" affordance; `POST /api/user/apps/{id}/restart` uses the
   shared repair cooldown/rate-limit and verifies the result.
+  **Update:** the same backward-compatible opt-in now gates compact Start,
+  Restart, and Stop controls through `POST /api/user/apps/{id}/action`; the
+  restart endpoint remains as a compatibility alias.
 - **GR3 - Tests, `/security-review`, docs, harness:** backend tests now cover
   general-user repair requests, direct restart success, and refusal for
   non-opted-in/hidden/blacklisted/online apps; `security.md` and

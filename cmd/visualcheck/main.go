@@ -1462,7 +1462,7 @@ const userAppDetailExpression = `(async () => {
     userDetailTitle: panel?.querySelector('.detail-title h2')?.textContent || '',
     userDetailHistoryVisible: historyVisible,
     userDetailEmptyStateVisible: emptyStateVisible,
-    userRepairActionVisible: /\b(ask admin|restart now)\b/i.test(repairActionLabel),
+    userRepairActionVisible: /\b(ask admin|restart now|start|restart|stop)\b/i.test(repairActionLabel),
     userRepairActionLabel: repairActionLabel,
     bannedTermCount: bannedMatches.length,
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
