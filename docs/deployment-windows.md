@@ -38,19 +38,22 @@ Or use the one-step installer, which also prompts for the firewall rule and the 
 .\install.ps1 -Start
 ```
 
-Rebuild/update an existing service after pulling new code:
+Update an existing service after code has been merged to GitHub:
 
 ```powershell
-.\install.ps1
+.\update.ps1
 ```
 
-On update runs, the installer rebuilds `dist\noobboard.exe`, stops and deletes the existing
-Windows service by service name, waits until it is fully stopped/removed so the old binary is
-not locked, copies the rebuilt binary into `%ProgramFiles%\NoobBoard`, registers the service
-again, and starts it again if it was running before the rebuild. Existing firewall and
-bootstrap-login settings are preserved by default so update runs do not repeat first-install
-prompts. Use `-Start` to start a previously stopped service, `-AllowLan` to add/reapply LAN
-firewall + bind settings, or `-SetupAuth` to force the bootstrap admin prompt.
+`update.ps1` is the preferred routine update path. It requires an existing NoobBoard Windows
+service, refuses to run over tracked local changes, fetches/pulls the selected GitHub branch
+with `--ff-only`, then calls `install.ps1 -Start` to rebuild, replace the installed binary,
+and restart the app. Existing firewall and bootstrap-login settings are preserved by default
+so update runs do not repeat first-install prompts. Use `-RunTests` to run the test suite
+before rebuilding, or `-Branch <name>` to update from a non-main branch.
+
+`install.ps1` can still rebuild and replace an existing service if needed, but it does not
+sync the checkout from GitHub first. Use it for first installs or install-level changes such
+as `-AllowLan`, `-SetupAuth`, or a custom `-InstallDir`.
 
 Admin login via the installer (and the install/wizard contract):
 

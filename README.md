@@ -52,17 +52,17 @@ builds a self-contained `noobboard.exe`, and registers the NoobBoard Windows ser
 .\install.ps1 -Start
 ```
 
-After pulling new code, rerun the same installer from an elevated prompt to rebuild and
-replace the installed service binary:
+After NoobBoard is installed as a service, use the update script from an elevated prompt
+when new code has been merged:
 
 ```powershell
-.\install.ps1
+.\update.ps1
 ```
 
-If the NoobBoard service was already running, the script stops it, waits for the service
-to be fully removed, installs the rebuilt binary, and starts it again. Existing firewall
-and admin-login settings are preserved on rebuild runs; pass `-AllowLan` to add LAN access
-or `-SetupAuth` to force the bootstrap admin prompt again.
+The update script syncs this checkout from GitHub, rebuilds the app, replaces the installed
+service binary, and restarts NoobBoard. Existing firewall and admin-login settings are
+preserved. `install.ps1` can still rebuild an existing service, but `update.ps1` is the
+preferred routine update path because it performs the GitHub sync first.
 
 During a first service install, the script also **prompts** whether to:
 
