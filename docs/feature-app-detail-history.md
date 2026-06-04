@@ -513,6 +513,115 @@ weakening it.
 
 ---
 
+# General-user repair + admin-side fixes (follow-up, reviewed 2026-06-04)
+
+The approval-gated **admin** restart repair shipped in PR #27 and is solid (build,
+tests, harness green; every gate enforced; my earlier infra-history banned-term
+finding was fixed). The gaps below are what remain incomplete — concentrated on
+the **general-user side**, which today has no working repair path at all.
+
+## Confirmed gaps
+
+**General-user side (the main gap):**
+- `diagnose` attaches `agent_plan` only when `mode == AdminRequested && role ==
+  Admin` (`server.go` ~1351). A general user's diagnosis carries no plan, so the
+  compact chat — which already renders `result.agent_plan` (`app.js` ~2170) —
+  never shows a repair affordance. The model's `recommended_action_id` + target
+  are computed for general users and then discarded.
+- The only general-user action, `POST /api/user/notify-admin`, is a **stub**: it
+  records an audit entry and returns `"queued"` but delivers nothing and carries
+  no fix context (just free text). Nothing bridges a user report to the admin
+  approval flow.
+- `models.AppStatus.RestartAllowedGeneralUser` exists but is referenced **nowhere
+  else** (no general-user control route; only `/api/user/{diagnose,notify-admin,
+  notification-preferences}`). A latent capability the original design implied but
+  never wired.
+- No outcome feedback: even when an admin repairs, the reporting user is never
+  told the app recovered.
+
+**Admin-side quality:**
+- **Verification window too short.** `agentRepairVerificationDelay = 2s` + a single
+  re-poll (`verifyAgentRepairOutcome`) will frequently report "still not
+  responding" on a *successful* restart, because containers rarely return to
+  `online` within 2s. Fix: poll a few times over ~30–60s (stop early on
+  recovery), or phrase the interim outcome as "restart sent, still coming up."
+- Non-executable recommendations (`ask_admin_to_check_logs/unifi/storage`) are
+  `ApprovalEligible` but not `Executable`, so they render an approval popup with a
+  permanently disabled "Allow fix." Render them as informational instead.
+
+## Decision: general-user repair = **request-by-default + per-app direct opt-in**
+
+Two complementary paths, both reusing the existing restart safety envelope
+(restart-only allowlist, server-side target re-resolution, not-blacklisted,
+shared cooldown 1/app/10min + global 5/hr, single-use, full audit, post-restart
+verification). The trust boundary is unchanged: the server only ever runs a fixed
+restart against a server-resolved, opted-in app; no model or client input is
+executed as a command.
+
+### Path A — Request → admin approval (default for every repair-eligible app)
+- Prereq: make `notify-admin` actually deliver. Persist a `RepairRequest`
+  {id, requester, app_id, action, diagnosis_summary, status
+  (pending/approved/denied/executed/failed), created_at, resolved_at, outcome}
+  and surface it to admins (real notification + an in-app pending-requests queue).
+- Compact UI: when a general user's diagnosis (or app-detail page) shows a
+  fixable, eligible app, offer **"Ask an admin to fix this"** bound to the
+  resolved app + recommended action. `POST /api/user/repair-request`
+  (auth + CSRF; app must be visible to the role and repair-eligible).
+- Admin UI: a pending-requests view (admin chat / settings / notifications) with
+  approve/deny that runs through the **existing** approval+execution path
+  (`recordAgentApproval` generalized to accept a request-originated approval, or a
+  sibling endpoint). Approving still requires the admin gates (`AgentControlEnabled`,
+  arm) so nothing changes the execution trust model.
+- Feed the outcome back to the requester (notification + history note).
+
+### Path B — Direct general-user restart (per-app opt-in)
+- Wire up `RestartAllowedGeneralUser`: per-app admin toggle ("Allow household
+  users to restart this app"), projected onto snapshots like `AgentRepairAllowed`,
+  gated by a master switch (default **off**).
+- New `POST /api/user/apps/{id}/restart` (auth + CSRF, **general-user reachable**):
+  executes a restart **only** when the app is visible to the role, has
+  `RestartAllowedGeneralUser`, is not blacklisted, and passes the shared
+  cooldown/rate-limit; audited with `actor = general user`, `via:"user_direct"`;
+  same verification + outcome. **No admin arm required** (the admin pre-authorized
+  it via the per-app opt-in); the LLM is not in the loop (the user taps a button
+  on a resolved app).
+- Compact UI: a confirm-gated **"Restart now"** on directly-repairable apps
+  (app-detail + chat), consistent with the admin `controlApp` confirm discipline.
+
+### Safety / visibility notes
+- `RestartAllowedGeneralUser` stays visible to general users (so the UI can show
+  the button); `AgentRepairAllowed` remains admin-only/stripped.
+- Cooldown/rate-limit state is **shared** across admin-agent, request-approved,
+  and direct-user repairs so non-admins can't bypass the global cap.
+- Both master switches default off; per-app opt-ins default off; blacklist always
+  wins.
+
+## Follow-up PR breakdown
+- **GR0 — Quality fixes (small, do first):** lengthen/iterate the verification
+  poll; make `notify-admin` deliver + carry context; stop rendering an approval
+  popup for non-executable recommendations.
+- **GR1 — Request path:** `RepairRequest` model + store, `POST /api/user/repair-request`,
+  admin pending-requests queue + approve/deny wired to execution, requester
+  outcome feedback. Compact "Ask an admin to fix this."
+- **GR2 — Direct opt-in path:** wire `RestartAllowedGeneralUser` (catalog + admin
+  toggle + projection + master switch), `POST /api/user/apps/{id}/restart` with
+  the shared envelope, compact "Restart now" with confirm.
+- **GR3 — Tests, `/security-review`, docs, harness:** general-user repair-request
+  and direct-restart flows; verify non-admins cannot exceed limits or repair
+  non-opted-in/blacklisted/hidden apps; harness coverage for the new compact
+  affordances (plain language, ≥44px, no overflow); update `security.md` +
+  `llm-policy.md`.
+
+## Open choices for the general-user work
+- **Direct path & the LLM:** Path B is a plain button on a resolved app (no model
+  actuation) — recommended. (Letting a general-user *chat* trigger a direct fix
+  would put the model in the loop and is not recommended for v1.)
+- **Admin delivery for Path A:** in-app pending queue only (simplest) vs. also the
+  notification backend (email/push) — depends on what notification transport you
+  want wired.
+
+---
+
 ## Open choices
 
 - **History storage: DECIDED — dedicated `history.jsonl` append log** (avoids 30s
