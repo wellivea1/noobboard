@@ -105,6 +105,44 @@ func (c *ChatGPTClient) Diagnose(ctx context.Context, req Request) (Diagnosis, e
 	})
 }
 
+func (c *ChatGPTClient) ReviewAction(ctx context.Context, req ActionReviewRequest) (ActionReviewDecision, error) {
+	if strings.TrimSpace(c.refreshToken) == "" {
+		return ActionReviewDecision{}, errors.New("ChatGPT connector is not connected; use LLM settings to connect OpenAI")
+	}
+	if strings.TrimSpace(c.accountID) == "" {
+		return ActionReviewDecision{}, errors.New("ChatGPT connector is missing an account id; reconnect OpenAI in LLM settings")
+	}
+	accessToken, err := c.ensureAccessToken(ctx)
+	if err != nil {
+		return ActionReviewDecision{}, err
+	}
+	headers := http.Header{}
+	headers.Set("Authorization", "Bearer "+accessToken)
+	headers.Set("ChatGPT-Account-Id", c.accountID)
+	headers.Set("Originator", "noobboard")
+	headers.Set("Session-Id", chatGPTSessionID())
+	headers.Set("User-Agent", "NoobBoard")
+	reasoning := strings.TrimSpace(req.Reasoning)
+	if reasoning == "" {
+		reasoning = ChatGPTCodexReasoningHigh
+	}
+	prompt := BuildActionReviewPrompt(req)
+	data, err := openAIActionReviewBody(c.model, prompt, openAIResponsesOptions{
+		ReasoningEffort:           openAIReviewReasoning(reasoning),
+		IncludeEncryptedReasoning: true,
+		StoreFalse:                true,
+		Stream:                    true,
+	})
+	if err != nil {
+		return ActionReviewDecision{}, err
+	}
+	respData, err := postOpenAIResponses(ctx, c.http, c.endpoint, headers, data, "chatgpt action review api", openAIResponsesOptions{Stream: true})
+	if err != nil {
+		return ActionReviewDecision{}, err
+	}
+	return actionReviewFromResponsesBody(respData)
+}
+
 func (c *ChatGPTClient) ensureAccessToken(ctx context.Context) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

@@ -59,6 +59,56 @@ func TestValidateDiagnosisRequiresAppTargetForAppActions(t *testing.T) {
 	}
 }
 
+func TestValidateActionReviewDecisionAcceptsStrictSchemaShape(t *testing.T) {
+	decision, err := ValidateActionReviewDecision([]byte(`{
+		"allow":false,
+		"confidence":0.87,
+		"summary":"The proposed restart target is not supported by the current snapshot.",
+		"issues":["target evidence is ambiguous"],
+		"checked_at":"2026-06-04T12:00:00Z"
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Allow || decision.Confidence != 0.87 || len(decision.Issues) != 1 {
+		t.Fatalf("decision = %#v", decision)
+	}
+
+	if _, err := ValidateActionReviewDecision([]byte(`{"allow":true,"confidence":2,"summary":"bad","issues":[],"checked_at":"2026-06-04T12:00:00Z"}`)); err == nil {
+		t.Fatal("expected invalid confidence to be rejected")
+	}
+}
+
+func TestBuildActionReviewPromptIncludesReferencesAndCurrentEvidence(t *testing.T) {
+	now := time.Date(2026, 6, 4, 12, 0, 0, 0, time.UTC)
+	prompt := BuildActionReviewPrompt(ActionReviewRequest{
+		ActionID:      "ask_admin_to_restart_container",
+		ActionTitle:   "Restart recommendation",
+		TargetID:      "emby",
+		TargetLabel:   "Emby",
+		CurrentStatus: models.StatusOffline,
+		ActorRole:     models.RoleAdmin,
+		Via:           "agent_plan",
+		References: []ActionReviewReference{
+			{Path: "docs/security.md", Content: "Restart-only repairs must stay approval-gated."},
+		},
+		Snapshot: models.Snapshot{
+			Infrastructure: models.InfrastructureStatus{InternetReachable: true, LastCheckedAt: now},
+			Apps: []models.AppStatus{{
+				AppID:              "emby",
+				DisplayName:        "Emby",
+				CurrentStatus:      models.StatusOffline,
+				AgentRepairAllowed: true,
+			}},
+		},
+	})
+	for _, want := range []string{"ask_admin_to_restart_container", "target_id: emby", "docs/security.md", "Restart-only repairs", "agent_repair_allowed=true"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
 func TestGeneralUserLLMContextDoesNotLeakHiddenAppsOrLogs(t *testing.T) {
 	snapshot, err := fixture.LoadSnapshot("../../fixtures", "llm_context_general_restricted")
 	if err != nil {

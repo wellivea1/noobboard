@@ -88,6 +88,55 @@ func (c AnthropicClient) Diagnose(ctx context.Context, req Request) (Diagnosis, 
 	return diagnosisFromAnthropic(respData)
 }
 
+func (c AnthropicClient) ReviewAction(ctx context.Context, req ActionReviewRequest) (ActionReviewDecision, error) {
+	if c.apiKey == "" {
+		return ActionReviewDecision{}, errors.New("ANTHROPIC_API_KEY is not set")
+	}
+	body := map[string]interface{}{
+		"model":      c.model,
+		"max_tokens": 900,
+		"system":     "You review a proposed NoobBoard repair action. Return only the structured JSON review decision.",
+		"messages": []map[string]interface{}{
+			{"role": "user", "content": BuildActionReviewPrompt(req)},
+		},
+		"tools": []map[string]interface{}{
+			{
+				"name":         "record_action_review",
+				"description":  "Return the final NoobBoard action auto-review decision as structured JSON.",
+				"input_schema": ActionReviewJSONSchema(),
+			},
+		},
+		"tool_choice": map[string]interface{}{
+			"type": "tool",
+			"name": "record_action_review",
+		},
+	}
+	data, err := json.Marshal(body)
+	if err != nil {
+		return ActionReviewDecision{}, err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.anthropic.com/v1/messages", bytes.NewReader(data))
+	if err != nil {
+		return ActionReviewDecision{}, err
+	}
+	httpReq.Header.Set("x-api-key", c.apiKey)
+	httpReq.Header.Set("anthropic-version", "2023-06-01")
+	httpReq.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(httpReq)
+	if err != nil {
+		return ActionReviewDecision{}, err
+	}
+	defer resp.Body.Close()
+	respData, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if err != nil {
+		return ActionReviewDecision{}, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return ActionReviewDecision{}, fmt.Errorf("anthropic action review api returned %d: %s", resp.StatusCode, string(respData))
+	}
+	return actionReviewFromAnthropic(respData)
+}
+
 func diagnosisFromAnthropic(data []byte) (Diagnosis, error) {
 	var raw struct {
 		Content []struct {
@@ -110,4 +159,28 @@ func diagnosisFromAnthropic(data []byte) (Diagnosis, error) {
 		return Diagnosis{}, err
 	}
 	return ValidateDiagnosis([]byte(jsonText))
+}
+
+func actionReviewFromAnthropic(data []byte) (ActionReviewDecision, error) {
+	var raw struct {
+		Content []struct {
+			Type  string          `json:"type"`
+			Name  string          `json:"name"`
+			Input json.RawMessage `json:"input"`
+			Text  string          `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return ActionReviewDecision{}, err
+	}
+	for _, block := range raw.Content {
+		if block.Type == "tool_use" && block.Name == "record_action_review" && len(block.Input) > 0 {
+			return ValidateActionReviewDecision(block.Input)
+		}
+	}
+	jsonText, err := firstJSONString(data)
+	if err != nil {
+		return ActionReviewDecision{}, err
+	}
+	return ValidateActionReviewDecision([]byte(jsonText))
 }

@@ -357,6 +357,64 @@ func TestAdminDiagnoseNormalizesUnknownAgentAction(t *testing.T) {
 	}
 }
 
+func TestAdminDiagnoseKeepsManualRecommendationInformational(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "diagnose-agent-manual-recommendation")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+	cfg.LLM.Provider = "openai"
+	cfg.LLM.OpenAIAuthMethod = config.OpenAIAuthMethodAPIKey
+	cfg.LLM.OpenAIAPIKey = "sk-test-local"
+	cfg.LLM.AgentControlEnabled = true
+
+	app := newTestApp(t, cfg)
+	app.settingsMu.Lock()
+	app.deps.LLM = &recordingLLMClient{
+		diagnosis: llm.Diagnosis{
+			Severity:            models.SeverityMedium,
+			Confidence:          0.82,
+			IncidentType:        models.IncidentAppDown,
+			AffectedServices:    []string{"Emby"},
+			Diagnosis:           "Emby has suspicious logs.",
+			Evidence:            []string{"App is offline."},
+			GeneralUserSummary:  "Emby needs an admin check.",
+			AdminMessage:        "Check Emby logs before taking action.",
+			RecommendedActionID: "ask_admin_to_check_logs",
+			RecommendedTarget:   llm.ActionTarget{Kind: "app", IDOrName: "emby"},
+			ShouldNotifyAdmin:   true,
+		},
+	}
+	app.settingsMu.Unlock()
+
+	router := app.Router()
+	cookie, csrf := loginAdmin(t, router)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/diagnose", strings.NewReader(`{"question":"what is wrong with Emby?"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/admin/diagnose status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var response diagnosisResponse
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.AgentPlan == nil {
+		t.Fatalf("agent_plan missing from response: %s", rec.Body.String())
+	}
+	if !response.AgentPlan.ActionKnown || response.AgentPlan.RecommendedActionID != "ask_admin_to_check_logs" {
+		t.Fatalf("manual recommendation was not preserved as a known action: %#v", response.AgentPlan)
+	}
+	if response.AgentPlan.RequiresAdminApproval || response.AgentPlan.ApprovalToken != "" || response.AgentPlan.CanExecute {
+		t.Fatalf("manual recommendation opened an executable approval path: %#v", response.AgentPlan)
+	}
+	if response.AgentPlan.Status != "not_actionable" {
+		t.Fatalf("manual recommendation status = %q, want not_actionable", response.AgentPlan.Status)
+	}
+}
+
 func TestAgentApprovalEndpointAuditsAndFailsClosed(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Database.Path = serverCacheTestPath(t, "agent-approval-endpoint")
@@ -750,6 +808,128 @@ func TestAgentApprovalExecutesOptedInRestartOnce(t *testing.T) {
 	}
 	if len(tail) == 0 || tail[len(tail)-1].Action != "llm.agent_plan.rate_limited" {
 		t.Fatalf("cooldown refusal was not audited: %#v", tail)
+	}
+}
+
+func TestAgentApprovalAutoReviewDenialBlocksDocker(t *testing.T) {
+	oldDelay := agentRepairVerificationDelay
+	agentRepairVerificationDelay = 0
+	t.Cleanup(func() { agentRepairVerificationDelay = oldDelay })
+	t.Chdir(filepath.Join("..", ".."))
+
+	cfg := config.Defaults()
+	cfg.Database.Path = filepath.Join(t.TempDir(), "dashboard.db.json")
+	cfg.FixtureDir = "fixtures"
+	cfg.LLM.Provider = "openai"
+	cfg.LLM.OpenAIAuthMethod = config.OpenAIAuthMethodAPIKey
+	cfg.LLM.OpenAIAPIKey = "sk-test-local"
+	cfg.LLM.AgentControlEnabled = true
+	cfg.LLM.ActionAutoReviewEnabled = true
+	cfg.LLM.ActionAutoReviewModel = "same"
+	cfg.LLM.ActionAutoReviewReferencePaths = []string{"docs/security.md", "auth.txt", "../README.md"}
+	cfg.AppCatalog.AgentRepairAllowed = map[string]bool{"emby": true}
+
+	app := newTestApp(t, cfg)
+	collector := &recordingDockerCollector{apps: []models.AppStatus{{
+		AppID:                 "emby",
+		DisplayName:           "Emby",
+		ContainerID:           "container:Emby",
+		ContainerName:         "Emby",
+		Category:              "docker",
+		DockerState:           models.DockerExited,
+		CurrentStatus:         models.StatusOffline,
+		VisibleToGeneralUsers: true,
+	}}}
+	app.deps.Collectors.Docker = collector
+	llmClient := &recordingLLMClient{
+		diagnosis: llm.Diagnosis{
+			Severity:            models.SeverityHigh,
+			Confidence:          0.9,
+			IncidentType:        models.IncidentAppDown,
+			AffectedServices:    []string{"Emby"},
+			Diagnosis:           "Emby is down.",
+			Evidence:            []string{"App is offline."},
+			GeneralUserSummary:  "Emby is not working.",
+			AdminMessage:        "Restart Emby once.",
+			RecommendedActionID: "ask_admin_to_restart_container",
+			RecommendedTarget:   llm.ActionTarget{Kind: "app", IDOrName: "emby"},
+			ShouldNotifyAdmin:   true,
+		},
+		reviewDecision: llm.ActionReviewDecision{
+			Allow:      false,
+			Confidence: 0.91,
+			Summary:    "Target evidence is ambiguous.",
+			Issues:     []string{"Reviewer could not confirm the proposed restart from the evidence."},
+			CheckedAt:  time.Now().UTC(),
+		},
+	}
+	app.settingsMu.Lock()
+	app.deps.LLM = llmClient
+	app.settingsMu.Unlock()
+
+	router := app.Router()
+	cookie, csrf := loginAdmin(t, router)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/agent/arm", strings.NewReader(`{"armed":true,"duration_seconds":60}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("arm agent status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/admin/diagnose", strings.NewReader(`{"question":"what is wrong with Emby?"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("diagnose status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var diagnosis diagnosisResponse
+	if err := json.NewDecoder(rec.Body).Decode(&diagnosis); err != nil {
+		t.Fatal(err)
+	}
+	if diagnosis.AgentPlan == nil || !diagnosis.AgentPlan.CanExecute || diagnosis.AgentPlan.ApprovalToken == "" {
+		t.Fatalf("diagnose did not return executable approval plan: %#v", diagnosis.AgentPlan)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/admin/agent/approval", strings.NewReader(fmt.Sprintf(`{"approval_token":%q,"choice":"allow_once"}`, diagnosis.AgentPlan.ApprovalToken)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("auto-review-denied approval status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if collector.callCount != 0 {
+		t.Fatalf("auto-review denial called docker: count=%d", collector.callCount)
+	}
+	if llmClient.reviewCalls != 1 || llmClient.reviewRequest.ActionID != "ask_admin_to_restart_container" || llmClient.reviewRequest.TargetID != "emby" {
+		t.Fatalf("auto-review request was not recorded correctly: calls=%d req=%#v", llmClient.reviewCalls, llmClient.reviewRequest)
+	}
+	if len(llmClient.reviewRequest.References) != 1 || llmClient.reviewRequest.References[0].Path != "docs/security.md" {
+		t.Fatalf("auto-review did not load only safe references: %#v", llmClient.reviewRequest.References)
+	}
+	tail, err := app.deps.Store.AuditTail(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawReviewed, sawRefused bool
+	for _, entry := range tail {
+		if entry.Action == "llm.agent_plan.auto_reviewed" {
+			sawReviewed = true
+		}
+		if entry.Action == "llm.agent_plan.auto_review_refused" {
+			sawRefused = true
+		}
+	}
+	if !sawReviewed || !sawRefused {
+		t.Fatalf("auto-review denial was not audited: %#v", tail)
 	}
 }
 
@@ -2528,10 +2708,14 @@ func (failingUniFiCollector) Status(context.Context) (models.InfrastructureStatu
 }
 
 type recordingLLMClient struct {
-	redactor    *privacy.Redactor
-	diagnosis   llm.Diagnosis
-	request     llm.Request
-	contextText string
+	redactor       *privacy.Redactor
+	diagnosis      llm.Diagnosis
+	request        llm.Request
+	contextText    string
+	reviewDecision llm.ActionReviewDecision
+	reviewErr      error
+	reviewRequest  llm.ActionReviewRequest
+	reviewCalls    int
 }
 
 func (c *recordingLLMClient) Diagnose(_ context.Context, req llm.Request) (llm.Diagnosis, error) {
@@ -2561,11 +2745,38 @@ func (c *recordingLLMClient) Diagnose(_ context.Context, req llm.Request) (llm.D
 	}, nil
 }
 
+func (c *recordingLLMClient) ReviewAction(_ context.Context, req llm.ActionReviewRequest) (llm.ActionReviewDecision, error) {
+	c.reviewRequest = req
+	c.reviewCalls++
+	if c.reviewErr != nil {
+		return llm.ActionReviewDecision{}, c.reviewErr
+	}
+	if c.reviewDecision.Summary != "" {
+		return c.reviewDecision, nil
+	}
+	return llm.ActionReviewDecision{
+		Allow:      true,
+		Confidence: 0.95,
+		Summary:    "Test reviewer allowed the action.",
+		Issues:     nil,
+		CheckedAt:  time.Now().UTC(),
+	}, nil
+}
+
 type usageLimitLLMClient struct{}
 
 func (usageLimitLLMClient) Diagnose(context.Context, llm.Request) (llm.Diagnosis, error) {
 	return llm.Diagnosis{}, &llm.ProviderError{
 		Label:      "openai responses api",
+		StatusCode: http.StatusTooManyRequests,
+		Code:       llm.OpenAIUsageLimitCode,
+		Message:    "OpenAI usage limit reached.",
+	}
+}
+
+func (usageLimitLLMClient) ReviewAction(context.Context, llm.ActionReviewRequest) (llm.ActionReviewDecision, error) {
+	return llm.ActionReviewDecision{}, &llm.ProviderError{
+		Label:      "openai action review api",
 		StatusCode: http.StatusTooManyRequests,
 		Code:       llm.OpenAIUsageLimitCode,
 		Message:    "OpenAI usage limit reached.",

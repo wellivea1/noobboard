@@ -353,11 +353,13 @@ locked.
 - Codex: approval modes + sandbox + turn limits — adopt the approval-mode UX and turn
   budget; skip the general shell sandbox.
 
-OpenCode auto-review package note: useful for a future reviewer-model workflow because it
-deduplicates reviewed turns, skips child/review-loop sessions, and asks a different model
-family for PASS/FAIL/UNKNOWN evidence. It is not a NoobBoard action-control
-implementation. Its examples use `gpt-5.5` with `xhigh` reasoning; this is not proof that
-Codex auto-review uses "5.4 Thinking".
+OpenCode auto-review package note: useful as the reviewer-model workflow reference because
+it deduplicates reviewed turns, skips child/review-loop sessions, and asks a different
+model family for PASS/FAIL/UNKNOWN evidence. NoobBoard's implementation only copies the
+configurable separate-review idea: it reviews a concrete restart approval request against
+redacted status and allowlisted reference docs, then fails closed before Docker if the
+reviewer denies or errors. Its examples use `gpt-5.5` with `xhigh` reasoning; this is not
+proof that Codex auto-review uses "5.4 Thinking".
 
 **Likely files:** new `internal/llm/agent.go` (runner + tool schema), `internal/llm/
 schema.go` (tool-call validation), `internal/server/server.go` (arming + run endpoints,
@@ -368,8 +370,8 @@ the repair capability changes.
 ### Acceptance criteria
 - [ ] Part 1: roles/limits/provider/model are configurable from a structured UI; redaction
       and role scoping are provably unchanged.
-- [ ] Part 1: LLM settings show an agent-readiness/approval section that distinguishes
-      active read-only tools from the planned approval popup, auto-review, and auto-action modes.
+- [x] Part 1: LLM settings show an agent-readiness/approval section that distinguishes
+      active read-only tools, the approval popup, optional auto-review, and future auto-action mode.
 - [x] Part 2 first slice: restart repair is off by default per app; enabling execution
       requires both `agent_control_enabled` and an explicit in-app arm step.
 - [x] Restart approval is schema-validated, restricted to the restart allowlist, single-use,

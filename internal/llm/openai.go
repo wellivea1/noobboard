@@ -98,8 +98,66 @@ func (c OpenAIClient) Diagnose(ctx context.Context, req Request) (Diagnosis, err
 	return runOpenAIResponsesDiagnosis(ctx, c.http, "https://api.openai.com/v1/responses", headers, c.model, contextText, req, c.builder.redactor, "openai responses api", openAIResponsesOptions{})
 }
 
+func (c OpenAIClient) ReviewAction(ctx context.Context, req ActionReviewRequest) (ActionReviewDecision, error) {
+	if c.apiKey == "" {
+		return ActionReviewDecision{}, errors.New("OPENAI_API_KEY is not set")
+	}
+	headers := http.Header{}
+	headers.Set("Authorization", "Bearer "+c.apiKey)
+	prompt := BuildActionReviewPrompt(req)
+	data, err := openAIActionReviewBody(c.model, prompt, openAIResponsesOptions{ReasoningEffort: openAIReviewReasoning(req.Reasoning)})
+	if err != nil {
+		return ActionReviewDecision{}, err
+	}
+	respData, err := postOpenAIResponses(ctx, c.http, "https://api.openai.com/v1/responses", headers, data, "openai action review api", openAIResponsesOptions{})
+	if err != nil {
+		return ActionReviewDecision{}, err
+	}
+	return actionReviewFromResponsesBody(respData)
+}
+
 func openAIResponsesBody(model, contextText string) ([]byte, error) {
 	return openAIResponsesBodyWithInput(model, BuildPrompt(contextText), []interface{}{}, openAIResponsesOptions{})
+}
+
+func openAIActionReviewBody(model, prompt string, opts openAIResponsesOptions) ([]byte, error) {
+	body := map[string]interface{}{
+		"model":        model,
+		"instructions": "You review a proposed NoobBoard repair action. Return only the structured JSON review decision.",
+		"input":        prompt,
+		"text": map[string]interface{}{
+			"format": map[string]interface{}{
+				"type":   "json_schema",
+				"name":   "noobboard_action_review",
+				"strict": true,
+				"schema": ActionReviewJSONSchema(),
+			},
+		},
+	}
+	if opts.ReasoningEffort != "" {
+		body["reasoning"] = map[string]interface{}{"effort": opts.ReasoningEffort}
+	}
+	if opts.IncludeEncryptedReasoning {
+		body["include"] = []string{"reasoning.encrypted_content"}
+	}
+	if opts.StoreFalse {
+		body["store"] = false
+	}
+	if opts.Stream {
+		body["stream"] = true
+	}
+	return json.Marshal(body)
+}
+
+func openAIReviewReasoning(value string) string {
+	switch strings.TrimSpace(value) {
+	case "low", "medium", "high":
+		return strings.TrimSpace(value)
+	case "xhigh":
+		return "high"
+	default:
+		return ""
+	}
 }
 
 func openAIResponsesBodyWithInput(model string, input interface{}, tools []interface{}, opts openAIResponsesOptions) ([]byte, error) {
@@ -444,4 +502,12 @@ func diagnosisFromResponsesBody(respData []byte) (Diagnosis, error) {
 		return Diagnosis{}, err
 	}
 	return ValidateDiagnosis([]byte(jsonText))
+}
+
+func actionReviewFromResponsesBody(respData []byte) (ActionReviewDecision, error) {
+	jsonText, err := firstJSONString(respData)
+	if err != nil {
+		return ActionReviewDecision{}, err
+	}
+	return ValidateActionReviewDecision([]byte(jsonText))
 }

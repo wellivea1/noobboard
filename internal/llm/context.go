@@ -34,6 +34,7 @@ type Request struct {
 
 type Client interface {
 	Diagnose(context.Context, Request) (Diagnosis, error)
+	ReviewAction(context.Context, ActionReviewRequest) (ActionReviewDecision, error)
 }
 
 type ContextBuilder struct {
