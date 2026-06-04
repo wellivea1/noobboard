@@ -80,10 +80,11 @@ type PrivacyConfig struct {
 }
 
 type AppCatalogConfig struct {
-	IconOverrides              map[string]string `json:"icon_overrides"`
-	AgentRepairAllowed         map[string]bool   `json:"agent_repair_allowed,omitempty"`
-	GeneralUserRestartsEnabled bool              `json:"general_user_restarts_enabled,omitempty"`
-	RestartAllowedGeneralUser  map[string]bool   `json:"restart_allowed_general_user,omitempty"`
+	IconOverrides                map[string]string `json:"icon_overrides"`
+	AgentRepairAllowed           map[string]bool   `json:"agent_repair_allowed,omitempty"`
+	GeneralUserRestartsEnabled   bool              `json:"general_user_restarts_enabled,omitempty"`
+	GeneralUserAutoRepairEnabled bool              `json:"general_user_auto_repair_enabled,omitempty"`
+	RestartAllowedGeneralUser    map[string]bool   `json:"restart_allowed_general_user,omitempty"`
 }
 
 type NotificationConfig struct {
@@ -995,6 +996,8 @@ func applyConfigKey(cfg *Config, section, key, value string) {
 		cfg.AppCatalog.AgentRepairAllowed = splitBoolMap(value)
 	case "app_catalog.general_user_restarts_enabled":
 		cfg.AppCatalog.GeneralUserRestartsEnabled = parseBool(value)
+	case "app_catalog.general_user_auto_repair_enabled":
+		cfg.AppCatalog.GeneralUserAutoRepairEnabled = parseBool(value)
 	case "app_catalog.restart_allowed_general_user":
 		cfg.AppCatalog.RestartAllowedGeneralUser = splitBoolMap(value)
 	case "integrations.mode":

@@ -318,6 +318,10 @@ by the per-app/global repair limits. The server verifies the target after restar
 reports the outcome back to chat. Autonomous diagnosis repair additionally requires
 `agent_auto_repair_enabled=true`, `action_auto_review_enabled=true`, an enabled admin
 session, a non-online app target, and reviewer approval before Docker is called.
+The standard-user side now has a separate permanent app setting: direct Start/Restart/Stop
+buttons and diagnosis auto-fix can run only for apps opted in with the standard-user
+app-control setting, with `general_user_auto_repair_enabled=true` required before diagnosis
+can auto-start or auto-restart anything.
 
 **Design, grounded in the references:**
 - **Read-only live API tools (implemented first).** Admin-requested diagnosis can opt into
@@ -383,6 +387,7 @@ the repair capability changes.
 - [x] Current `propose` mode requires per-action confirmation through the admin
       approval popup.
 - [x] `auto` mode honors the allowlist, reviewer gate, rate limits, session enablement, and kill switch.
+- [x] General-user diagnosis can auto-start or auto-restart an opted-in app through a permanent setting, without using the admin session gate.
 - [x] Redaction failures and invalid tool calls fail closed (no action taken).
 - [x] `docs/llm-policy.md` and `docs/security.md` updated to reflect the new capability.
 - [x] `go test ./...`, build, and `cmd/visualcheck` all pass for this repair slice.

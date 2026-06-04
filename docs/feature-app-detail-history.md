@@ -612,7 +612,9 @@ executed as a command.
   shared repair cooldown/rate-limit and verifies the result.
   **Update:** the same backward-compatible opt-in now gates compact Start,
   Restart, and Stop controls through `POST /api/user/apps/{id}/action`; the
-  restart endpoint remains as a compatibility alias.
+  restart endpoint remains as a compatibility alias. A separate
+  `general_user_auto_repair_enabled` switch lets standard-user diagnosis auto-start
+  or auto-restart that same opted-in app through the shared server-side safety path.
 - **GR3 - Tests, `/security-review`, docs, harness:** backend tests now cover
   general-user repair requests, direct restart success, and refusal for
   non-opted-in/hidden/blacklisted/online apps; `security.md` and

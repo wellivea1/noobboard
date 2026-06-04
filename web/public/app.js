@@ -1474,7 +1474,7 @@ async function runUserAppAction(app, action, button = null) {
   const appID = app?.app_id || "";
   const label = appDisplayName(app);
   const actionName = String(action || "").trim().toLowerCase();
-  const actionLabel = actionName ? actionName[0].toUpperCase() + actionName.slice(1) : "Control";
+  const actionLabel = userAppActionLabel(actionName);
   if (!appID) {
     showNotice("App id is required.", "error");
     return;
@@ -1507,6 +1507,32 @@ async function runUserAppAction(app, action, button = null) {
       button.disabled = false;
       button.textContent = original;
     }
+  }
+}
+
+function userAppActionLabel(action) {
+  switch (String(action || "").trim().toLowerCase()) {
+    case "start":
+      return "Start";
+    case "stop":
+      return "Stop";
+    case "restart":
+      return "Restart";
+    default:
+      return "Control";
+  }
+}
+
+function directActionPastTense(action) {
+  switch (String(action || "").trim().toLowerCase()) {
+    case "start":
+      return "started";
+    case "stop":
+      return "stopped";
+    case "restart":
+      return "restarted";
+    default:
+      return "changed";
   }
 }
 
@@ -2332,11 +2358,19 @@ async function runDiagnosis(question, output, options = {}) {
       );
       maybeOpenAgentApprovalDialog(result.agent_plan);
     } else {
+      const userPlanNodes = [];
+      if (result.agent_plan?.auto_repair_attempted) {
+        userPlanNodes.push(renderAgentPlanPrompt(result.agent_plan));
+        if (!result.agent_plan.auto_executed && result.agent_plan.can_request_repair) userPlanNodes.push(renderUserRepairRequestPrompt(result.agent_plan, result));
+      } else if (result.agent_plan?.can_request_repair) {
+        userPlanNodes.push(renderUserRepairRequestPrompt(result.agent_plan, result));
+      }
+      const autoFixed = !!(result.agent_plan?.auto_executed && result.agent_plan?.outcome?.recovered);
       output.replaceChildren(
         node("strong", { text: "Answer" }),
         node("p", { text: result.general_user_summary || result.diagnosis || "I could not find a clear answer." }),
-        result.agent_plan?.can_request_repair ? renderUserRepairRequestPrompt(result.agent_plan, result) : null,
-        result.should_notify_admin ? node("p", { class: "muted", text: "Tell the admin if you need this fixed." }) : null,
+        ...userPlanNodes,
+        result.should_notify_admin && !autoFixed ? node("p", { class: "muted", text: "Tell the admin if you need this fixed." }) : null,
       );
     }
     showNotice("Diagnosis completed.");
@@ -2380,7 +2414,7 @@ function renderAgentPlanPrompt(plan) {
 
 function agentPlanStatusText(plan) {
   if (plan?.auto_executed && plan?.outcome?.recovered) return "Fixed";
-  if (plan?.auto_executed) return "Restart sent";
+  if (plan?.auto_executed) return `${userAppActionLabel(plan?.outcome?.action || plan?.direct_action || "restart")} sent`;
   switch (plan?.status) {
     case "approval_ready":
       return "Ready";
@@ -2410,26 +2444,28 @@ function renderUserRepairRequestPrompt(plan, diagnosis = {}) {
   const target = plan?.target || {};
   if (!plan?.can_request_repair || !target.id) return null;
   const label = target.label || target.id;
-  const directRestart = !!plan.can_execute;
+  const directAction = String(plan.direct_action || "restart").trim().toLowerCase();
+  const directActionLabel = userAppActionLabel(directAction);
+  const directActionAvailable = !!plan.can_execute;
   return node("section", { class: "agent-plan-prompt user-repair-prompt" },
     node("div", { class: "agent-plan-head" },
       node("span", {},
-        node("strong", { text: directRestart ? "Restart this app" : "Ask admin to fix this" }),
-        node("small", { text: directRestart ? `${label} can be restarted from here.` : `${label} can be sent to an admin for review.` }),
+        node("strong", { text: directActionAvailable ? `${directActionLabel} this app` : "Ask admin to fix this" }),
+        node("small", { text: directActionAvailable ? `${label} can be ${directActionPastTense(directAction)} from here.` : `${label} can be sent to an admin for review.` }),
       ),
-      node("span", { class: `settings-state-pill ${directRestart ? "state-ok" : "state-warn"}`, text: directRestart ? "Ready" : "Admin review" }),
+      node("span", { class: `settings-state-pill ${directActionAvailable ? "state-ok" : "state-warn"}`, text: directActionAvailable ? "Ready" : "Admin review" }),
     ),
     node("div", { class: "agent-plan-actions" },
-      directRestart ? node("button", {
+      directActionAvailable ? node("button", {
         type: "button",
         class: "primary command",
-        "data-glyph": "r",
-        onclick: (event) => runUserAppRestart({ app_id: target.id, display_name: label }, event.currentTarget),
-        text: "Restart now",
+        "data-glyph": directAction === "start" ? ">" : "r",
+        onclick: (event) => runUserAppAction({ app_id: target.id, display_name: label }, directAction, event.currentTarget),
+        text: `${directActionLabel} now`,
       }) : null,
       node("button", {
         type: "button",
-        class: directRestart ? "command" : "primary command",
+        class: directActionAvailable ? "command" : "primary command",
         "data-glyph": "!",
         onclick: (event) => requestAdminRepair(plan, diagnosis, event.currentTarget),
         text: "Ask admin",
@@ -2550,7 +2586,7 @@ function normalizeAgentApprovalOptions(plan) {
       description: "Permit this single fix attempt.",
       enabled: !!plan?.can_execute,
       selected: false,
-      reason: plan?.can_execute ? "" : "Enable fixes for this session and turn on automatic repair for the target app first.",
+      reason: plan?.can_execute ? "" : "Enable fixes for this session and turn on admin/AI restart for the target app first.",
     },
   ];
 }
@@ -3635,6 +3671,7 @@ function renderAppImageSettings(item, data) {
   const overrides = { ...(data?.icon_overrides || {}) };
   const repairAllowed = { ...(data?.agent_repair_allowed || {}) };
   const userRestartEnabled = settingToggle("Allow standard-user app controls", !!data?.general_user_restarts_enabled);
+  const userAutoRepairEnabled = settingToggle("Allow standard-user automatic fixes", !!data?.general_user_auto_repair_enabled);
   const userRestartAllowed = { ...(data?.restart_allowed_general_user || {}) };
   const apps = state.snapshot?.apps || [];
   const appRows = [];
@@ -3692,8 +3729,8 @@ function renderAppImageSettings(item, data) {
   const body = node("div", { class: "settings-form" },
     node("section", { class: "settings-subsection" },
       node("h4", { text: "Standard-user app controls" }),
-      userRestartEnabled.element,
-      node("p", { class: "muted", text: "When enabled, only apps with the per-app user-control toggle can show compact-view Start, Restart, and Stop buttons." }),
+      node("div", { class: "settings-toggle-grid" }, userRestartEnabled.element, userAutoRepairEnabled.element),
+      node("p", { class: "muted", text: "When app controls are enabled, only apps with the per-app user-control toggle can show compact-view Start, Restart, and Stop buttons. Automatic fixes let standard-user diagnosis start or restart an opted-in app without an admin session." }),
     ),
     node("section", { class: "settings-subsection" },
       node("h4", { text: "Known apps" }),
@@ -3732,6 +3769,7 @@ function renderAppImageSettings(item, data) {
       icon_overrides,
       agent_repair_allowed,
       general_user_restarts_enabled: userRestartEnabled.input.checked,
+      general_user_auto_repair_enabled: userAutoRepairEnabled.input.checked,
       restart_allowed_general_user,
     }, status);
   });

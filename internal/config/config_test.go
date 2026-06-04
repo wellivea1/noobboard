@@ -137,6 +137,7 @@ func TestLoadParsesAppCatalogRepairFlags(t *testing.T) {
 app_catalog:
   agent_repair_allowed: emby;plex
   general_user_restarts_enabled: true
+  general_user_auto_repair_enabled: true
   restart_allowed_general_user: emby,jellyfin
 `), 0o600); err != nil {
 		t.Fatal(err)
@@ -151,6 +152,9 @@ app_catalog:
 	}
 	if !cfg.AppCatalog.GeneralUserRestartsEnabled {
 		t.Fatalf("general-user restart switch was not parsed: %#v", cfg.AppCatalog)
+	}
+	if !cfg.AppCatalog.GeneralUserAutoRepairEnabled {
+		t.Fatalf("general-user auto repair switch was not parsed: %#v", cfg.AppCatalog)
 	}
 	if !cfg.AppCatalog.RestartAllowedGeneralUser["emby"] || !cfg.AppCatalog.RestartAllowedGeneralUser["jellyfin"] {
 		t.Fatalf("general-user restart flags were not parsed: %#v", cfg.AppCatalog.RestartAllowedGeneralUser)
