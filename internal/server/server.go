@@ -1363,6 +1363,7 @@ func (a *App) diagnose(w http.ResponseWriter, r *http.Request, mode llm.Mode, ro
 	response := diagnosisResponse{Diagnosis: diagnosis}
 	if mode == llm.ModeAdminRequested && role == models.RoleAdmin {
 		response.AgentPlan = a.llmAgentPlanResponse(diagnosis, full, mustUser(r).ID, mustSession(r))
+		a.maybeExecuteAgentAutoRepair(r.Context(), mustUser(r), mustSession(r), full, response.AgentPlan)
 	} else if mode == llm.ModeGeneralUserRequested {
 		filtered := privacy.FilterSnapshotForRole(full, role, a.redactorSnapshot())
 		response.AgentPlan = a.llmUserRepairPlanResponse(diagnosis, filtered)
@@ -1438,6 +1439,127 @@ func (a *App) llmAgentPlanResponse(diagnosis llm.Diagnosis, snapshot models.Snap
 		})
 	}
 	return response
+}
+
+func (a *App) maybeExecuteAgentAutoRepair(ctx context.Context, actor users.User, sess session, snapshot models.Snapshot, plan *llmAgentPlanView) {
+	if plan == nil || !plan.RequiresAdminApproval || !plan.CanExecute {
+		return
+	}
+	a.settingsMu.RLock()
+	cfg := a.deps.Config.LLM
+	redactor := a.deps.Redactor
+	a.settingsMu.RUnlock()
+	if !cfg.AgentAutoRepairEnabled || !cfg.ActionAutoReviewEnabled {
+		return
+	}
+	armed, armedUntil := agentSessionArmed(cfg, sess)
+	action, ok := agentActionDefinition(plan.RecommendedActionID)
+	if !ok || !action.Executable || action.DockerAction != docker.ActionRestart || plan.Target.Kind != "app" || !plan.Target.Resolved {
+		return
+	}
+	status, canExecute, reason := a.agentPlanExecutionState(action, plan.Target, snapshot, cfg, redactor, armed)
+	if !canExecute {
+		return
+	}
+	app, ok := findAppByID(snapshot.Apps, plan.Target.ID)
+	if !ok {
+		return
+	}
+	if currentStatusOrUnknown(app.CurrentStatus) == models.StatusOnline {
+		return
+	}
+	details := map[string]interface{}{
+		"plan_id":                 plan.ID,
+		"recommended_action_id":   action.ID,
+		"target_kind":             plan.Target.Kind,
+		"target_id":               plan.Target.ID,
+		"app_id":                  app.AppID,
+		"container_name":          app.ContainerName,
+		"docker_action":           string(action.DockerAction),
+		"agent_armed":             armed,
+		"agent_armed_until":       armedUntil,
+		"can_execute":             canExecute,
+		"pre_execution_status":    status,
+		"pre_execution_reason":    reason,
+		"current_status":          string(currentStatusOrUnknown(app.CurrentStatus)),
+		"action_auto_review_used": true,
+	}
+	reviewDecision, reviewEnabled, err := a.reviewAgentAction(ctx, actor, snapshot, app, action, "agent_auto_repair")
+	if reviewEnabled {
+		details["auto_review_allow"] = reviewDecision.Allow
+		details["auto_review_confidence"] = reviewDecision.Confidence
+		details["auto_review_summary"] = reviewDecision.Summary
+	}
+	if err != nil {
+		details["reason"] = "auto_review_refused"
+		details["error"] = err.Error()
+		a.deps.Audit.Record(actor.ID, "llm.agent_auto_repair.auto_review_refused", auditDetailsCopy(details))
+		markAgentPlanAutoRepairRefused(plan, "auto_review_refused", err.Error())
+		return
+	}
+	limit := a.reserveAgentRepair(app.AppID, time.Now().UTC())
+	if !limit.Allowed {
+		details["reason"] = limit.Reason
+		details["retry_after_seconds"] = limit.RetryAfterSeconds
+		a.deps.Audit.Record(actor.ID, "llm.agent_auto_repair.rate_limited", auditDetailsCopy(details))
+		markAgentPlanAutoRepairRefused(plan, "approval_rate_limited", limit.Message)
+		return
+	}
+	a.deps.Audit.Record(actor.ID, "llm.agent_auto_repair.approved", auditDetailsCopy(details))
+	result, err := a.deps.Collectors.Docker.ControlContainer(ctx, app, action.DockerAction)
+	if err != nil {
+		details["error"] = err.Error()
+		a.deps.Audit.Record(actor.ID, "llm.agent_auto_repair.execute_failed", auditDetailsCopy(details))
+		markAgentPlanAutoRepairRefused(plan, "auto_execute_failed", err.Error())
+		return
+	}
+	details["via"] = "agent_auto_repair"
+	a.invalidateSnapshot()
+	a.deps.Audit.Record(actor.ID, "llm.agent_auto_repair.executed", auditDetailsCopy(details))
+	a.deps.Audit.Record(actor.ID, "app.container.action", map[string]interface{}{"app_id": app.AppID, "action": string(action.DockerAction), "container_name": app.ContainerName, "via": "agent_auto_repair", "plan_id": plan.ID, "recommended_action_id": action.ID})
+	outcome := a.verifyAgentRepairOutcome(ctx, app, action, result)
+	verifyDetails := auditDetailsCopy(details)
+	verifyDetails["verified"] = outcome.Verified
+	verifyDetails["recovered"] = outcome.Recovered
+	verifyDetails["before_status"] = string(outcome.BeforeStatus)
+	verifyDetails["after_status"] = string(outcome.AfterStatus)
+	verifyDetails["history_event_id"] = outcome.HistoryEventID
+	if outcome.Verified {
+		a.deps.Audit.Record(actor.ID, "llm.agent_auto_repair.verified", verifyDetails)
+	} else {
+		a.deps.Audit.Record(actor.ID, "llm.agent_auto_repair.verify_failed", verifyDetails)
+	}
+	plan.AutoRepairAttempted = true
+	plan.AutoExecuted = true
+	plan.AutoRepairMessage = outcome.Message
+	plan.Outcome = &outcome
+	plan.Status = "auto_executed"
+	plan.CanExecute = false
+	plan.RequiresAdminApproval = false
+	plan.ApprovalToken = ""
+	plan.ApprovalExpiresAt = time.Time{}
+	disableAgentPlanAllowOption(plan, outcome.Message)
+}
+
+func markAgentPlanAutoRepairRefused(plan *llmAgentPlanView, status, message string) {
+	plan.AutoRepairAttempted = true
+	plan.AutoRepairMessage = strings.TrimSpace(message)
+	plan.Status = status
+	plan.CanExecute = false
+	plan.RequiresAdminApproval = false
+	plan.ApprovalToken = ""
+	plan.ApprovalExpiresAt = time.Time{}
+	disableAgentPlanAllowOption(plan, plan.AutoRepairMessage)
+}
+
+func disableAgentPlanAllowOption(plan *llmAgentPlanView, reason string) {
+	for i := range plan.Options {
+		if plan.Options[i].ID != "allow_once" {
+			continue
+		}
+		plan.Options[i].Enabled = false
+		plan.Options[i].Reason = strings.TrimSpace(reason)
+	}
 }
 
 func (a *App) llmUserRepairPlanResponse(diagnosis llm.Diagnosis, snapshot models.Snapshot) *llmAgentPlanView {
@@ -3126,6 +3248,7 @@ type llmSettingsView struct {
 	AnthropicAPIKeySet             bool                        `json:"anthropic_api_key_set"`
 	Timeout                        time.Duration               `json:"timeout"`
 	AgentControlEnabled            bool                        `json:"agent_control_enabled"`
+	AgentAutoRepairEnabled         bool                        `json:"agent_auto_repair_enabled"`
 	AgentArmDuration               time.Duration               `json:"agent_arm_duration"`
 	ActionAutoReviewEnabled        bool                        `json:"action_auto_review_enabled"`
 	ActionAutoReviewModel          string                      `json:"action_auto_review_model"`
@@ -3139,6 +3262,7 @@ type llmAgentReadinessView struct {
 	ReadOnlyToolsAvailable bool                         `json:"read_only_tools_available"`
 	MutatingToolsAvailable bool                         `json:"mutating_tools_available"`
 	AgentControlEnabled    bool                         `json:"agent_control_enabled"`
+	AgentAutoRepairEnabled bool                         `json:"agent_auto_repair_enabled"`
 	AgentArmed             bool                         `json:"agent_armed"`
 	AgentArmedUntil        time.Time                    `json:"agent_armed_until,omitempty"`
 	AgentArmDuration       time.Duration                `json:"agent_arm_duration"`
@@ -3185,19 +3309,23 @@ type diagnosisResponse struct {
 }
 
 type llmAgentPlanView struct {
-	ID                    string                   `json:"id"`
-	Title                 string                   `json:"title"`
-	Summary               string                   `json:"summary"`
-	RecommendedActionID   string                   `json:"recommended_action_id"`
-	ActionKnown           bool                     `json:"action_known"`
-	ApprovalToken         string                   `json:"approval_token"`
-	ApprovalExpiresAt     time.Time                `json:"approval_expires_at"`
-	RequiresAdminApproval bool                     `json:"requires_admin_approval"`
-	CanExecute            bool                     `json:"can_execute"`
-	CanRequestRepair      bool                     `json:"can_request_repair"`
-	Status                string                   `json:"status"`
-	Target                llmAgentPlanTargetView   `json:"target"`
-	Options               []llmAgentPlanOptionView `json:"options"`
+	ID                    string                     `json:"id"`
+	Title                 string                     `json:"title"`
+	Summary               string                     `json:"summary"`
+	RecommendedActionID   string                     `json:"recommended_action_id"`
+	ActionKnown           bool                       `json:"action_known"`
+	ApprovalToken         string                     `json:"approval_token"`
+	ApprovalExpiresAt     time.Time                  `json:"approval_expires_at"`
+	RequiresAdminApproval bool                       `json:"requires_admin_approval"`
+	CanExecute            bool                       `json:"can_execute"`
+	CanRequestRepair      bool                       `json:"can_request_repair"`
+	AutoRepairAttempted   bool                       `json:"auto_repair_attempted,omitempty"`
+	AutoExecuted          bool                       `json:"auto_executed,omitempty"`
+	AutoRepairMessage     string                     `json:"auto_repair_message,omitempty"`
+	Status                string                     `json:"status"`
+	Target                llmAgentPlanTargetView     `json:"target"`
+	Options               []llmAgentPlanOptionView   `json:"options"`
+	Outcome               *llmAgentRepairOutcomeView `json:"outcome,omitempty"`
 }
 
 type llmAgentPlanTargetView struct {
@@ -3256,6 +3384,7 @@ type llmSettingsUpdate struct {
 	ClearAnthropicAPIKey           bool                        `json:"clear_anthropic_api_key"`
 	Timeout                        *time.Duration              `json:"timeout"`
 	AgentControlEnabled            *bool                       `json:"agent_control_enabled"`
+	AgentAutoRepairEnabled         *bool                       `json:"agent_auto_repair_enabled"`
 	AgentArmDuration               *time.Duration              `json:"agent_arm_duration"`
 	ActionAutoReviewEnabled        *bool                       `json:"action_auto_review_enabled"`
 	ActionAutoReviewModel          *string                     `json:"action_auto_review_model"`
@@ -3328,6 +3457,7 @@ func llmSettingsResponse(cfg config.LLMConfig, sess session) llmSettingsView {
 		AnthropicAPIKeySet:             strings.TrimSpace(cfg.AnthropicAPIKey) != "",
 		Timeout:                        cfg.Timeout,
 		AgentControlEnabled:            cfg.AgentControlEnabled,
+		AgentAutoRepairEnabled:         cfg.AgentAutoRepairEnabled,
 		AgentArmDuration:               cfg.AgentArmDuration,
 		ActionAutoReviewEnabled:        cfg.ActionAutoReviewEnabled,
 		ActionAutoReviewModel:          firstNonEmpty(strings.TrimSpace(cfg.ActionAutoReviewModel), "same"),
@@ -3355,6 +3485,7 @@ func llmAgentReadinessResponse(cfg config.LLMConfig, sess session) llmAgentReadi
 		ReadOnlyToolsAvailable: true,
 		MutatingToolsAvailable: true,
 		AgentControlEnabled:    cfg.AgentControlEnabled,
+		AgentAutoRepairEnabled: cfg.AgentAutoRepairEnabled,
 		AgentArmed:             armed,
 		AgentArmedUntil:        armedUntil,
 		AgentArmDuration:       cfg.AgentArmDuration,
@@ -3389,9 +3520,9 @@ func llmAgentReadinessResponse(cfg config.LLMConfig, sess session) llmAgentReadi
 			{
 				ID:          "auto_action",
 				Label:       "Auto action",
-				Status:      "blocked",
-				Enabled:     false,
-				Description: "Future mode: autonomous action remains blocked; current repair requires a per-action admin approval.",
+				Status:      agentAutoActionStatus(cfg, armed),
+				Enabled:     cfg.AgentAutoRepairEnabled,
+				Description: "When enabled and armed, NoobBoard may run one reviewer-approved restart for a non-online opted-in app without opening the approval popup.",
 			},
 		},
 		OpenCodeAutoReview: llmOpenCodeAutoReviewSummary{
@@ -3402,9 +3533,25 @@ func llmAgentReadinessResponse(cfg config.LLMConfig, sess session) llmAgentReadi
 			Reasoning:           strings.TrimSpace(cfg.ActionAutoReviewReasoning),
 			ReferenceCount:      len(cfg.ActionAutoReviewReferencePaths),
 			ModelFinding:        "The OpenCode reference uses a configurable reviewer model and prefers cross-model review when auto-selecting.",
-			DesignFinding:       "NoobBoard uses the same idea as an optional fail-closed action gate with local reference docs, not as an autonomous execution path.",
+			DesignFinding:       "NoobBoard uses the same idea as a fail-closed action gate for approval and manually enabled autonomous restart repair.",
 		},
 	}
+}
+
+func agentAutoActionStatus(cfg config.LLMConfig, armed bool) string {
+	if !cfg.AgentAutoRepairEnabled {
+		return "locked"
+	}
+	if !cfg.AgentControlEnabled {
+		return "locked"
+	}
+	if !cfg.ActionAutoReviewEnabled {
+		return "review_required"
+	}
+	if armed {
+		return "armed"
+	}
+	return "planned"
 }
 
 func actionAutoReviewStatus(cfg config.LLMConfig) string {
@@ -3494,6 +3641,9 @@ func decodeLLMSettingsUpdate(r *http.Request, current config.LLMConfig) (config.
 	}
 	if update.AgentControlEnabled != nil {
 		settings.AgentControlEnabled = *update.AgentControlEnabled
+	}
+	if update.AgentAutoRepairEnabled != nil {
+		settings.AgentAutoRepairEnabled = *update.AgentAutoRepairEnabled
 	}
 	if update.AgentArmDuration != nil {
 		settings.AgentArmDuration = *update.AgentArmDuration

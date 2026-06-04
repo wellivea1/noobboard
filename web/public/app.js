@@ -2303,7 +2303,8 @@ async function runDiagnosis(question, output, options = {}) {
 
 function renderAgentPlanPrompt(plan) {
   const requiresApproval = !!plan.requires_admin_approval;
-  const statusText = plan.can_execute ? "Ready" : plan.status === "approval_needs_arm" ? "Arm first" : "Fix locked";
+  const statusText = agentPlanStatusText(plan);
+  const statusTone = agentPlanStatusTone(plan);
   const targetText = agentPlanTargetText(plan);
   return node("section", { class: "agent-plan-prompt" },
     node("div", { class: "agent-plan-head" },
@@ -2312,8 +2313,10 @@ function renderAgentPlanPrompt(plan) {
         node("small", { text: plan.summary || "Review the model recommendation before allowing any action." }),
         targetText ? node("small", { text: targetText }) : null,
       ),
-      node("span", { class: `settings-state-pill ${plan.can_execute ? "state-warn" : "state-muted"}`, text: statusText }),
+      node("span", { class: `settings-state-pill ${statusTone}`, text: statusText }),
     ),
+    plan.auto_repair_message ? node("p", { class: "muted", text: plan.auto_repair_message }) : null,
+    plan.outcome ? renderAgentRepairOutcome(plan.outcome) : null,
     requiresApproval ? node("div", { class: "agent-plan-actions" },
       node("button", {
         type: "button",
@@ -2324,6 +2327,34 @@ function renderAgentPlanPrompt(plan) {
       }),
     ) : null,
   );
+}
+
+function agentPlanStatusText(plan) {
+  if (plan?.auto_executed && plan?.outcome?.recovered) return "Fixed";
+  if (plan?.auto_executed) return "Restart sent";
+  switch (plan?.status) {
+    case "approval_ready":
+      return "Ready";
+    case "approval_needs_arm":
+      return "Arm first";
+    case "approval_rate_limited":
+      return "Limited";
+    case "auto_review_refused":
+      return "Review blocked";
+    case "auto_execute_failed":
+      return "Fix failed";
+    case "target_unresolved":
+      return "No target";
+    default:
+      return plan?.can_execute ? "Ready" : "Fix locked";
+  }
+}
+
+function agentPlanStatusTone(plan) {
+  if (plan?.auto_executed && plan?.outcome?.recovered) return "state-ok";
+  if (plan?.auto_executed || plan?.can_execute || plan?.status === "approval_needs_arm") return "state-warn";
+  if (plan?.status === "auto_review_refused" || plan?.status === "auto_execute_failed") return "state-bad";
+  return "state-muted";
 }
 
 function renderUserRepairRequestPrompt(plan, diagnosis = {}) {
@@ -3694,6 +3725,7 @@ function renderLLMSettings(item, data) {
   const anthropicModel = settingSelectField("Anthropic model", knownModelValue(ANTHROPIC_MODEL_OPTIONS, settings.anthropic_model, "claude-sonnet-4-5"), ANTHROPIC_MODEL_OPTIONS);
   const timeout = durationSecondsField("Timeout", settings.timeout || 45000000000);
   const agentControlEnabled = settingToggle("Enable action approval gate", !!settings.agent_control_enabled);
+  const agentAutoRepairEnabled = settingToggle("Enable autonomous app restart", !!settings.agent_auto_repair_enabled);
   const agentArmDuration = durationSecondsField("Arm window", settings.agent_arm_duration || settings.agent_readiness?.agent_arm_duration || 600000000000);
   const actionAutoReviewEnabled = settingToggle("Require auto-review before fixes", !!settings.action_auto_review_enabled);
   const actionAutoReviewModel = settingSelectField("Auto-review model", settings.action_auto_review_model || "same", actionReviewModelOptions(settings));
@@ -3778,7 +3810,7 @@ function renderLLMSettings(item, data) {
       node("p", { class: "muted", text: "When enabled, NoobBoard asks the selected reviewer model to check the proposed fix against these local reference docs before any approved restart runs." }),
     ),
     renderLLMAgentReadiness(settings.agent_readiness || {}, {
-      controls: [agentControlEnabled.element, agentArmDuration.element],
+      controls: [agentControlEnabled.element, agentAutoRepairEnabled.element, agentArmDuration.element],
     }),
     node("section", { class: "settings-subsection" },
       node("h4", { text: "Who can ask" }),
@@ -3799,6 +3831,7 @@ function renderLLMSettings(item, data) {
       anthropic_model: anthropicModel.input.value.trim(),
       timeout: secondsToDuration(timeout.input.value),
       agent_control_enabled: agentControlEnabled.input.checked,
+      agent_auto_repair_enabled: agentAutoRepairEnabled.input.checked,
       agent_arm_duration: secondsToDuration(agentArmDuration.input.value),
       action_auto_review_enabled: actionAutoReviewEnabled.input.checked,
       action_auto_review_model: actionAutoReviewModel.input.value,
@@ -3858,6 +3891,7 @@ function renderLLMAgentReadiness(readiness, options = {}) {
     : "Off";
   const readOnlyNames = tools.map((tool) => tool.label).filter(Boolean).join(", ");
   const autoReview = modes.find((mode) => mode.id === "auto_review") || {};
+  const autoAction = modes.find((mode) => mode.id === "auto_action") || {};
   const reference = readiness.opencode_auto_review || {};
   const controlEnabled = !!readiness.agent_control_enabled;
   const armed = !!readiness.agent_armed;
@@ -3881,9 +3915,19 @@ function renderLLMAgentReadiness(readiness, options = {}) {
       settingsStatusRow("Action arm", agentArmStatusText(readiness), armed ? "armed" : controlEnabled ? "planned" : "locked", agentArmDetailText(readiness), armAction),
       settingsStatusRow("Automatic fixes", readiness.mutating_tools_available ? "Restart approval available" : "Locked", readiness.mutating_tools_available ? "available" : "locked", readiness.mutating_tools_available ? agentRepairLimitDetail(readiness) : "Chat cannot start, stop, restart, or change infrastructure yet."),
       settingsStatusRow("Auto-review", autoReview.enabled ? "Available" : agentModeStatusText(autoReview.status), autoReview.status || "locked", autoReviewDetail(reference)),
+      settingsStatusRow("Auto action", agentModeStatusText(autoAction.status), autoAction.status || "locked", autoActionDetail(autoAction, readiness)),
     ),
     node("p", { class: "muted agent-reference-note", text: reference.design_finding || "Future repair actions require schema validation, audit policy, and explicit approval." }),
   );
+}
+
+function autoActionDetail(autoAction, readiness) {
+  if (!autoAction?.enabled) return "Off. Diagnosis will propose a fix and use the approval popup.";
+  if (!readiness?.agent_control_enabled) return "Enable the action approval gate first.";
+  const status = String(autoAction.status || "").toLowerCase();
+  if (status === "review_required") return "Requires action auto-review so a separate model can veto the restart.";
+  if (status === "armed") return "Armed for this session. Only non-online opted-in apps can be restarted automatically.";
+  return "Arm this admin session before diagnosis can run an autonomous restart.";
 }
 
 function autoReviewDetail(reference) {
@@ -3972,6 +4016,7 @@ function settingsStateClass(status) {
       return "state-ok";
     case "planned":
     case "armed":
+    case "review_required":
       return "state-warn";
     case "blocked":
     case "locked":
@@ -3989,6 +4034,8 @@ function agentModeStatusText(status) {
       return "Planned";
     case "armed":
       return "Armed";
+    case "review_required":
+      return "Needs review";
     case "blocked":
       return "Locked";
     default:

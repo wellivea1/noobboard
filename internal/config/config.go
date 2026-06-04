@@ -108,6 +108,7 @@ type LLMConfig struct {
 	AnthropicModel                 string                      `json:"anthropic_model"`
 	Timeout                        time.Duration               `json:"timeout"`
 	AgentControlEnabled            bool                        `json:"agent_control_enabled"`
+	AgentAutoRepairEnabled         bool                        `json:"agent_auto_repair_enabled"`
 	AgentArmDuration               time.Duration               `json:"agent_arm_duration"`
 	ActionAutoReviewEnabled        bool                        `json:"action_auto_review_enabled"`
 	ActionAutoReviewModel          string                      `json:"action_auto_review_model,omitempty"`
@@ -714,6 +715,9 @@ func applyEnv(cfg *Config) {
 	if v := envValue("NOOBBOARD_ACTION_AUTO_REVIEW_ENABLED", "HSD_ACTION_AUTO_REVIEW_ENABLED"); v != "" {
 		cfg.LLM.ActionAutoReviewEnabled = parseBool(v)
 	}
+	if v := envValue("NOOBBOARD_AGENT_AUTO_REPAIR_ENABLED", "HSD_AGENT_AUTO_REPAIR_ENABLED"); v != "" {
+		cfg.LLM.AgentAutoRepairEnabled = parseBool(v)
+	}
 	if v := envValue("NOOBBOARD_ACTION_AUTO_REVIEW_MODEL", "HSD_ACTION_AUTO_REVIEW_MODEL"); v != "" {
 		cfg.LLM.ActionAutoReviewModel = v
 	}
@@ -979,6 +983,8 @@ func applyConfigKey(cfg *Config, section, key, value string) {
 		cfg.LLM.AnthropicModel = value
 	case "llm.action_auto_review_enabled":
 		cfg.LLM.ActionAutoReviewEnabled = parseBool(value)
+	case "llm.agent_auto_repair_enabled":
+		cfg.LLM.AgentAutoRepairEnabled = parseBool(value)
 	case "llm.action_auto_review_model":
 		cfg.LLM.ActionAutoReviewModel = value
 	case "llm.action_auto_review_reasoning":

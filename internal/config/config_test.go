@@ -219,6 +219,7 @@ func TestNoobBoardEnvOverridesAndLegacyAliases(t *testing.T) {
 
 func TestActionAutoReviewConfigParsing(t *testing.T) {
 	t.Setenv("NOOBBOARD_ACTION_AUTO_REVIEW_ENABLED", "true")
+	t.Setenv("NOOBBOARD_AGENT_AUTO_REPAIR_ENABLED", "true")
 	t.Setenv("NOOBBOARD_ACTION_AUTO_REVIEW_MODEL", "anthropic/claude-sonnet-4-5")
 	t.Setenv("NOOBBOARD_ACTION_AUTO_REVIEW_REASONING", "high")
 	t.Setenv("NOOBBOARD_ACTION_AUTO_REVIEW_REFERENCES", "docs/security.md,AGENTS.md")
@@ -226,6 +227,7 @@ func TestActionAutoReviewConfigParsing(t *testing.T) {
 	cfg := Defaults()
 	applyEnv(&cfg)
 	if !cfg.LLM.ActionAutoReviewEnabled ||
+		!cfg.LLM.AgentAutoRepairEnabled ||
 		cfg.LLM.ActionAutoReviewModel != "anthropic/claude-sonnet-4-5" ||
 		cfg.LLM.ActionAutoReviewReasoning != "high" ||
 		len(cfg.LLM.ActionAutoReviewReferencePaths) != 2 ||
@@ -234,7 +236,7 @@ func TestActionAutoReviewConfigParsing(t *testing.T) {
 	}
 
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(configPath, []byte("llm:\n  action_auto_review_enabled: true\n  action_auto_review_model: chatgpt/gpt-5.3-codex\n  action_auto_review_reasoning: xhigh\n  action_auto_review_reference_paths: docs/security.md,docs/llm-policy.md\n"), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte("llm:\n  action_auto_review_enabled: true\n  agent_auto_repair_enabled: true\n  action_auto_review_model: chatgpt/gpt-5.3-codex\n  action_auto_review_reasoning: xhigh\n  action_auto_review_reference_paths: docs/security.md,docs/llm-policy.md\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg = Defaults()
@@ -242,6 +244,7 @@ func TestActionAutoReviewConfigParsing(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !cfg.LLM.ActionAutoReviewEnabled ||
+		!cfg.LLM.AgentAutoRepairEnabled ||
 		cfg.LLM.ActionAutoReviewModel != "chatgpt/gpt-5.3-codex" ||
 		cfg.LLM.ActionAutoReviewReasoning != "xhigh" ||
 		len(cfg.LLM.ActionAutoReviewReferencePaths) != 2 ||
