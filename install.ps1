@@ -14,6 +14,9 @@
        rule but does not remove an existing one.
 
     The compiled binary embeds the web frontend, so a single .exe is all that gets installed.
+    For routine updates after a service is already installed, prefer .\update.ps1. This
+    installer can still rebuild and replace an existing service, but update.ps1 also syncs
+    the source checkout from GitHub first.
 
     The admin-login prompt only seeds the *bootstrap* credentials in the service config; it
     does not mark setup as complete, so the future in-app setup wizard still runs and simply
