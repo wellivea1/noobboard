@@ -222,7 +222,7 @@ func Defaults() Config {
 			Enabled:               true,
 			Provider:              "disabled",
 			OpenAIAuthMethod:      OpenAIAuthMethodAPIKey,
-			OpenAIModel:           "gpt-4.1",
+			OpenAIModel:           "gpt-5.5",
 			AnthropicModel:        "claude-sonnet-4-5",
 			Timeout:               45 * time.Second,
 			AgentArmDuration:      10 * time.Minute,
