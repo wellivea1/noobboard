@@ -89,17 +89,10 @@ func (c UnraidLiveClient) ControlContainer(ctx context.Context, app models.AppSt
 	case ActionStop:
 		result, err = c.runContainerMutation(ctx, "StopContainer", "stop", targetID)
 	case ActionRestart:
-		if _, err = c.runContainerMutation(ctx, "StopContainer", "stop", targetID); err != nil {
-			return ControlResult{}, err
+		result, err = c.runContainerMutation(ctx, "RestartContainer", "restart", targetID)
+		if err != nil && graphQLFieldUnsupported(err, "restart") {
+			result, err = c.runStopStartRestart(ctx, targetID)
 		}
-		timer := time.NewTimer(time.Second)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ControlResult{}, ctx.Err()
-		case <-timer.C:
-		}
-		result, err = c.runContainerMutation(ctx, "StartContainer", "start", targetID)
 	}
 	if err != nil {
 		return ControlResult{}, err
@@ -111,6 +104,35 @@ func (c UnraidLiveClient) ControlContainer(ctx context.Context, app models.AppSt
 		result.ContainerID = targetID
 	}
 	return result, nil
+}
+
+func (c UnraidLiveClient) runStopStartRestart(ctx context.Context, targetID string) (ControlResult, error) {
+	if _, err := c.runContainerMutation(ctx, "StopContainer", "stop", targetID); err != nil {
+		return ControlResult{}, err
+	}
+	timer := time.NewTimer(time.Second)
+	select {
+	case <-ctx.Done():
+		timer.Stop()
+		startCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if _, startErr := c.runContainerMutation(startCtx, "StartContainer", "start", targetID); startErr != nil {
+			return ControlResult{}, fmt.Errorf("restart stopped container but request was cancelled before start completed: %w; start recovery failed: %v", ctx.Err(), startErr)
+		}
+		return ControlResult{}, fmt.Errorf("restart stopped container but request was cancelled before start completed; start recovery was attempted: %w", ctx.Err())
+	case <-timer.C:
+	}
+	result, err := c.runContainerMutation(ctx, "StartContainer", "start", targetID)
+	if err != nil {
+		recoveryCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if _, recoveryErr := c.runContainerMutation(recoveryCtx, "StartContainer", "start", targetID); recoveryErr == nil {
+			return ControlResult{}, fmt.Errorf("restart stopped container but start failed in the request context; recovery start was attempted: %w", err)
+		} else {
+			return ControlResult{}, fmt.Errorf("restart stopped container and start failed; container may still be stopped: %w; recovery start failed: %v", err, recoveryErr)
+		}
+	}
+	return result, err
 }
 
 func (c UnraidLiveClient) Logs(ctx context.Context, app models.AppStatus, opts LogOptions) ([]models.LogLine, error) {
@@ -160,7 +182,11 @@ func (c UnraidLiveClient) fetchLogField(ctx context.Context, targetID, field str
 		return nil, err
 	}
 	if len(out.Errors) > 0 {
-		return nil, fmt.Errorf("unraid docker graphql error: %s", out.Errors[0].Message)
+		err := dockerGraphQLError{Message: out.Errors[0].Message}
+		if graphQLSchemaError(out.Errors[0].Message) {
+			return nil, markFallbackable(err)
+		}
+		return nil, err
 	}
 	raw, ok := out.Data.Docker.Logs[field]
 	if !ok {
@@ -195,7 +221,11 @@ func (c UnraidLiveClient) runContainerMutation(ctx context.Context, operation, f
 		return ControlResult{}, err
 	}
 	if len(out.Errors) > 0 {
-		return ControlResult{}, fmt.Errorf("unraid docker graphql error: %s", out.Errors[0].Message)
+		err := dockerGraphQLError{Message: out.Errors[0].Message}
+		if graphQLSchemaError(out.Errors[0].Message) {
+			return ControlResult{}, markFallbackable(err)
+		}
+		return ControlResult{}, err
 	}
 	container := out.Data.Docker[field]
 	return ControlResult{
@@ -330,7 +360,7 @@ func (c UnraidLiveClient) graphqlVariables(ctx context.Context, query string, va
 	req.Header.Set("x-api-key", c.apiKey)
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return err
+		return markFallbackable(err)
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
@@ -338,13 +368,17 @@ func (c UnraidLiveClient) graphqlVariables(ctx context.Context, query string, va
 		return err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return fmt.Errorf("unraid docker graphql returned %d: %s", resp.StatusCode, string(data))
+		err := fmt.Errorf("unraid docker graphql returned %d: %s", resp.StatusCode, string(data))
+		if resp.StatusCode == http.StatusNotFound || resp.StatusCode >= 500 {
+			return markFallbackable(err)
+		}
+		return err
 	}
 	return json.Unmarshal(data, out)
 }
 
 func containerActionID(app models.AppStatus) string {
-	for _, value := range []string{app.ContainerID, app.ContainerName, app.DisplayName, app.AppID} {
+	for _, value := range []string{app.ContainerID, app.ContainerName} {
 		if id := prefixedContainerID(value, ""); id != "" {
 			return id
 		}
@@ -361,9 +395,20 @@ func prefixedContainerID(id, fallbackName string) string {
 		return ""
 	}
 	if strings.Contains(id, ":") {
-		return id
+		if strings.HasPrefix(id, "container:") && safeContainerTarget(strings.TrimPrefix(id, "container:")) {
+			return id
+		}
+		return ""
+	}
+	if !safeContainerTarget(id) {
+		return ""
 	}
 	return "container:" + id
+}
+
+func safeContainerTarget(value string) bool {
+	value = strings.TrimSpace(value)
+	return value != "" && !strings.HasPrefix(value, "-") && !strings.ContainsAny(value, " \t\r\n")
 }
 
 func logLinesFromRaw(source string, raw json.RawMessage) []models.LogLine {

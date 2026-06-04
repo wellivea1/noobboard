@@ -19,6 +19,13 @@ const (
 	StatusHidden   CurrentStatus = "hidden"
 )
 
+type StatusSubjectType string
+
+const (
+	SubjectApp   StatusSubjectType = "app"
+	SubjectInfra StatusSubjectType = "infra"
+)
+
 type Severity string
 
 const (
@@ -137,6 +144,22 @@ type InfrastructureStatus struct {
 	ExpectedNASLinkMbps     int          `json:"expected_nas_link_mbps"`
 	UnraidAPIReachable      bool         `json:"unraid_api_reachable"`
 	UnraidVersion           string       `json:"unraid_version,omitempty"`
+	UnraidUptimeSeconds     int64        `json:"unraid_uptime_seconds,omitempty"`
+	UnraidCPUBrand          string       `json:"unraid_cpu_brand,omitempty"`
+	UnraidCPUCores          int          `json:"unraid_cpu_cores,omitempty"`
+	UnraidCPUThreads        int          `json:"unraid_cpu_threads,omitempty"`
+	UnraidMemoryTotalBytes  int64        `json:"unraid_memory_total_bytes,omitempty"`
+	UnraidMemoryUsedBytes   int64        `json:"unraid_memory_used_bytes,omitempty"`
+	UnraidMemoryUsedPct     float64      `json:"unraid_memory_used_pct,omitempty"`
+	UnraidNotificationCount int          `json:"unraid_notification_count,omitempty"`
+	UnraidAlertCount        int          `json:"unraid_alert_count,omitempty"`
+	UnraidWarningCount      int          `json:"unraid_warning_count,omitempty"`
+	UnraidVMCount           int          `json:"unraid_vm_count,omitempty"`
+	UnraidVMRunningCount    int          `json:"unraid_vm_running_count,omitempty"`
+	UnraidVMStoppedCount    int          `json:"unraid_vm_stopped_count,omitempty"`
+	UnraidVMNames           []string     `json:"unraid_vm_names,omitempty"`
+	UnraidShareCount        int          `json:"unraid_share_count,omitempty"`
+	UnraidShareNames        []string     `json:"unraid_share_names,omitempty"`
 	UnraidArrayState        string       `json:"unraid_array_state"`
 	UnraidArrayHealthy      bool         `json:"unraid_array_healthy"`
 	ArrayDiskCount          int          `json:"array_disk_count,omitempty"`
@@ -146,6 +169,8 @@ type InfrastructureStatus struct {
 	ArrayCapacityFreeBytes  int64        `json:"array_capacity_free_bytes,omitempty"`
 	ArrayCapacityUsedPct    float64      `json:"array_capacity_used_pct,omitempty"`
 	DockerServiceAvailable  bool         `json:"docker_service_available"`
+	DockerNetworkCount      int          `json:"docker_network_count,omitempty"`
+	DockerNetworkNames      []string     `json:"docker_network_names,omitempty"`
 	StorageWarnings         []string     `json:"storage_warnings,omitempty"`
 	ParityCheckState        string       `json:"parity_check_state,omitempty"`
 	LastCheckedAt           time.Time    `json:"last_checked_at"`
@@ -278,6 +303,29 @@ type NotificationRollup struct {
 	Enabled              bool `json:"enabled"`
 	GlobalOptInEnabled   bool `json:"global_opt_in_enabled"`
 	PendingDedupedEvents int  `json:"pending_deduped_events"`
+}
+
+type StatusEvent struct {
+	ID          string            `json:"id"`
+	SubjectType StatusSubjectType `json:"subject_type"`
+	SubjectID   string            `json:"subject_id"`
+	DisplayName string            `json:"display_name"`
+	From        CurrentStatus     `json:"from"`
+	To          CurrentStatus     `json:"to"`
+	At          time.Time         `json:"at"`
+	Note        string            `json:"note,omitempty"`
+}
+
+type StatusHistory struct {
+	SubjectType     StatusSubjectType `json:"subject_type"`
+	SubjectID       string            `json:"subject_id"`
+	DisplayName     string            `json:"display_name"`
+	Current         CurrentStatus     `json:"current"`
+	LastSeenOnline  *time.Time        `json:"last_seen_online,omitempty"`
+	LastSeenOffline *time.Time        `json:"last_seen_offline,omitempty"`
+	UptimePct24h    *float64          `json:"uptime_pct_24h,omitempty"`
+	UptimePct7d     *float64          `json:"uptime_pct_7d,omitempty"`
+	Events          []StatusEvent     `json:"events"`
 }
 
 type AuditEntry struct {

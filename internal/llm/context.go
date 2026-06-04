@@ -349,6 +349,22 @@ type unraidAPIReport struct {
 	ExpectedNASLinkMbps     int       `json:"expected_nas_link_mbps"`
 	UnraidAPIReachable      bool      `json:"unraid_api_reachable"`
 	UnraidVersion           string    `json:"unraid_version,omitempty"`
+	UnraidUptimeSeconds     int64     `json:"unraid_uptime_seconds,omitempty"`
+	UnraidCPUBrand          string    `json:"unraid_cpu_brand,omitempty"`
+	UnraidCPUCores          int       `json:"unraid_cpu_cores,omitempty"`
+	UnraidCPUThreads        int       `json:"unraid_cpu_threads,omitempty"`
+	UnraidMemoryTotalBytes  int64     `json:"unraid_memory_total_bytes,omitempty"`
+	UnraidMemoryUsedBytes   int64     `json:"unraid_memory_used_bytes,omitempty"`
+	UnraidMemoryUsedPct     float64   `json:"unraid_memory_used_pct,omitempty"`
+	UnraidNotificationCount int       `json:"unraid_notification_count,omitempty"`
+	UnraidAlertCount        int       `json:"unraid_alert_count,omitempty"`
+	UnraidWarningCount      int       `json:"unraid_warning_count,omitempty"`
+	UnraidVMCount           int       `json:"unraid_vm_count,omitempty"`
+	UnraidVMRunningCount    int       `json:"unraid_vm_running_count,omitempty"`
+	UnraidVMStoppedCount    int       `json:"unraid_vm_stopped_count,omitempty"`
+	UnraidVMNames           []string  `json:"unraid_vm_names,omitempty"`
+	UnraidShareCount        int       `json:"unraid_share_count,omitempty"`
+	UnraidShareNames        []string  `json:"unraid_share_names,omitempty"`
 	UnraidArrayState        string    `json:"unraid_array_state"`
 	UnraidArrayHealthy      bool      `json:"unraid_array_healthy"`
 	ArrayDiskCount          int       `json:"array_disk_count,omitempty"`
@@ -367,6 +383,8 @@ type dockerAPIReport struct {
 	ServiceAvailable bool               `json:"docker_service_available"`
 	SourceHealth     string             `json:"source_health"`
 	AppCount         int                `json:"app_count"`
+	NetworkCount     int                `json:"network_count,omitempty"`
+	NetworkNames     []string           `json:"network_names,omitempty"`
 	OnlineAppCount   int                `json:"online_app_count"`
 	DegradedAppCount int                `json:"degraded_app_count"`
 	OfflineAppCount  int                `json:"offline_app_count"`
@@ -525,6 +543,22 @@ func buildAPIReport(snapshot models.Snapshot) apiReport {
 			ExpectedNASLinkMbps:     infra.ExpectedNASLinkMbps,
 			UnraidAPIReachable:      infra.UnraidAPIReachable,
 			UnraidVersion:           infra.UnraidVersion,
+			UnraidUptimeSeconds:     infra.UnraidUptimeSeconds,
+			UnraidCPUBrand:          infra.UnraidCPUBrand,
+			UnraidCPUCores:          infra.UnraidCPUCores,
+			UnraidCPUThreads:        infra.UnraidCPUThreads,
+			UnraidMemoryTotalBytes:  infra.UnraidMemoryTotalBytes,
+			UnraidMemoryUsedBytes:   infra.UnraidMemoryUsedBytes,
+			UnraidMemoryUsedPct:     infra.UnraidMemoryUsedPct,
+			UnraidNotificationCount: infra.UnraidNotificationCount,
+			UnraidAlertCount:        infra.UnraidAlertCount,
+			UnraidWarningCount:      infra.UnraidWarningCount,
+			UnraidVMCount:           infra.UnraidVMCount,
+			UnraidVMRunningCount:    infra.UnraidVMRunningCount,
+			UnraidVMStoppedCount:    infra.UnraidVMStoppedCount,
+			UnraidVMNames:           append([]string(nil), infra.UnraidVMNames...),
+			UnraidShareCount:        infra.UnraidShareCount,
+			UnraidShareNames:        append([]string(nil), infra.UnraidShareNames...),
 			UnraidArrayState:        infra.UnraidArrayState,
 			UnraidArrayHealthy:      infra.UnraidArrayHealthy,
 			ArrayDiskCount:          infra.ArrayDiskCount,
@@ -542,6 +576,8 @@ func buildAPIReport(snapshot models.Snapshot) apiReport {
 			ServiceAvailable: infra.DockerServiceAvailable,
 			SourceHealth:     infra.SourceHealth.Docker,
 			AppCount:         len(snapshot.Apps),
+			NetworkCount:     infra.DockerNetworkCount,
+			NetworkNames:     append([]string(nil), infra.DockerNetworkNames...),
 			Apps:             append([]models.AppStatus(nil), snapshot.Apps...),
 		},
 		UniFi: unifiAPIReport{
@@ -834,6 +870,7 @@ func Instructions() string {
 		"Never claim you can repair the system or execute actions.",
 		"Never recommend destructive storage, Unraid array, Docker removal, firewall, VLAN, or filesystem actions.",
 		"Choose recommended_action_id only from the JSON schema enum.",
+		"Set recommended_action_target.kind to app with the exact app_id or display name for app-specific recommendations; otherwise use none, server, network, storage, or manual.",
 		"Return a single JSON object that matches the schema exactly.",
 	}, "\n")
 }
@@ -846,6 +883,7 @@ func AgentInstructions() string {
 		"Never claim you can repair the system unless a separate explicit mutating tool is provided; no mutating tools are available in this request.",
 		"Never request shell access, filesystem access, raw credentials, Docker control, Unraid mutations, UniFi configuration changes, or arbitrary local/API commands.",
 		"Choose recommended_action_id only from the JSON schema enum.",
+		"Set recommended_action_target.kind to app with the exact app_id or display name for app-specific recommendations; otherwise use none, server, network, storage, or manual.",
 		"Return a single JSON object that matches the schema exactly after any needed tool calls.",
 	}, "\n")
 }

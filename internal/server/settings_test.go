@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -130,6 +131,7 @@ func TestAdminDiagnoseReportsOpenAIUsageLimit(t *testing.T) {
 	cfg.LLM.Provider = "openai"
 	cfg.LLM.OpenAIAuthMethod = config.OpenAIAuthMethodAPIKey
 	cfg.LLM.OpenAIAPIKey = "sk-test-local"
+	cfg.LLM.AgentControlEnabled = true
 
 	app := newTestApp(t, cfg)
 	app.settingsMu.Lock()
@@ -157,6 +159,385 @@ func TestAdminDiagnoseReportsOpenAIUsageLimit(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(response["error"]), "usage limit") {
 		t.Fatalf("diagnose error did not report usage limit: %s", rec.Body.String())
+	}
+}
+
+func TestAdminDiagnoseIncludesLockedAgentApprovalPlan(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "diagnose-agent-approval-plan")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+	cfg.LLM.Provider = "openai"
+	cfg.LLM.OpenAIAuthMethod = config.OpenAIAuthMethodAPIKey
+	cfg.LLM.OpenAIAPIKey = "sk-test-local"
+	cfg.LLM.AgentControlEnabled = true
+
+	app := newTestApp(t, cfg)
+	app.settingsMu.Lock()
+	app.deps.LLM = &recordingLLMClient{
+		diagnosis: llm.Diagnosis{
+			Severity:            models.SeverityHigh,
+			Confidence:          0.88,
+			IncidentType:        models.IncidentAppDown,
+			AffectedServices:    []string{"Emby"},
+			Diagnosis:           "Emby is down.",
+			Evidence:            []string{"App is offline."},
+			GeneralUserSummary:  "Emby is not working.",
+			AdminMessage:        "Review whether Emby should be restarted.",
+			RecommendedActionID: "ask_admin_to_restart_container",
+			ShouldNotifyAdmin:   true,
+		},
+	}
+	app.settingsMu.Unlock()
+
+	router := app.Router()
+	cookie, csrf := loginAdmin(t, router)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/diagnose", strings.NewReader(`{"question":"what is wrong with Emby?"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/admin/diagnose status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var response diagnosisResponse
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.AgentPlan == nil {
+		t.Fatalf("agent_plan missing from response: %s", rec.Body.String())
+	}
+	if response.AgentPlan.CanExecute {
+		t.Fatalf("agent plan should not expose execution: %#v", response.AgentPlan)
+	}
+	if response.AgentPlan.Status != "approval_locked" {
+		t.Fatalf("agent plan status = %q, want approval_locked", response.AgentPlan.Status)
+	}
+	if !response.AgentPlan.ActionKnown {
+		t.Fatalf("agent plan should identify the allowlisted recommendation: %#v", response.AgentPlan)
+	}
+	if !response.AgentPlan.RequiresAdminApproval || response.AgentPlan.RecommendedActionID != "ask_admin_to_restart_container" {
+		t.Fatalf("agent plan did not preserve approval action: %#v", response.AgentPlan)
+	}
+	if !response.AgentPlan.Target.Resolved || response.AgentPlan.Target.Kind != "app" || response.AgentPlan.Target.ID != "emby" {
+		t.Fatalf("agent plan did not resolve the app target: %#v", response.AgentPlan.Target)
+	}
+	if response.AgentPlan.ApprovalToken == "" {
+		t.Fatalf("agent plan did not include an approval token: %#v", response.AgentPlan)
+	}
+	tokenPayload, err := app.verifyAgentApprovalToken(response.AgentPlan.ApprovalToken, "admin-1")
+	if err != nil {
+		t.Fatalf("agent plan approval token did not verify: %v", err)
+	}
+	if tokenPayload.TargetKind != "app" || tokenPayload.TargetID != "emby" {
+		t.Fatalf("approval token did not bind the target app: %#v", tokenPayload)
+	}
+	if !response.AgentPlan.ApprovalExpiresAt.After(time.Now().UTC()) {
+		t.Fatalf("agent plan approval expiry is not in the future: %#v", response.AgentPlan.ApprovalExpiresAt)
+	}
+	var sawDeny, sawAllowLocked bool
+	for _, option := range response.AgentPlan.Options {
+		if option.ID == "deny" && option.Enabled {
+			sawDeny = true
+		}
+		if option.ID == "allow_once" && !option.Enabled && option.Reason != "" {
+			sawAllowLocked = true
+		}
+	}
+	if !sawDeny || !sawAllowLocked {
+		t.Fatalf("approval options missing deny/locked allow choices: %#v", response.AgentPlan.Options)
+	}
+}
+
+func TestAdminDiagnoseDoesNotOpenApprovalForUnresolvedAppTarget(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "diagnose-agent-unresolved-target")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+	cfg.LLM.Provider = "openai"
+	cfg.LLM.OpenAIAuthMethod = config.OpenAIAuthMethodAPIKey
+	cfg.LLM.OpenAIAPIKey = "sk-test-local"
+
+	app := newTestApp(t, cfg)
+	app.settingsMu.Lock()
+	app.deps.LLM = &recordingLLMClient{
+		diagnosis: llm.Diagnosis{
+			Severity:            models.SeverityHigh,
+			Confidence:          0.88,
+			IncidentType:        models.IncidentAppDown,
+			AffectedServices:    []string{"Not A Real App"},
+			Diagnosis:           "A service is down.",
+			Evidence:            []string{"App is offline."},
+			GeneralUserSummary:  "A service is not working.",
+			AdminMessage:        "Review whether the service should be restarted.",
+			RecommendedActionID: "ask_admin_to_restart_container",
+			RecommendedTarget:   llm.ActionTarget{Kind: "app", IDOrName: "Not A Real App"},
+			ShouldNotifyAdmin:   true,
+		},
+	}
+	app.settingsMu.Unlock()
+
+	router := app.Router()
+	cookie, csrf := loginAdmin(t, router)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/diagnose", strings.NewReader(`{"question":"what is wrong?"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/admin/diagnose status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var response diagnosisResponse
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.AgentPlan == nil {
+		t.Fatalf("agent_plan missing from response: %s", rec.Body.String())
+	}
+	if response.AgentPlan.RequiresAdminApproval || response.AgentPlan.ApprovalToken != "" {
+		t.Fatalf("unresolved app target should not open an approval plan: %#v", response.AgentPlan)
+	}
+	if response.AgentPlan.Status != "target_unresolved" || response.AgentPlan.Target.Resolved {
+		t.Fatalf("unresolved app target status = %#v", response.AgentPlan.Target)
+	}
+}
+
+func TestAdminDiagnoseNormalizesUnknownAgentAction(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "diagnose-agent-unknown-plan")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+	cfg.LLM.Provider = "openai"
+	cfg.LLM.OpenAIAuthMethod = config.OpenAIAuthMethodAPIKey
+	cfg.LLM.OpenAIAPIKey = "sk-test-local"
+
+	app := newTestApp(t, cfg)
+	app.settingsMu.Lock()
+	app.deps.LLM = &recordingLLMClient{
+		diagnosis: llm.Diagnosis{
+			Severity:            models.SeverityHigh,
+			Confidence:          0.88,
+			IncidentType:        models.IncidentAppDown,
+			AffectedServices:    []string{"Emby"},
+			Diagnosis:           "Emby is down.",
+			Evidence:            []string{"App is offline."},
+			GeneralUserSummary:  "Emby is not working.",
+			AdminMessage:        "The model attempted an unsupported action.",
+			RecommendedActionID: "delete_all_apps",
+			ShouldNotifyAdmin:   true,
+		},
+	}
+	app.settingsMu.Unlock()
+
+	router := app.Router()
+	cookie, csrf := loginAdmin(t, router)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/diagnose", strings.NewReader(`{"question":"what is wrong with Emby?"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/admin/diagnose status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var response diagnosisResponse
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.AgentPlan == nil {
+		t.Fatalf("agent_plan missing from response: %s", rec.Body.String())
+	}
+	if response.AgentPlan.ActionKnown || response.AgentPlan.RecommendedActionID != "unknown" || response.AgentPlan.RequiresAdminApproval {
+		t.Fatalf("unsupported model action was not normalized to a non-approval-eligible plan: %#v", response.AgentPlan)
+	}
+	if response.AgentPlan.Status != "not_actionable" {
+		t.Fatalf("unknown-action agent plan status = %q, want not_actionable", response.AgentPlan.Status)
+	}
+}
+
+func TestAgentApprovalEndpointAuditsAndFailsClosed(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "agent-approval-endpoint")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+	cfg.LLM.Provider = "openai"
+	cfg.LLM.OpenAIAuthMethod = config.OpenAIAuthMethodAPIKey
+	cfg.LLM.OpenAIAPIKey = "sk-test-local"
+	cfg.LLM.AgentControlEnabled = true
+
+	app := newTestApp(t, cfg)
+	app.settingsMu.Lock()
+	app.deps.LLM = &recordingLLMClient{
+		diagnosis: llm.Diagnosis{
+			Severity:            models.SeverityHigh,
+			Confidence:          0.88,
+			IncidentType:        models.IncidentAppDown,
+			AffectedServices:    []string{"Emby"},
+			Diagnosis:           "Emby is down.",
+			Evidence:            []string{"App is offline."},
+			GeneralUserSummary:  "Emby is not working.",
+			AdminMessage:        "Review whether Emby should be restarted.",
+			RecommendedActionID: "ask_admin_to_restart_container",
+			ShouldNotifyAdmin:   true,
+		},
+	}
+	app.settingsMu.Unlock()
+
+	router := app.Router()
+	cookie, csrf := loginAdmin(t, router)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/diagnose", strings.NewReader(`{"question":"what is wrong with Emby?"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("diagnose status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var diagnosis diagnosisResponse
+	if err := json.NewDecoder(rec.Body).Decode(&diagnosis); err != nil {
+		t.Fatal(err)
+	}
+	if diagnosis.AgentPlan == nil || diagnosis.AgentPlan.ApprovalToken == "" {
+		t.Fatalf("diagnose did not return signed approval plan: %s", rec.Body.String())
+	}
+	approvalToken := diagnosis.AgentPlan.ApprovalToken
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/admin/agent/approval", strings.NewReader(fmt.Sprintf(`{"approval_token":%q,"choice":"deny"}`, approvalToken)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("deny approval status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	tail, err := app.deps.Store.AuditTail(5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tail) == 0 || tail[len(tail)-1].Action != "llm.agent_plan.denied" {
+		t.Fatalf("deny approval was not audited: %#v", tail)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/admin/agent/approval", strings.NewReader(fmt.Sprintf(`{"approval_token":%q,"choice":"allow_once"}`, approvalToken)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("unarmed allow approval status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	tail, err = app.deps.Store.AuditTail(5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tail) == 0 || tail[len(tail)-1].Action != "llm.agent_plan.not_armed" {
+		t.Fatalf("unarmed approval was not audited: %#v", tail)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/admin/agent/arm", strings.NewReader(`{"armed":true,"duration_seconds":60}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("arm agent status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/admin/agent/approval", strings.NewReader(fmt.Sprintf(`{"approval_token":%q,"choice":"allow_once"}`, approvalToken)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("armed allow approval status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	tail, err = app.deps.Store.AuditTail(5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tail) == 0 || tail[len(tail)-1].Action != "llm.agent_plan.locked" {
+		t.Fatalf("locked approval was not audited: %#v", tail)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/admin/agent/approval", strings.NewReader(`{"approval_token":"tampered","choice":"deny"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("tampered approval status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	invalidActionToken := app.signAgentApprovalToken(agentApprovalTokenPayload{
+		PlanID:              agentApprovalPlanID,
+		ActorID:             "admin-1",
+		RecommendedActionID: "delete_all_apps",
+		ExpiresAt:           time.Now().UTC().Add(time.Minute).Unix(),
+	})
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/admin/agent/approval", strings.NewReader(fmt.Sprintf(`{"approval_token":%q,"choice":"deny"}`, invalidActionToken)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("unregistered-action approval status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	nonApprovalEligibleToken := app.signAgentApprovalToken(agentApprovalTokenPayload{
+		PlanID:              agentApprovalPlanID,
+		ActorID:             "admin-1",
+		RecommendedActionID: "none",
+		ExpiresAt:           time.Now().UTC().Add(time.Minute).Unix(),
+	})
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/admin/agent/approval", strings.NewReader(fmt.Sprintf(`{"approval_token":%q,"choice":"deny"}`, nonApprovalEligibleToken)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("non-approval-eligible approval status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	missingTargetToken := app.signAgentApprovalToken(agentApprovalTokenPayload{
+		PlanID:              agentApprovalPlanID,
+		ActorID:             "admin-1",
+		RecommendedActionID: "ask_admin_to_restart_container",
+		ExpiresAt:           time.Now().UTC().Add(time.Minute).Unix(),
+	})
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/admin/agent/approval", strings.NewReader(fmt.Sprintf(`{"approval_token":%q,"choice":"deny"}`, missingTargetToken)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing-target approval status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	wrongPlanToken := app.signAgentApprovalToken(agentApprovalTokenPayload{
+		PlanID:              "other_plan",
+		ActorID:             "admin-1",
+		RecommendedActionID: "ask_admin_to_restart_container",
+		ExpiresAt:           time.Now().UTC().Add(time.Minute).Unix(),
+	})
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/admin/agent/approval", strings.NewReader(fmt.Sprintf(`{"approval_token":%q,"choice":"deny"}`, wrongPlanToken)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("wrong-plan approval status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -209,6 +590,137 @@ func TestLLMSettingsKeysAreWriteOnly(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), "sk-local-test") {
 		t.Fatalf("llm settings GET exposed API key: %s", rec.Body.String())
+	}
+}
+
+func TestLLMSettingsIncludesAgentReadinessMetadata(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "llm-agent-readiness")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+	policy := cfg.LLM.Policies["admin_requested"]
+	policy.AgentToolsEnabled = true
+	policy.AgentMaxToolCalls = 4
+	cfg.LLM.Policies["admin_requested"] = policy
+
+	app := newTestApp(t, cfg)
+	router := app.Router()
+	cookie, _ := loginAdmin(t, router)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/settings/llm", nil)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/admin/settings/llm status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var response llmSettingsView
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if !response.AgentReadiness.ReadOnlyToolsAvailable || response.AgentReadiness.MutatingToolsAvailable {
+		t.Fatalf("agent readiness availability = %#v", response.AgentReadiness)
+	}
+	if !response.AgentReadiness.AdminToolsEnabled || response.AgentReadiness.AdminToolCallLimit != 4 {
+		t.Fatalf("admin tool readiness = %#v", response.AgentReadiness)
+	}
+	if len(response.AgentReadiness.ReadOnlyTools) != 4 {
+		t.Fatalf("read-only tool count = %d", len(response.AgentReadiness.ReadOnlyTools))
+	}
+	if len(response.AgentReadiness.ReviewModes) != 4 {
+		t.Fatalf("review mode count = %d", len(response.AgentReadiness.ReviewModes))
+	}
+	if !response.AgentReadiness.OpenCodeAutoReview.ReferenceReviewed || !response.AgentReadiness.OpenCodeAutoReview.SufficientReference {
+		t.Fatalf("opencode auto-review summary = %#v", response.AgentReadiness.OpenCodeAutoReview)
+	}
+}
+
+func TestAgentArmEndpointIsSessionScopedAndConfigGated(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "llm-agent-arm")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+	cfg.LLM.AgentArmDuration = 2 * time.Minute
+
+	app := newTestApp(t, cfg)
+	router := app.Router()
+	cookie, csrf := loginAdmin(t, router)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/agent/arm", strings.NewReader(`{"armed":true,"duration_seconds":60}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("disabled arm status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	cfg.LLM.AgentControlEnabled = true
+	cfg.Database.Path = serverCacheTestPath(t, "llm-agent-arm-enabled")
+	app = newTestApp(t, cfg)
+	router = app.Router()
+	cookie, csrf = loginAdmin(t, router)
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/admin/agent/arm", strings.NewReader(`{"armed":true,"duration_seconds":60}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("enabled arm status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var readiness llmAgentReadinessView
+	if err := json.NewDecoder(rec.Body).Decode(&readiness); err != nil {
+		t.Fatal(err)
+	}
+	if !readiness.AgentControlEnabled || !readiness.AgentArmed || !readiness.AgentArmedUntil.After(time.Now().UTC()) {
+		t.Fatalf("arm readiness = %#v", readiness)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/admin/settings/llm", nil)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET armed settings status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var settings llmSettingsView
+	if err := json.NewDecoder(rec.Body).Decode(&settings); err != nil {
+		t.Fatal(err)
+	}
+	if !settings.AgentReadiness.AgentArmed {
+		t.Fatalf("session arm state was not reflected in settings: %#v", settings.AgentReadiness)
+	}
+
+	otherCookie, _ := loginAdmin(t, router)
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/admin/settings/llm", nil)
+	req.AddCookie(otherCookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET other session settings status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&settings); err != nil {
+		t.Fatal(err)
+	}
+	if settings.AgentReadiness.AgentArmed {
+		t.Fatalf("agent arm leaked across sessions: %#v", settings.AgentReadiness)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/admin/agent/arm", strings.NewReader(`{"armed":false}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("disarm status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&readiness); err != nil {
+		t.Fatal(err)
+	}
+	if readiness.AgentArmed {
+		t.Fatalf("disarm readiness = %#v", readiness)
 	}
 }
 
@@ -413,6 +925,8 @@ func TestIntegrationSettingsPersistAndHideKeys(t *testing.T) {
 		"unifi_api_key": "unifi-local-test",
 		"unifi_site_id": "default",
 		"unifi_insecure_tls": true,
+		"unifi_nas_client_hint": "192.168.0.214",
+		"expected_nas_link_mbps": 1000,
 		"internet_probe_url": "https://www.gstatic.com/generate_204",
 		"dns_probe_host": "cloudflare.com"
 	}`
@@ -435,6 +949,9 @@ func TestIntegrationSettingsPersistAndHideKeys(t *testing.T) {
 	if !strings.Contains(responseBody, `"unraid_api_key_set":true`) || !strings.Contains(responseBody, `"unifi_api_key_set":true`) {
 		t.Fatalf("integration settings response did not report saved keys: %s", responseBody)
 	}
+	if !strings.Contains(responseBody, `"unifi_nas_client_hint":"192.168.0.214"`) || !strings.Contains(responseBody, `"expected_nas_link_mbps":1000`) {
+		t.Fatalf("integration settings response did not include NAS link settings: %s", responseBody)
+	}
 
 	stored, ok, err := app.deps.Store.RuntimeSettings()
 	if err != nil {
@@ -449,6 +966,9 @@ func TestIntegrationSettingsPersistAndHideKeys(t *testing.T) {
 	if stored.Integrations.UniFiBaseURL != "https://192.168.0.1" || stored.Integrations.UniFiAPIKey != "unifi-local-test" {
 		t.Fatalf("stored UniFi integration = %#v", stored.Integrations)
 	}
+	if stored.Integrations.UniFiNASClientHint != "192.168.0.214" || stored.Integrations.ExpectedNASLinkMbps != 1000 {
+		t.Fatalf("stored NAS link integration = %#v", stored.Integrations)
+	}
 
 	reloaded := newTestApp(t, cfg)
 	if reloaded.deps.Config.Integrations.UnraidAPIKey != "unraid-local-test" {
@@ -456,6 +976,9 @@ func TestIntegrationSettingsPersistAndHideKeys(t *testing.T) {
 	}
 	if reloaded.deps.Config.Integrations.UniFiAPIKey != "unifi-local-test" {
 		t.Fatal("saved UniFi API key was not applied after reload")
+	}
+	if reloaded.deps.Config.Integrations.UniFiNASClientHint != "192.168.0.214" || reloaded.deps.Config.Integrations.ExpectedNASLinkMbps != 1000 {
+		t.Fatalf("saved NAS link settings were not applied after reload: %#v", reloaded.deps.Config.Integrations)
 	}
 }
 
@@ -504,6 +1027,7 @@ func TestCompactRouterExcludesAdminAPI(t *testing.T) {
 	}{
 		{method: http.MethodGet, path: "/api/admin/status/full"},
 		{method: http.MethodPost, path: "/api/admin/apps/emby/action", body: `{"action":"restart"}`},
+		{method: http.MethodPost, path: "/api/admin/agent/arm", body: `{"armed":true}`},
 		{method: http.MethodGet, path: "/api/admin/settings/integrations"},
 		{method: http.MethodPost, path: "/api/admin/settings/llm/openai/browser/start", body: `{}`},
 		{method: http.MethodGet, path: "/api/admin/settings/llm/openai/browser/callback?code=test&state=test"},
@@ -888,6 +1412,335 @@ func TestSnapshotDegradesInsteadOfFailingWhenLiveCollectorsFail(t *testing.T) {
 	}
 }
 
+func TestLatestSnapshotUsesCacheAndDoesNotMutateAdminSnapshot(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "latest-snapshot-cache")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+	app := newTestApp(t, cfg)
+	collector := &countingDockerCollector{apps: []models.AppStatus{{
+		AppID:                 "emby",
+		DisplayName:           "Emby",
+		ContainerName:         "EmbyServer",
+		VisibleToGeneralUsers: true,
+		DockerState:           models.DockerRunning,
+		DockerHealth:          models.HealthHealthy,
+		CurrentStatus:         models.StatusOnline,
+		RecentLogs:            []models.LogLine{{Line: "admin-only log"}},
+	}}}
+	app.deps.Collectors.Docker = collector
+
+	adminSnapshot, err := app.latestSnapshot(context.Background(), models.RoleAdmin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if collector.Calls() != 1 {
+		t.Fatalf("collector calls after first latest snapshot = %d", collector.Calls())
+	}
+	generalSnapshot, err := app.latestSnapshot(context.Background(), models.RoleGeneralUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if collector.Calls() != 1 {
+		t.Fatalf("cached latest snapshot should not recollect, calls = %d", collector.Calls())
+	}
+	if len(generalSnapshot.Apps) != 1 || generalSnapshot.Apps[0].ContainerName != "" || len(generalSnapshot.Apps[0].RecentLogs) != 0 {
+		t.Fatalf("general snapshot leaked admin-only app fields: %#v", generalSnapshot.Apps)
+	}
+	adminAgain, err := app.latestSnapshot(context.Background(), models.RoleAdmin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(adminAgain.Apps) != 1 || adminAgain.Apps[0].ContainerName != "EmbyServer" || len(adminAgain.Apps[0].RecentLogs) != 1 {
+		t.Fatalf("general filtering mutated cached admin snapshot: before=%#v after=%#v", adminSnapshot.Apps, adminAgain.Apps)
+	}
+}
+
+func TestInvalidateSnapshotForcesNextLatestSnapshotRefresh(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "latest-snapshot-invalidate")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+	app := newTestApp(t, cfg)
+	collector := &countingDockerCollector{apps: []models.AppStatus{{
+		AppID:                 "emby",
+		DisplayName:           "Emby",
+		ContainerName:         "EmbyServer",
+		VisibleToGeneralUsers: true,
+		DockerState:           models.DockerRunning,
+		DockerHealth:          models.HealthHealthy,
+		CurrentStatus:         models.StatusOnline,
+	}}}
+	app.deps.Collectors.Docker = collector
+	if _, err := app.latestSnapshot(context.Background(), models.RoleAdmin); err != nil {
+		t.Fatal(err)
+	}
+	app.invalidateSnapshot()
+	if _, err := app.latestSnapshot(context.Background(), models.RoleAdmin); err != nil {
+		t.Fatal(err)
+	}
+	if collector.Calls() != 2 {
+		t.Fatalf("collector calls after invalidated latest snapshot = %d", collector.Calls())
+	}
+}
+
+func TestRunPollerPopulatesSnapshotCache(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "poller-cache")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+	app := newTestApp(t, cfg)
+	called := make(chan struct{}, 1)
+	app.deps.Collectors.Docker = &notifyingDockerCollector{
+		apps: []models.AppStatus{{
+			AppID:                 "emby",
+			DisplayName:           "Emby",
+			ContainerName:         "EmbyServer",
+			VisibleToGeneralUsers: true,
+			DockerState:           models.DockerRunning,
+			DockerHealth:          models.HealthHealthy,
+			CurrentStatus:         models.StatusOnline,
+		}},
+		called: called,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go app.RunPoller(ctx, time.Hour)
+	select {
+	case <-called:
+	case <-time.After(2 * time.Second):
+		t.Fatal("poller did not collect an initial snapshot")
+	}
+	snapshot, err := app.latestSnapshot(context.Background(), models.RoleAdmin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Apps) != 1 || snapshot.Apps[0].AppID != "emby" {
+		t.Fatalf("poller cache snapshot = %#v", snapshot.Apps)
+	}
+}
+
+func TestPollerRefreshRecordsStatusHistoryTransitions(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "poller-history")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+	app := newTestApp(t, cfg)
+	collector := &countingDockerCollector{apps: []models.AppStatus{{
+		AppID:                 "emby",
+		DisplayName:           "Emby",
+		ContainerName:         "EmbyServer",
+		VisibleToGeneralUsers: true,
+		DockerState:           models.DockerRunning,
+		DockerHealth:          models.HealthHealthy,
+		CurrentStatus:         models.StatusOnline,
+		ServerSummary:         "Emby is working.",
+	}}}
+	app.deps.Collectors.Docker = collector
+	if _, err := app.refreshSnapshot(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	events, err := app.deps.History.Query(db.HistoryFilter{SubjectType: models.SubjectApp, SubjectID: "emby"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("baseline should not emit history events: %#v", events)
+	}
+	collector.mu.Lock()
+	collector.apps = []models.AppStatus{{
+		AppID:                 "emby",
+		DisplayName:           "Emby",
+		ContainerName:         "EmbyServer",
+		VisibleToGeneralUsers: true,
+		DockerState:           models.DockerExited,
+		DockerHealth:          models.HealthUnknown,
+		CurrentStatus:         models.StatusOffline,
+		ServerSummary:         "Emby is not working.",
+	}}
+	collector.mu.Unlock()
+	if _, err := app.refreshSnapshot(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	events, err = app.deps.History.Query(db.HistoryFilter{SubjectType: models.SubjectApp, SubjectID: "emby"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].From != models.StatusOnline || events[0].To != models.StatusOffline {
+		t.Fatalf("unexpected history events: %#v", events)
+	}
+}
+
+func TestStatusRefreshEndpointRequiresCSRFAndRecordsHistory(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "manual-refresh-history")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+	app := newTestApp(t, cfg)
+	collector := &countingDockerCollector{apps: []models.AppStatus{{
+		AppID:                 "emby",
+		DisplayName:           "Emby",
+		ContainerName:         "EmbyServer",
+		VisibleToGeneralUsers: true,
+		DockerState:           models.DockerRunning,
+		DockerHealth:          models.HealthHealthy,
+		CurrentStatus:         models.StatusOnline,
+		ServerSummary:         "Emby is working.",
+	}}}
+	app.deps.Collectors.Docker = collector
+	if _, err := app.refreshSnapshot(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	collector.mu.Lock()
+	collector.apps = []models.AppStatus{{
+		AppID:                 "emby",
+		DisplayName:           "Emby",
+		ContainerName:         "EmbyServer",
+		VisibleToGeneralUsers: true,
+		DockerState:           models.DockerExited,
+		DockerHealth:          models.HealthUnknown,
+		CurrentStatus:         models.StatusOffline,
+		ServerSummary:         "Emby is not working.",
+	}}
+	collector.mu.Unlock()
+
+	router := app.Router()
+	cookie, csrf := loginAs(t, router, "viewer", "change-me-now")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/status/refresh", nil)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("refresh without CSRF status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/status/refresh", nil)
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("refresh status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var response models.Snapshot
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Apps) != 1 || response.Apps[0].AppID != "emby" || response.Apps[0].CurrentStatus != models.StatusOffline {
+		t.Fatalf("refresh response did not include updated visible app: %#v", response.Apps)
+	}
+	events, err := app.deps.History.Query(db.HistoryFilter{SubjectType: models.SubjectApp, SubjectID: "emby"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].From != models.StatusOnline || events[0].To != models.StatusOffline {
+		t.Fatalf("manual refresh did not record transition: %#v", events)
+	}
+}
+
+func TestAppHistoryEndpointReturnsVisibleAppHistory(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "app-history-endpoint")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+	app := newTestApp(t, cfg)
+	app.deps.Collectors.Docker = &countingDockerCollector{apps: []models.AppStatus{{
+		AppID:                 "emby",
+		DisplayName:           "Emby",
+		ContainerName:         "EmbyServer",
+		VisibleToGeneralUsers: true,
+		DockerState:           models.DockerExited,
+		DockerHealth:          models.HealthUnknown,
+		CurrentStatus:         models.StatusOffline,
+		ServerSummary:         "Emby is not working.",
+	}}}
+	if _, err := app.refreshSnapshot(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if err := app.deps.History.Append([]models.StatusEvent{{
+		ID:          "event-1",
+		SubjectType: models.SubjectApp,
+		SubjectID:   "emby",
+		DisplayName: "Emby",
+		From:        models.StatusOnline,
+		To:          models.StatusOffline,
+		At:          now.Add(-time.Minute),
+		Note:        "Emby stopped responding.",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	router := app.Router()
+	cookie, _ := loginAs(t, router, "viewer", "change-me-now")
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/apps/emby/history?window=1d&limit=10", nil)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET app history status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var response models.StatusHistory
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.SubjectType != models.SubjectApp || response.SubjectID != "emby" || response.Current != models.StatusOffline || len(response.Events) != 1 {
+		t.Fatalf("unexpected app history response: %#v", response)
+	}
+}
+
+func TestAppHistoryEndpointDoesNotLeakHiddenApp(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "app-history-hidden")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+	cfg.Visibility.HiddenAppIDs = []string{"emby"}
+	app := newTestApp(t, cfg)
+	app.deps.Collectors.Docker = &countingDockerCollector{apps: []models.AppStatus{{
+		AppID:                 "emby",
+		DisplayName:           "Emby",
+		ContainerName:         "EmbyServer",
+		VisibleToGeneralUsers: true,
+		DockerState:           models.DockerRunning,
+		DockerHealth:          models.HealthHealthy,
+		CurrentStatus:         models.StatusOnline,
+	}}}
+	if _, err := app.refreshSnapshot(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	router := app.Router()
+	cookie, _ := loginAs(t, router, "viewer", "change-me-now")
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/apps/emby/history", nil)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("hidden app history status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestInfrastructureHistoryEndpointHonorsRoleVisibility(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "infra-history-visibility")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+	cfg.Visibility.ShowWANStatusToUsers = false
+	app := newTestApp(t, cfg)
+	if _, err := app.refreshSnapshot(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	router := app.Router()
+	viewerCookie, _ := loginAs(t, router, "viewer", "change-me-now")
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/infrastructure/history?subject=wan", nil)
+	req.AddCookie(viewerCookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("general user WAN history status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	adminCookie, _ := loginAdmin(t, router)
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/infrastructure/history?subject=wan", nil)
+	req.AddCookie(adminCookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("admin WAN history status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestAppIconEndpointPersistsAndAppliesOverride(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Database.Path = serverCacheTestPath(t, "app-icon")
@@ -1027,6 +1880,32 @@ func TestAdminAppActionControlsResolvedDockerApp(t *testing.T) {
 	req.Header.Set("X-CSRF-Token", csrf)
 	req.AddCookie(cookie)
 	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("unconfirmed restart status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if collector.called != "" {
+		t.Fatalf("unconfirmed restart should not call docker collector: action=%q", collector.called)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/admin/apps/emby/action", strings.NewReader(`{"action":"restart","confirmed":true,"confirm_app_id":"wrong-app"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("mismatched restart confirmation status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if collector.called != "" {
+		t.Fatalf("mismatched restart confirmation should not call docker collector: action=%q", collector.called)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/admin/apps/emby/action", strings.NewReader(`{"action":"restart","confirmed":true,"confirm_app_id":"emby"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("POST /api/admin/apps/emby/action status = %d, body = %s", rec.Code, rec.Body.String())
 	}
@@ -1123,6 +2002,54 @@ func (failingDockerCollector) Logs(context.Context, models.AppStatus, docker.Log
 	return nil, errors.New("docker unavailable")
 }
 
+type countingDockerCollector struct {
+	mu    sync.Mutex
+	calls int
+	apps  []models.AppStatus
+}
+
+func (c *countingDockerCollector) Apps(context.Context) ([]models.AppStatus, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls++
+	return append([]models.AppStatus(nil), c.apps...), nil
+}
+
+func (c *countingDockerCollector) Calls() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.calls
+}
+
+func (c *countingDockerCollector) ControlContainer(context.Context, models.AppStatus, docker.ContainerAction) (docker.ControlResult, error) {
+	return docker.ControlResult{}, nil
+}
+
+func (c *countingDockerCollector) Logs(context.Context, models.AppStatus, docker.LogOptions) ([]models.LogLine, error) {
+	return nil, nil
+}
+
+type notifyingDockerCollector struct {
+	apps   []models.AppStatus
+	called chan<- struct{}
+}
+
+func (c *notifyingDockerCollector) Apps(context.Context) ([]models.AppStatus, error) {
+	select {
+	case c.called <- struct{}{}:
+	default:
+	}
+	return append([]models.AppStatus(nil), c.apps...), nil
+}
+
+func (c *notifyingDockerCollector) ControlContainer(context.Context, models.AppStatus, docker.ContainerAction) (docker.ControlResult, error) {
+	return docker.ControlResult{}, nil
+}
+
+func (c *notifyingDockerCollector) Logs(context.Context, models.AppStatus, docker.LogOptions) ([]models.LogLine, error) {
+	return nil, nil
+}
+
 type recordingDockerCollector struct {
 	apps       []models.AppStatus
 	logs       []models.LogLine
@@ -1166,6 +2093,7 @@ func (failingUniFiCollector) Status(context.Context) (models.InfrastructureStatu
 
 type recordingLLMClient struct {
 	redactor    *privacy.Redactor
+	diagnosis   llm.Diagnosis
 	request     llm.Request
 	contextText string
 }
@@ -1181,6 +2109,9 @@ func (c *recordingLLMClient) Diagnose(_ context.Context, req llm.Request) (llm.D
 		return llm.Diagnosis{}, err
 	}
 	c.contextText = contextText
+	if c.diagnosis.Diagnosis != "" {
+		return c.diagnosis, nil
+	}
 	return llm.Diagnosis{
 		Severity:            models.SeverityNone,
 		Confidence:          0.98,
@@ -1211,6 +2142,10 @@ func newTestApp(t *testing.T, cfg config.Config) *App {
 	if err != nil {
 		t.Fatal(err)
 	}
+	historyStore, err := db.OpenFileHistoryStore(db.HistoryPathForDatabase(cfg.Database.Path), cfg.Retention.MaxStatusEventsPerSubject)
+	if err != nil {
+		t.Fatal(err)
+	}
 	redactor := privacy.NewRedactor(cfg.Privacy)
 	auditor := audit.New(store, redactor)
 	notifier := notifications.NewManager(store, notifications.NewMockBackend(), cfg.Notifications, auditor)
@@ -1223,6 +2158,7 @@ func newTestApp(t *testing.T, cfg config.Config) *App {
 			Probes: probes.NewFixtureClient(cfg.FixtureDir, cfg.FixtureScenario),
 		},
 		Store:         store,
+		History:       historyStore,
 		Users:         users.NewRegistry(store, cfg.Auth),
 		Audit:         auditor,
 		Notifications: notifier,
@@ -1270,9 +2206,9 @@ func loginAs(t *testing.T, router http.Handler, username, password string) (*htt
 
 func serverCacheTestPath(t *testing.T, name string) string {
 	t.Helper()
-	dir := filepath.Join("..", "..", ".cache", "tests")
+	dir := filepath.Join("..", "..", ".cache", "tests", name+"-"+time.Now().UTC().Format("20060102150405.000000000"))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	return filepath.Join(dir, name+"-"+time.Now().UTC().Format("20060102150405.000000000")+".json")
+	return filepath.Join(dir, "dashboard.db.json")
 }

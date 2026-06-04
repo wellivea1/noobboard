@@ -48,6 +48,9 @@ func (c LargestListClient) ControlContainer(ctx context.Context, app models.AppS
 	if err == nil {
 		return result, nil
 	}
+	if !allowsSSHFallback(err) {
+		return ControlResult{}, err
+	}
 	return c.fallback.ControlContainer(ctx, app, action)
 }
 
@@ -59,7 +62,60 @@ func (c LargestListClient) Logs(ctx context.Context, app models.AppStatus, opts 
 	if err == nil {
 		return lines, nil
 	}
+	if !allowsSSHFallback(err) {
+		return nil, err
+	}
 	return c.fallback.Logs(ctx, app, opts)
+}
+
+type fallbackableDockerError struct {
+	err error
+}
+
+func (e fallbackableDockerError) Error() string {
+	return e.err.Error()
+}
+
+func (e fallbackableDockerError) Unwrap() error {
+	return e.err
+}
+
+func markFallbackable(err error) error {
+	if err == nil {
+		return nil
+	}
+	return fallbackableDockerError{err: err}
+}
+
+func allowsSSHFallback(err error) bool {
+	var fallbackable fallbackableDockerError
+	return errors.As(err, &fallbackable)
+}
+
+type dockerGraphQLError struct {
+	Message string
+}
+
+func (e dockerGraphQLError) Error() string {
+	return "unraid docker graphql error: " + e.Message
+}
+
+func graphQLSchemaError(message string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(message))
+	return strings.Contains(normalized, "cannot query field") ||
+		strings.Contains(normalized, "unknown field") ||
+		strings.Contains(normalized, "is not defined") ||
+		strings.Contains(normalized, "unknown argument")
+}
+
+func graphQLFieldUnsupported(err error, field string) bool {
+	var graphErr dockerGraphQLError
+	if !errors.As(err, &graphErr) {
+		return false
+	}
+	message := strings.ToLower(graphErr.Message)
+	field = strings.ToLower(strings.TrimSpace(field))
+	return graphQLSchemaError(message) && strings.Contains(message, strings.ToLower(field))
 }
 
 type LogOptions struct {

@@ -3,6 +3,7 @@ package docker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -146,11 +147,10 @@ func TestUnraidDockerControlUsesGraphQLVariables(t *testing.T) {
 			t.Fatalf("target id = %#v", body.Variables["id"])
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if strings.Contains(body.Query, "stop(id: $id)") {
-			_, _ = w.Write([]byte(`{"data":{"docker":{"stop":{"id":"container:Emby","state":"exited","status":"Exited"}}}}`))
-			return
+		if !strings.Contains(body.Query, "restart(id: $id)") {
+			t.Fatalf("restart should use native restart mutation, got: %s", body.Query)
 		}
-		_, _ = w.Write([]byte(`{"data":{"docker":{"start":{"id":"container:Emby","state":"running","status":"Up 1 second"}}}}`))
+		_, _ = w.Write([]byte(`{"data":{"docker":{"restart":{"id":"container:Emby","state":"running","status":"Restarted"}}}}`))
 	}))
 	defer server.Close()
 
@@ -160,11 +160,111 @@ func TestUnraidDockerControlUsesGraphQLVariables(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(calls) != 2 {
+	if len(calls) != 1 {
 		t.Fatalf("calls = %d", len(calls))
 	}
-	if result.Action != ActionRestart || result.DockerState != models.DockerRunning || result.Status != "Up 1 second" {
+	if result.Action != ActionRestart || result.DockerState != models.DockerRunning || result.Status != "Restarted" {
 		t.Fatalf("unexpected control result: %#v", result)
+	}
+}
+
+func TestUnraidDockerRestartFallsBackToStopStartWhenRestartUnsupported(t *testing.T) {
+	var operations []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Query     string                 `json:"query"`
+			Variables map[string]interface{} `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body.Variables["id"] != "container:Emby" {
+			t.Fatalf("target id = %#v", body.Variables["id"])
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(body.Query, "restart(id: $id)"):
+			operations = append(operations, "restart")
+			_, _ = w.Write([]byte(`{"errors":[{"message":"Cannot query field \"restart\" on type \"Docker\"."}]}`))
+		case strings.Contains(body.Query, "stop(id: $id)"):
+			operations = append(operations, "stop")
+			_, _ = w.Write([]byte(`{"data":{"docker":{"stop":{"id":"container:Emby","state":"exited","status":"Exited"}}}}`))
+		case strings.Contains(body.Query, "start(id: $id)"):
+			operations = append(operations, "start")
+			_, _ = w.Write([]byte(`{"data":{"docker":{"start":{"id":"container:Emby","state":"running","status":"Up 1 second"}}}}`))
+		default:
+			t.Fatalf("unexpected mutation: %s", body.Query)
+		}
+	}))
+	defer server.Close()
+
+	client := NewUnraidLiveClient(server.URL, "test-key")
+	client.http = server.Client()
+	result, err := client.ControlContainer(t.Context(), models.AppStatus{AppID: "emby", ContainerName: "Emby"}, ActionRestart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"restart", "stop", "start"}
+	if strings.Join(operations, ",") != strings.Join(want, ",") {
+		t.Fatalf("operations = %#v", operations)
+	}
+	if result.Action != ActionRestart || result.DockerState != models.DockerRunning {
+		t.Fatalf("unexpected control result: %#v", result)
+	}
+}
+
+func TestUnraidDockerRestartFallbackReportsPossibleStoppedContainer(t *testing.T) {
+	var startCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Query     string                 `json:"query"`
+			Variables map[string]interface{} `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body.Variables["id"] != "container:Emby" {
+			t.Fatalf("target id = %#v", body.Variables["id"])
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(body.Query, "restart(id: $id)"):
+			_, _ = w.Write([]byte(`{"errors":[{"message":"Cannot query field \"restart\" on type \"Docker\"."}]}`))
+		case strings.Contains(body.Query, "stop(id: $id)"):
+			_, _ = w.Write([]byte(`{"data":{"docker":{"stop":{"id":"container:Emby","state":"exited","status":"Exited"}}}}`))
+		case strings.Contains(body.Query, "start(id: $id)"):
+			startCalls++
+			_, _ = w.Write([]byte(`{"errors":[{"message":"container failed to start"}]}`))
+		default:
+			t.Fatalf("unexpected mutation: %s", body.Query)
+		}
+	}))
+	defer server.Close()
+
+	client := NewUnraidLiveClient(server.URL, "test-key")
+	client.http = server.Client()
+	_, err := client.ControlContainer(t.Context(), models.AppStatus{AppID: "emby", ContainerName: "Emby"}, ActionRestart)
+	if err == nil || !strings.Contains(err.Error(), "container may still be stopped") {
+		t.Fatalf("expected possible stopped-container error, got %v", err)
+	}
+	if startCalls != 2 {
+		t.Fatalf("start calls = %d", startCalls)
+	}
+}
+
+func TestUnraidDockerControlRequiresStableContainerTarget(t *testing.T) {
+	client := NewUnraidLiveClient("http://example.invalid", "test-key")
+	_, err := client.ControlContainer(t.Context(), models.AppStatus{AppID: "emby", DisplayName: "Emby"}, ActionStop)
+	if err == nil || !strings.Contains(err.Error(), "docker container id or name is required") {
+		t.Fatalf("expected stable target error, got %v", err)
+	}
+}
+
+func TestUnraidDockerControlRejectsNonContainerPrefixedTarget(t *testing.T) {
+	client := NewUnraidLiveClient("http://example.invalid", "test-key")
+	_, err := client.ControlContainer(t.Context(), models.AppStatus{AppID: "emby", ContainerID: "array:md1"}, ActionStop)
+	if err == nil || !strings.Contains(err.Error(), "docker container id or name is required") {
+		t.Fatalf("expected non-container target rejection, got %v", err)
 	}
 }
 
@@ -273,9 +373,32 @@ func TestLargestListClientPrefersFallbackWhenItSeesMoreApps(t *testing.T) {
 	}
 }
 
+func TestLargestListClientDoesNotFallbackForNonFallbackableControlError(t *testing.T) {
+	primaryErr := errors.New("unraid docker graphql error: Forbidden resource")
+	primary := stubDockerClient{err: primaryErr}
+	fallback := stubDockerClient{result: ControlResult{Status: "fallback accepted"}}
+	_, err := NewLargestListClient(primary, fallback).ControlContainer(t.Context(), models.AppStatus{AppID: "emby", ContainerName: "Emby"}, ActionStop)
+	if !errors.Is(err, primaryErr) {
+		t.Fatalf("expected primary error, got %v", err)
+	}
+}
+
+func TestLargestListClientFallbackForFallbackableControlError(t *testing.T) {
+	primary := stubDockerClient{err: markFallbackable(errors.New("unraid docker graphql returned 503"))}
+	fallback := stubDockerClient{result: ControlResult{Status: "fallback accepted"}}
+	result, err := NewLargestListClient(primary, fallback).ControlContainer(t.Context(), models.AppStatus{AppID: "emby", ContainerName: "Emby"}, ActionStop)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "fallback accepted" {
+		t.Fatalf("expected fallback result, got %#v", result)
+	}
+}
+
 type stubDockerClient struct {
-	apps []models.AppStatus
-	err  error
+	apps   []models.AppStatus
+	result ControlResult
+	err    error
 }
 
 func (c stubDockerClient) Apps(context.Context) ([]models.AppStatus, error) {
@@ -283,7 +406,7 @@ func (c stubDockerClient) Apps(context.Context) ([]models.AppStatus, error) {
 }
 
 func (c stubDockerClient) ControlContainer(context.Context, models.AppStatus, ContainerAction) (ControlResult, error) {
-	return ControlResult{}, c.err
+	return c.result, c.err
 }
 
 func (c stubDockerClient) Logs(context.Context, models.AppStatus, LogOptions) ([]models.LogLine, error) {

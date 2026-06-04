@@ -47,6 +47,26 @@ func TestGeneralUserVisibilityFiltersHiddenAppsAndLogs(t *testing.T) {
 			{AppID: "visible", DisplayName: "Visible", ContainerName: "visible", ImageRef: "repo/private:latest", WebURL: "http://nas.local:32400", TemplatePath: "/boot/template.xml", VisibleToGeneralUsers: true, CurrentStatus: models.StatusOnline, AdminSummary: "admin", RecentLogs: []models.LogLine{{Line: "secret"}}},
 			{AppID: "hidden", DisplayName: "Hidden", ContainerName: "hidden", VisibleToGeneralUsers: false, CurrentStatus: models.StatusOffline},
 		},
+		Infrastructure: models.InfrastructureStatus{
+			UnraidUptimeSeconds:     12345,
+			UnraidCPUBrand:          "Intel N100",
+			UnraidCPUCores:          4,
+			UnraidCPUThreads:        4,
+			UnraidMemoryTotalBytes:  16000,
+			UnraidMemoryUsedBytes:   4000,
+			UnraidMemoryUsedPct:     25,
+			UnraidNotificationCount: 3,
+			UnraidAlertCount:        1,
+			UnraidWarningCount:      2,
+			UnraidVMCount:           2,
+			UnraidVMRunningCount:    1,
+			UnraidVMStoppedCount:    1,
+			UnraidVMNames:           []string{"Windows", "Linux"},
+			UnraidShareCount:        2,
+			UnraidShareNames:        []string{"media", "backups"},
+			DockerNetworkCount:      2,
+			DockerNetworkNames:      []string{"bridge", "media"},
+		},
 		Facts:     []models.IncidentFact{{ID: "fact-1", Type: models.IncidentAppDown, Summary: "Visible down", VisibleToUsers: true}},
 		Incidents: []models.Incident{{ID: "incident-1", Type: models.IncidentAppDown, Summary: "Visible down", AffectedServices: []string{"visible"}}},
 	}
@@ -59,6 +79,9 @@ func TestGeneralUserVisibilityFiltersHiddenAppsAndLogs(t *testing.T) {
 	}
 	if filtered.Facts[0].ID != "" || filtered.Incidents[0].ID != "" {
 		t.Fatalf("general user IDs were not hidden: facts=%#v incidents=%#v", filtered.Facts, filtered.Incidents)
+	}
+	if filtered.Infrastructure.UnraidUptimeSeconds != 0 || filtered.Infrastructure.UnraidCPUBrand != "" || filtered.Infrastructure.UnraidCPUCores != 0 || filtered.Infrastructure.UnraidMemoryTotalBytes != 0 || filtered.Infrastructure.UnraidNotificationCount != 0 || filtered.Infrastructure.UnraidVMCount != 0 || len(filtered.Infrastructure.UnraidVMNames) != 0 || filtered.Infrastructure.UnraidShareCount != 0 || len(filtered.Infrastructure.UnraidShareNames) != 0 || filtered.Infrastructure.DockerNetworkCount != 0 || len(filtered.Infrastructure.DockerNetworkNames) != 0 {
+		t.Fatalf("general user infrastructure leaked admin-only Unraid fields: %#v", filtered.Infrastructure)
 	}
 }
 

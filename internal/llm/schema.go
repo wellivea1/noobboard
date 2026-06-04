@@ -18,7 +18,13 @@ type Diagnosis struct {
 	GeneralUserSummary  string              `json:"general_user_summary"`
 	AdminMessage        string              `json:"admin_message"`
 	RecommendedActionID string              `json:"recommended_action_id"`
+	RecommendedTarget   ActionTarget        `json:"recommended_action_target"`
 	ShouldNotifyAdmin   bool                `json:"should_notify_admin"`
+}
+
+type ActionTarget struct {
+	Kind     string `json:"kind"`
+	IDOrName string `json:"id_or_name"`
 }
 
 func ValidateDiagnosis(data []byte) (Diagnosis, error) {
@@ -50,6 +56,14 @@ func (d Diagnosis) Validate() error {
 	}
 	if !validAction(d.RecommendedActionID) {
 		return fmt.Errorf("invalid recommended_action_id %q", d.RecommendedActionID)
+	}
+	if !validActionTargetKind(d.RecommendedTarget.Kind) {
+		return fmt.Errorf("invalid recommended_action_target.kind %q", d.RecommendedTarget.Kind)
+	}
+	if actionRequiresAppTarget(d.RecommendedActionID) {
+		if d.RecommendedTarget.Kind != "app" || d.RecommendedTarget.IDOrName == "" {
+			return fmt.Errorf("recommended_action_target must identify one app for %s", d.RecommendedActionID)
+		}
 	}
 	return nil
 }
@@ -84,9 +98,18 @@ func JSONSchema() map[string]interface{} {
 			"general_user_summary":  map[string]interface{}{"type": "string"},
 			"admin_message":         map[string]interface{}{"type": "string"},
 			"recommended_action_id": map[string]interface{}{"type": "string", "enum": []string{"none", "ask_admin_to_check", "ask_admin_to_restart_container", "ask_admin_to_check_logs", "ask_admin_to_check_unifi", "ask_admin_to_check_storage", "unknown"}},
-			"should_notify_admin":   map[string]interface{}{"type": "boolean"},
+			"recommended_action_target": map[string]interface{}{
+				"type":                 "object",
+				"additionalProperties": false,
+				"properties": map[string]interface{}{
+					"kind":       map[string]interface{}{"type": "string", "enum": []string{"none", "app", "server", "network", "storage", "manual"}},
+					"id_or_name": map[string]interface{}{"type": "string"},
+				},
+				"required": []string{"kind", "id_or_name"},
+			},
+			"should_notify_admin": map[string]interface{}{"type": "boolean"},
 		},
-		"required": []string{"severity", "confidence", "incident_type", "affected_services", "diagnosis", "evidence", "general_user_summary", "admin_message", "recommended_action_id", "should_notify_admin"},
+		"required": []string{"severity", "confidence", "incident_type", "affected_services", "diagnosis", "evidence", "general_user_summary", "admin_message", "recommended_action_id", "recommended_action_target", "should_notify_admin"},
 	}
 }
 
@@ -111,6 +134,24 @@ func validIncidentType(value models.IncidentType) bool {
 func validAction(value string) bool {
 	switch value {
 	case "none", "ask_admin_to_check", "ask_admin_to_restart_container", "ask_admin_to_check_logs", "ask_admin_to_check_unifi", "ask_admin_to_check_storage", "unknown":
+		return true
+	default:
+		return false
+	}
+}
+
+func validActionTargetKind(value string) bool {
+	switch value {
+	case "none", "app", "server", "network", "storage", "manual":
+		return true
+	default:
+		return false
+	}
+}
+
+func actionRequiresAppTarget(actionID string) bool {
+	switch actionID {
+	case "ask_admin_to_restart_container", "ask_admin_to_check_logs":
 		return true
 	default:
 		return false

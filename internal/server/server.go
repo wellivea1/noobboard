@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -25,6 +26,7 @@ import (
 	"github.com/wellivea1/noobboard/internal/config"
 	"github.com/wellivea1/noobboard/internal/db"
 	"github.com/wellivea1/noobboard/internal/diagnostics"
+	statushistory "github.com/wellivea1/noobboard/internal/history"
 	"github.com/wellivea1/noobboard/internal/llm"
 	"github.com/wellivea1/noobboard/internal/models"
 	"github.com/wellivea1/noobboard/internal/notifications"
@@ -44,6 +46,7 @@ type Dependencies struct {
 	Config        config.Config
 	Collectors    Collectors
 	Store         db.Store
+	History       db.HistoryStore
 	Users         *users.Registry
 	Audit         *audit.Auditor
 	Notifications *notifications.Manager
@@ -58,8 +61,15 @@ type App struct {
 	sessions               *sessionStore
 	loginLimiter           *loginLimiter
 	settingsMu             sync.RWMutex
+	snapshotMu             sync.RWMutex
+	cachedSnapshot         models.Snapshot
+	cachedSnapshotSet      bool
+	historyMu              sync.Mutex
+	historyRecorder        *statushistory.Recorder
+	lastHistoryPrune       time.Time
 	runtimeIntegrationsSet bool
 	openAIAuth             *openAIAuthStore
+	agentApprovalSecret    []byte
 }
 
 const maxRequestBodyBytes int64 = 1 << 20
@@ -77,6 +87,7 @@ const (
 	maxLoginFailureKeys = 2048
 	defaultLogLimit     = 80
 	maxLogLimit         = 200
+	agentApprovalPlanID = "current_recommendation"
 )
 
 func New(deps Dependencies) (*App, error) {
@@ -84,11 +95,17 @@ func New(deps Dependencies) (*App, error) {
 		return nil, errors.New("server dependencies are incomplete")
 	}
 	deps.Config.Visibility = normalizeVisibilitySettings(deps.Config.Visibility)
+	approvalSecret := make([]byte, 32)
+	if _, err := rand.Read(approvalSecret); err != nil {
+		return nil, err
+	}
 	app := &App{
-		deps:         deps,
-		sessions:     newSessionStore(deps.Config.Auth.SessionTimeout),
-		loginLimiter: newLoginLimiter(),
-		openAIAuth:   newOpenAIAuthStore(),
+		deps:                deps,
+		sessions:            newSessionStore(deps.Config.Auth.SessionTimeout),
+		loginLimiter:        newLoginLimiter(),
+		openAIAuth:          newOpenAIAuthStore(),
+		historyRecorder:     statushistory.NewRecorder(),
+		agentApprovalSecret: approvalSecret,
 	}
 	if settings, ok, err := deps.Store.RuntimeSettings(); err != nil {
 		return nil, err
@@ -115,6 +132,8 @@ func (a *App) AdminRouter() http.Handler {
 	mux.HandleFunc("GET /api/admin/apps/", a.requireAdmin(a.adminAppRead))
 	mux.HandleFunc("POST /api/admin/apps/", a.requireAdmin(a.adminAppMutation))
 	mux.HandleFunc("POST /api/admin/diagnose", a.requireAdmin(a.adminDiagnose))
+	mux.HandleFunc("POST /api/admin/agent/approval", a.requireAdmin(a.recordAgentApproval))
+	mux.HandleFunc("POST /api/admin/agent/arm", a.requireAdmin(a.setAgentArm))
 	mux.HandleFunc("GET /api/admin/settings/visibility", a.requireAdmin(a.getVisibilitySettings))
 	mux.HandleFunc("POST /api/admin/settings/visibility", a.requireAdmin(a.updateVisibilitySettings))
 	mux.HandleFunc("GET /api/admin/settings/roles", a.requireAdmin(a.getRoleSettings))
@@ -153,8 +172,11 @@ func (a *App) registerSharedRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/auth/logout", a.requireAuth(a.logout))
 	mux.HandleFunc("GET /api/auth/me", a.requireAuth(a.me))
 	mux.HandleFunc("GET /api/status/summary", a.requireAuth(a.statusSummary))
+	mux.HandleFunc("POST /api/status/refresh", a.requireAuth(a.refreshStatus))
 	mux.HandleFunc("GET /api/apps", a.requireAuth(a.apps))
+	mux.HandleFunc("GET /api/apps/{id}/history", a.requireAuth(a.appHistory))
 	mux.HandleFunc("GET /api/apps/", a.requireAuth(a.appByID))
+	mux.HandleFunc("GET /api/infrastructure/history", a.requireAuth(a.infrastructureHistory))
 	mux.HandleFunc("POST /api/user/diagnose", a.requireAuth(a.userDiagnose))
 	mux.HandleFunc("POST /api/user/notify-admin", a.requireAuth(a.notifyAdmin))
 	mux.HandleFunc("GET /api/user/notification-preferences", a.requireAuth(a.getNotificationPreferences))
@@ -179,6 +201,23 @@ func (a *App) Snapshot(ctx context.Context, role models.Role) (models.Snapshot, 
 	return privacy.FilterSnapshotForRole(full, role, a.redactorSnapshot()), nil
 }
 
+func (a *App) RunPoller(ctx context.Context, interval time.Duration) {
+	if interval < time.Second {
+		interval = time.Second
+	}
+	_, _ = a.refreshSnapshot(ctx, true)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			_, _ = a.refreshSnapshot(ctx, true)
+		}
+	}
+}
+
 func (a *App) Flush() {
 	_ = a.deps.Store.Flush()
 }
@@ -189,6 +228,71 @@ func (a *App) fullSnapshot(ctx context.Context) (models.Snapshot, error) {
 
 func (a *App) readOnlySnapshot(ctx context.Context) (models.Snapshot, error) {
 	return a.collectSnapshot(ctx, false)
+}
+
+func (a *App) latestSnapshot(ctx context.Context, role models.Role) (models.Snapshot, error) {
+	full, err := a.latestFullSnapshot(ctx)
+	if err != nil {
+		return models.Snapshot{}, err
+	}
+	if role == models.RoleAdmin {
+		return full, nil
+	}
+	return privacy.FilterSnapshotForRole(full, role, a.redactorSnapshot()), nil
+}
+
+func (a *App) latestFullSnapshot(ctx context.Context) (models.Snapshot, error) {
+	a.snapshotMu.RLock()
+	if a.cachedSnapshotSet {
+		snapshot := cloneSnapshot(a.cachedSnapshot)
+		a.snapshotMu.RUnlock()
+		return snapshot, nil
+	}
+	a.snapshotMu.RUnlock()
+	return a.refreshSnapshot(ctx, false)
+}
+
+func (a *App) refreshSnapshot(ctx context.Context, processNotifications bool) (models.Snapshot, error) {
+	snapshot, err := a.collectSnapshot(ctx, processNotifications)
+	if err != nil {
+		return models.Snapshot{}, err
+	}
+	if processNotifications {
+		_ = a.recordSnapshotHistory(snapshot)
+	}
+	a.snapshotMu.Lock()
+	a.cachedSnapshot = cloneSnapshot(snapshot)
+	a.cachedSnapshotSet = true
+	a.snapshotMu.Unlock()
+	return cloneSnapshot(snapshot), nil
+}
+
+func (a *App) recordSnapshotHistory(snapshot models.Snapshot) error {
+	if a.deps.History == nil || a.historyRecorder == nil {
+		return nil
+	}
+	a.historyMu.Lock()
+	defer a.historyMu.Unlock()
+	events := a.historyRecorder.Record(snapshot)
+	if len(events) > 0 {
+		if err := a.deps.History.Append(events); err != nil {
+			return err
+		}
+	}
+	if a.lastHistoryPrune.IsZero() || time.Since(a.lastHistoryPrune) >= time.Hour {
+		if err := a.deps.History.Prune(a.configSnapshot().Retention); err != nil {
+			return err
+		}
+		a.lastHistoryPrune = time.Now().UTC()
+	}
+	return nil
+}
+
+func (a *App) invalidateSnapshot() {
+	a.snapshotMu.Lock()
+	a.cachedSnapshot = models.Snapshot{}
+	a.cachedSnapshotSet = false
+	a.snapshotMu.Unlock()
 }
 
 func (a *App) collectSnapshot(ctx context.Context, processNotifications bool) (models.Snapshot, error) {
@@ -265,6 +369,76 @@ func (a *App) collectSnapshot(ctx context.Context, processNotifications bool) (m
 		_ = a.deps.Notifications.ProcessSnapshot(ctx, snapshot)
 	}
 	return snapshot, nil
+}
+
+func cloneSnapshot(snapshot models.Snapshot) models.Snapshot {
+	snapshot.Infrastructure.StorageWarnings = append([]string(nil), snapshot.Infrastructure.StorageWarnings...)
+	snapshot.Infrastructure.UniFiWarnings = append([]string(nil), snapshot.Infrastructure.UniFiWarnings...)
+	snapshot.Infrastructure.UnraidVMNames = append([]string(nil), snapshot.Infrastructure.UnraidVMNames...)
+	snapshot.Infrastructure.UnraidShareNames = append([]string(nil), snapshot.Infrastructure.UnraidShareNames...)
+	snapshot.Infrastructure.DockerNetworkNames = append([]string(nil), snapshot.Infrastructure.DockerNetworkNames...)
+	snapshot.Apps = cloneApps(snapshot.Apps)
+	snapshot.Incidents = cloneIncidents(snapshot.Incidents)
+	snapshot.Facts = cloneFacts(snapshot.Facts)
+	snapshot.Visibility = cloneVisibility(snapshot.Visibility)
+	snapshot.LLMPolicies = cloneLLMPolicies(snapshot.LLMPolicies)
+	snapshot.AuditTail = append([]models.AuditEntry(nil), snapshot.AuditTail...)
+	return snapshot
+}
+
+func cloneApps(apps []models.AppStatus) []models.AppStatus {
+	out := make([]models.AppStatus, len(apps))
+	for i, app := range apps {
+		out[i] = app
+		out[i].AllowedLogSources = append([]string(nil), app.AllowedLogSources...)
+		out[i].RecentLogs = append([]models.LogLine(nil), app.RecentLogs...)
+		out[i].LastIncidentIDs = append([]string(nil), app.LastIncidentIDs...)
+	}
+	return out
+}
+
+func cloneIncidents(incidents []models.Incident) []models.Incident {
+	out := make([]models.Incident, len(incidents))
+	for i, incident := range incidents {
+		out[i] = incident
+		out[i].AffectedServices = append([]string(nil), incident.AffectedServices...)
+		out[i].Evidence = append([]string(nil), incident.Evidence...)
+	}
+	return out
+}
+
+func cloneFacts(facts []models.IncidentFact) []models.IncidentFact {
+	out := make([]models.IncidentFact, len(facts))
+	for i, fact := range facts {
+		out[i] = fact
+		out[i].Evidence = append([]string(nil), fact.Evidence...)
+		out[i].AffectedServices = append([]string(nil), fact.AffectedServices...)
+	}
+	return out
+}
+
+func cloneVisibility(visibility models.VisibilitySettings) models.VisibilitySettings {
+	visibility.HiddenAppIDs = append([]string(nil), visibility.HiddenAppIDs...)
+	visibility.HiddenContainerNames = append([]string(nil), visibility.HiddenContainerNames...)
+	visibility.Roles = append([]models.RoleVisibility(nil), visibility.Roles...)
+	for i := range visibility.Roles {
+		visibility.Roles[i].HiddenAppIDs = append([]string(nil), visibility.Roles[i].HiddenAppIDs...)
+		visibility.Roles[i].HiddenContainerNames = append([]string(nil), visibility.Roles[i].HiddenContainerNames...)
+	}
+	return visibility
+}
+
+func cloneLLMPolicies(policies map[string]models.LLMPolicy) map[string]models.LLMPolicy {
+	if policies == nil {
+		return nil
+	}
+	out := make(map[string]models.LLMPolicy, len(policies))
+	for key, policy := range policies {
+		policy.AllowedLogSources = append([]string(nil), policy.AllowedLogSources...)
+		policy.AgentToolRules = append([]models.LLMAgentToolRule(nil), policy.AgentToolRules...)
+		out[key] = policy
+	}
+	return out
 }
 
 func collectorFailureStatus(source string, err error) models.InfrastructureStatus {
@@ -515,7 +689,7 @@ func (a *App) me(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) statusSummary(w http.ResponseWriter, r *http.Request) {
-	snapshot, err := a.Snapshot(r.Context(), mustUser(r).Role)
+	snapshot, err := a.latestSnapshot(r.Context(), mustUser(r).Role)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -523,8 +697,25 @@ func (a *App) statusSummary(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, snapshot)
 }
 
+func (a *App) refreshStatus(w http.ResponseWriter, r *http.Request) {
+	if err := requireCSRF(r); err != nil {
+		writeError(w, http.StatusForbidden, err)
+		return
+	}
+	full, err := a.refreshSnapshot(r.Context(), true)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if role := mustUser(r).Role; role != models.RoleAdmin {
+		writeJSON(w, http.StatusOK, privacy.FilterSnapshotForRole(full, role, a.redactorSnapshot()))
+		return
+	}
+	writeJSON(w, http.StatusOK, full)
+}
+
 func (a *App) apps(w http.ResponseWriter, r *http.Request) {
-	snapshot, err := a.Snapshot(r.Context(), mustUser(r).Role)
+	snapshot, err := a.latestSnapshot(r.Context(), mustUser(r).Role)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -534,7 +725,7 @@ func (a *App) apps(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) appByID(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/apps/")
-	snapshot, err := a.Snapshot(r.Context(), mustUser(r).Role)
+	snapshot, err := a.latestSnapshot(r.Context(), mustUser(r).Role)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -548,8 +739,103 @@ func (a *App) appByID(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusNotFound, db.ErrNotFound)
 }
 
+func (a *App) appHistory(w http.ResponseWriter, r *http.Request) {
+	if a.deps.History == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("status history is not configured"))
+		return
+	}
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		writeError(w, http.StatusBadRequest, errors.New("app id is required"))
+		return
+	}
+	role := mustUser(r).Role
+	snapshot, err := a.latestSnapshot(r.Context(), role)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	app, ok := findAppByID(snapshot.Apps, id)
+	if !ok {
+		writeError(w, http.StatusNotFound, db.ErrNotFound)
+		return
+	}
+	window := parseHistoryWindow(r.URL.Query().Get("window"))
+	limit := parseHistoryLimit(r.URL.Query().Get("limit"))
+	history, err := a.statusHistory(models.SubjectApp, app.AppID, app.DisplayName, app.CurrentStatus, app.LastSeenOnline, app.LastSeenOffline, window, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, history)
+}
+
+func (a *App) infrastructureHistory(w http.ResponseWriter, r *http.Request) {
+	if a.deps.History == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("status history is not configured"))
+		return
+	}
+	subject := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("subject")))
+	if subject == "" {
+		writeError(w, http.StatusBadRequest, errors.New("history subject is required"))
+		return
+	}
+	role := mustUser(r).Role
+	snapshot, err := a.latestSnapshot(r.Context(), role)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	current, displayName, ok := visibleInfraHistorySubject(subject, snapshot, role)
+	if !ok {
+		writeError(w, http.StatusNotFound, db.ErrNotFound)
+		return
+	}
+	window := parseHistoryWindow(r.URL.Query().Get("window"))
+	limit := parseHistoryLimit(r.URL.Query().Get("limit"))
+	history, err := a.statusHistory(models.SubjectInfra, subject, displayName, current, nil, nil, window, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, history)
+}
+
+func (a *App) statusHistory(subjectType models.StatusSubjectType, subjectID, displayName string, current models.CurrentStatus, lastOnline, lastOffline *time.Time, window time.Duration, limit int) (models.StatusHistory, error) {
+	now := time.Now().UTC()
+	since := now.Add(-window)
+	allEvents, err := a.deps.History.Query(db.HistoryFilter{SubjectType: subjectType, SubjectID: subjectID})
+	if err != nil {
+		return models.StatusHistory{}, err
+	}
+	responseEvents := make([]models.StatusEvent, 0, len(allEvents))
+	for _, event := range allEvents {
+		if event.At.Before(since) {
+			continue
+		}
+		event.Note = a.deps.Redactor.RedactString(event.Note).Text
+		responseEvents = append(responseEvents, event)
+		if limit > 0 && len(responseEvents) >= limit {
+			break
+		}
+	}
+	uptime24h := uptimePct(allEvents, current, 24*time.Hour, now)
+	uptime7d := uptimePct(allEvents, current, 7*24*time.Hour, now)
+	return models.StatusHistory{
+		SubjectType:     subjectType,
+		SubjectID:       subjectID,
+		DisplayName:     displayName,
+		Current:         current,
+		LastSeenOnline:  lastOnline,
+		LastSeenOffline: lastOffline,
+		UptimePct24h:    uptime24h,
+		UptimePct7d:     uptime7d,
+		Events:          responseEvents,
+	}, nil
+}
+
 func (a *App) adminStatus(w http.ResponseWriter, r *http.Request) {
-	snapshot, err := a.Snapshot(r.Context(), models.RoleAdmin)
+	snapshot, err := a.latestSnapshot(r.Context(), models.RoleAdmin)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -558,7 +844,7 @@ func (a *App) adminStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) adminIncidents(w http.ResponseWriter, r *http.Request) {
-	snapshot, err := a.Snapshot(r.Context(), models.RoleAdmin)
+	snapshot, err := a.latestSnapshot(r.Context(), models.RoleAdmin)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -664,6 +950,7 @@ func (a *App) updateAppIcon(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	a.invalidateSnapshot()
 	a.deps.Audit.Record(mustUser(r).ID, "app.icon.saved", map[string]interface{}{"app_id": id, "has_icon": iconURL != ""})
 	writeJSON(w, http.StatusOK, a.configSnapshot().AppCatalog)
 }
@@ -680,7 +967,9 @@ func (a *App) controlApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Action string `json:"action"`
+		Action       string `json:"action"`
+		Confirmed    bool   `json:"confirmed"`
+		ConfirmAppID string `json:"confirm_app_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -691,7 +980,7 @@ func (a *App) controlApp(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	snapshot, err := a.Snapshot(r.Context(), models.RoleAdmin)
+	snapshot, err := a.readOnlySnapshot(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -699,6 +988,10 @@ func (a *App) controlApp(w http.ResponseWriter, r *http.Request) {
 	app, ok := findAppByID(snapshot.Apps, id)
 	if !ok {
 		writeError(w, http.StatusNotFound, db.ErrNotFound)
+		return
+	}
+	if dockerActionRequiresConfirmation(action) && (!body.Confirmed || !sameAppIdentifier(body.ConfirmAppID, app.AppID)) {
+		writeError(w, http.StatusBadRequest, errors.New("stop and restart require confirmed=true with a matching confirm_app_id"))
 		return
 	}
 	result, err := a.deps.Collectors.Docker.ControlContainer(r.Context(), app, action)
@@ -711,6 +1004,14 @@ func (a *App) controlApp(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, result)
 }
 
+func dockerActionRequiresConfirmation(action docker.ContainerAction) bool {
+	return action == docker.ActionStop || action == docker.ActionRestart
+}
+
+func sameAppIdentifier(left, right string) bool {
+	return strings.EqualFold(strings.TrimSpace(left), strings.TrimSpace(right)) && strings.TrimSpace(right) != ""
+}
+
 func (a *App) appLogs(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/admin/apps/"), "/logs")
 	id = strings.Trim(id, "/")
@@ -719,7 +1020,7 @@ func (a *App) appLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit := parseLogLimit(r.URL.Query().Get("limit"))
-	snapshot, err := a.Snapshot(r.Context(), models.RoleAdmin)
+	snapshot, err := a.readOnlySnapshot(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -762,6 +1063,39 @@ func parseLogLimit(value string) int {
 	return limit
 }
 
+func parseHistoryLimit(value string) int {
+	limit := 100
+	if strings.TrimSpace(value) != "" {
+		if parsed, err := strconv.Atoi(strings.TrimSpace(value)); err == nil {
+			limit = parsed
+		}
+	}
+	if limit < 1 {
+		return 1
+	}
+	if limit > 500 {
+		return 500
+	}
+	return limit
+}
+
+func parseHistoryWindow(value string) time.Duration {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return 7 * 24 * time.Hour
+	}
+	if strings.HasSuffix(value, "d") {
+		days, err := strconv.Atoi(strings.TrimSpace(strings.TrimSuffix(value, "d")))
+		if err == nil && days > 0 {
+			return time.Duration(days) * 24 * time.Hour
+		}
+	}
+	if duration, err := time.ParseDuration(value); err == nil && duration > 0 {
+		return duration
+	}
+	return 7 * 24 * time.Hour
+}
+
 func findAppByID(apps []models.AppStatus, id string) (models.AppStatus, bool) {
 	id = strings.ToLower(strings.TrimSpace(id))
 	for _, app := range apps {
@@ -772,6 +1106,87 @@ func findAppByID(apps []models.AppStatus, id string) (models.AppStatus, bool) {
 		}
 	}
 	return models.AppStatus{}, false
+}
+
+func visibleInfraHistorySubject(subject string, snapshot models.Snapshot, role models.Role) (models.CurrentStatus, string, bool) {
+	infra := snapshot.Infrastructure
+	switch subject {
+	case "internet":
+		return boolHistoryStatus(infra.InternetReachable), "Internet", true
+	case "dns":
+		return boolHistoryStatus(infra.DNSOK), "DNS", true
+	case "wan":
+		if role != models.RoleAdmin && !snapshot.Visibility.ShowWANStatusToUsers {
+			return "", "", false
+		}
+		return boolHistoryStatus(infra.UniFiWANUp), "WAN", true
+	case "nas":
+		if role != models.RoleAdmin && !snapshot.Visibility.ShowNASStatusToUsers {
+			return "", "", false
+		}
+		return boolHistoryStatus(infra.NASReachable), "NAS", true
+	case "unraid_array":
+		if role != models.RoleAdmin && !snapshot.Visibility.ShowNASStatusToUsers {
+			return "", "", false
+		}
+		return arrayHistoryStatus(infra), "Unraid array", true
+	default:
+		return "", "", false
+	}
+}
+
+func boolHistoryStatus(ok bool) models.CurrentStatus {
+	if ok {
+		return models.StatusOnline
+	}
+	return models.StatusOffline
+}
+
+func arrayHistoryStatus(infra models.InfrastructureStatus) models.CurrentStatus {
+	if !infra.UnraidAPIReachable || strings.TrimSpace(infra.UnraidArrayState) == "" {
+		return models.StatusUnknown
+	}
+	if infra.UnraidArrayHealthy {
+		return models.StatusOnline
+	}
+	if strings.EqualFold(strings.TrimSpace(infra.UnraidArrayState), "started") {
+		return models.StatusDegraded
+	}
+	return models.StatusOffline
+}
+
+func uptimePct(events []models.StatusEvent, current models.CurrentStatus, window time.Duration, now time.Time) *float64 {
+	if window <= 0 {
+		return nil
+	}
+	start := now.Add(-window)
+	cursor := now
+	status := current
+	online := time.Duration(0)
+	for _, event := range events {
+		if event.At.After(now) {
+			continue
+		}
+		if !event.At.After(start) {
+			break
+		}
+		if status == models.StatusOnline {
+			online += cursor.Sub(event.At)
+		}
+		status = event.From
+		cursor = event.At
+	}
+	if cursor.After(start) && status == models.StatusOnline {
+		online += cursor.Sub(start)
+	}
+	pct := float64(online) / float64(window) * 100
+	if pct < 0 {
+		pct = 0
+	}
+	if pct > 100 {
+		pct = 100
+	}
+	return &pct
 }
 
 func (a *App) adminDiagnose(w http.ResponseWriter, r *http.Request) {
@@ -816,7 +1231,7 @@ func (a *App) diagnose(w http.ResponseWriter, r *http.Request, mode llm.Mode, ro
 	if len(body.Question) > 1000 {
 		body.Question = body.Question[:1000]
 	}
-	full, err := a.fullSnapshot(r.Context())
+	full, err := a.readOnlySnapshot(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -855,7 +1270,338 @@ func (a *App) diagnose(w http.ResponseWriter, r *http.Request, mode llm.Mode, ro
 		return
 	}
 	a.deps.Audit.Record(mustUser(r).ID, "llm.diagnosis", map[string]interface{}{"mode": string(mode), "incident_type": string(diagnosis.IncidentType), "admin_message": diagnosis.AdminMessage})
-	writeJSON(w, http.StatusOK, diagnosis)
+	response := diagnosisResponse{Diagnosis: diagnosis}
+	if mode == llm.ModeAdminRequested && role == models.RoleAdmin {
+		response.AgentPlan = a.llmAgentPlanResponse(diagnosis, full, mustUser(r).ID)
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (a *App) llmAgentPlanResponse(diagnosis llm.Diagnosis, snapshot models.Snapshot, actorID string) *llmAgentPlanView {
+	action, known := agentActionDefinition(diagnosis.RecommendedActionID)
+	target := resolveAgentPlanTarget(action, diagnosis, snapshot)
+	requiresApproval := known && action.ApprovalEligible && (!action.RequiresAppTarget || target.Resolved)
+	status := "not_actionable"
+	if requiresApproval {
+		status = "approval_locked"
+	} else if known && action.RequiresAppTarget && !target.Resolved {
+		status = "target_unresolved"
+	}
+	expiresAt := time.Now().UTC().Add(5 * time.Minute)
+	approvalToken := ""
+	if requiresApproval {
+		approvalToken = a.signAgentApprovalToken(agentApprovalTokenPayload{
+			PlanID:              agentApprovalPlanID,
+			ActorID:             actorID,
+			RecommendedActionID: action.ID,
+			TargetKind:          target.Kind,
+			TargetID:            target.ID,
+			ExpiresAt:           expiresAt.Unix(),
+		})
+	}
+	return &llmAgentPlanView{
+		ID:                    agentApprovalPlanID,
+		Title:                 action.Title,
+		Summary:               action.Summary,
+		RecommendedActionID:   action.ID,
+		ActionKnown:           known,
+		ApprovalToken:         approvalToken,
+		ApprovalExpiresAt:     expiresAt,
+		RequiresAdminApproval: requiresApproval,
+		CanExecute:            false,
+		Status:                status,
+		Target:                target,
+		Options: []llmAgentPlanOptionView{
+			{
+				ID:          "deny",
+				Label:       "Do not allow",
+				Description: "Keep the diagnosis and do not permit an automatic fix.",
+				Enabled:     true,
+				Selected:    true,
+			},
+			{
+				ID:          "allow_once",
+				Label:       "Allow fix",
+				Description: "Permit this single fix attempt.",
+				Enabled:     false,
+				Reason:      agentPlanAllowReason(action, target),
+			},
+		},
+	}
+}
+
+type llmAgentActionDefinition struct {
+	ID                string
+	Title             string
+	Summary           string
+	ApprovalEligible  bool
+	RequiresAppTarget bool
+}
+
+var llmAgentActionRegistry = map[string]llmAgentActionDefinition{
+	"none": {
+		ID:      "none",
+		Title:   "No action recommended",
+		Summary: "The model did not recommend an admin action.",
+	},
+	"unknown": {
+		ID:      "unknown",
+		Title:   "Unclear recommendation",
+		Summary: "The model did not return a specific action that NoobBoard can place behind an approval popup.",
+	},
+	"ask_admin_to_check": {
+		ID:               "ask_admin_to_check",
+		Title:            "Manual check recommendation",
+		Summary:          "The model suggested an admin check. Chat can show it in the normal approval popup once action tools exist.",
+		ApprovalEligible: true,
+	},
+	"ask_admin_to_restart_container": {
+		ID:                "ask_admin_to_restart_container",
+		Title:             "Restart recommendation",
+		Summary:           "The model suggested a restart. Chat can ask for approval, but it cannot restart anything until repair tools are implemented.",
+		ApprovalEligible:  true,
+		RequiresAppTarget: true,
+	},
+	"ask_admin_to_check_logs": {
+		ID:                "ask_admin_to_check_logs",
+		Title:             "Log check recommendation",
+		Summary:           "The model suggested checking logs. Chat can ask for approval once log-based repair actions exist.",
+		ApprovalEligible:  true,
+		RequiresAppTarget: true,
+	},
+	"ask_admin_to_check_unifi": {
+		ID:               "ask_admin_to_check_unifi",
+		Title:            "Network check recommendation",
+		Summary:          "The model suggested checking router or network status. Chat can ask for approval once network repair actions exist.",
+		ApprovalEligible: true,
+	},
+	"ask_admin_to_check_storage": {
+		ID:               "ask_admin_to_check_storage",
+		Title:            "Storage check recommendation",
+		Summary:          "The model suggested checking server storage. Chat cannot run Unraid storage actions.",
+		ApprovalEligible: true,
+	},
+}
+
+func agentActionDefinition(id string) (llmAgentActionDefinition, bool) {
+	actionID := strings.TrimSpace(id)
+	if actionID == "" {
+		actionID = "unknown"
+	}
+	action, ok := llmAgentActionRegistry[actionID]
+	if ok {
+		return action, true
+	}
+	return llmAgentActionRegistry["unknown"], false
+}
+
+func resolveAgentPlanTarget(action llmAgentActionDefinition, diagnosis llm.Diagnosis, snapshot models.Snapshot) llmAgentPlanTargetView {
+	target := llmAgentPlanTargetView{
+		Kind:   firstNonEmpty(strings.TrimSpace(diagnosis.RecommendedTarget.Kind), "none"),
+		Query:  strings.TrimSpace(diagnosis.RecommendedTarget.IDOrName),
+		Reason: "No specific target is needed for this recommendation.",
+	}
+	if !action.RequiresAppTarget {
+		if target.Kind == "none" || target.Query == "" {
+			return target
+		}
+		target.Reason = "Target was provided by the model but this action does not require an app target."
+		return target
+	}
+	target.Kind = "app"
+	candidates := make([]string, 0, len(diagnosis.AffectedServices)+1)
+	if strings.TrimSpace(diagnosis.RecommendedTarget.IDOrName) != "" {
+		candidates = append(candidates, diagnosis.RecommendedTarget.IDOrName)
+	}
+	candidates = append(candidates, diagnosis.AffectedServices...)
+	for _, candidate := range candidates {
+		app, ok := findAppByID(snapshot.Apps, candidate)
+		if !ok {
+			continue
+		}
+		target.ID = app.AppID
+		target.Label = firstNonEmpty(app.DisplayName, app.AppID)
+		target.Query = strings.TrimSpace(candidate)
+		target.Resolved = true
+		target.Reason = ""
+		return target
+	}
+	target.Reason = "No exact app target from the model recommendation matched the current admin app snapshot."
+	return target
+}
+
+func agentPlanAllowReason(action llmAgentActionDefinition, target llmAgentPlanTargetView) string {
+	if action.RequiresAppTarget && !target.Resolved {
+		return target.Reason
+	}
+	return "Locked until non-read-only tools have schema validation, audit policy, and admin approval."
+}
+
+func (a *App) recordAgentApproval(w http.ResponseWriter, r *http.Request) {
+	if err := requireCSRF(r); err != nil {
+		writeError(w, http.StatusForbidden, err)
+		return
+	}
+	var body struct {
+		ApprovalToken string `json:"approval_token"`
+		Choice        string `json:"choice"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	choice := strings.TrimSpace(body.Choice)
+	payload, err := a.verifyAgentApprovalToken(strings.TrimSpace(body.ApprovalToken), mustUser(r).ID)
+	if err != nil {
+		writeError(w, http.StatusForbidden, err)
+		return
+	}
+	action, ok := agentActionDefinition(payload.RecommendedActionID)
+	if !ok || !action.ApprovalEligible {
+		writeError(w, http.StatusBadRequest, errors.New("approval plan is not eligible for approval"))
+		return
+	}
+	if action.RequiresAppTarget && (payload.TargetKind != "app" || strings.TrimSpace(payload.TargetID) == "") {
+		writeError(w, http.StatusBadRequest, errors.New("approval plan target is missing or invalid"))
+		return
+	}
+	if !validAgentApprovalChoice(choice) {
+		writeError(w, http.StatusBadRequest, errors.New("unsupported approval choice"))
+		return
+	}
+	a.settingsMu.RLock()
+	llmCfg := a.deps.Config.LLM
+	a.settingsMu.RUnlock()
+	agentArmed, agentArmedUntil := agentSessionArmed(llmCfg, mustSession(r))
+	details := map[string]interface{}{
+		"plan_id":               payload.PlanID,
+		"choice":                choice,
+		"recommended_action_id": action.ID,
+		"target_kind":           payload.TargetKind,
+		"target_id":             payload.TargetID,
+		"agent_armed":           agentArmed,
+		"agent_armed_until":     agentArmedUntil,
+		"can_execute":           false,
+	}
+	if choice == "deny" {
+		a.deps.Audit.Record(mustUser(r).ID, "llm.agent_plan.denied", details)
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "denied"})
+		return
+	}
+	if !agentArmed {
+		a.deps.Audit.Record(mustUser(r).ID, "llm.agent_plan.not_armed", details)
+		writeError(w, http.StatusConflict, errors.New("agent action approval must be armed in this admin session before a fix can run"))
+		return
+	}
+	a.deps.Audit.Record(mustUser(r).ID, "llm.agent_plan.locked", details)
+	writeError(w, http.StatusConflict, errors.New("automatic fixes are locked until mutating agent tools are implemented"))
+}
+
+func (a *App) setAgentArm(w http.ResponseWriter, r *http.Request) {
+	if err := requireCSRF(r); err != nil {
+		writeError(w, http.StatusForbidden, err)
+		return
+	}
+	var body struct {
+		Armed           bool `json:"armed"`
+		DurationSeconds int  `json:"duration_seconds"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	a.settingsMu.RLock()
+	cfg := a.deps.Config.LLM
+	a.settingsMu.RUnlock()
+	duration := cfg.AgentArmDuration
+	if body.DurationSeconds > 0 {
+		duration = time.Duration(body.DurationSeconds) * time.Second
+	}
+	if duration <= 0 {
+		duration = config.Defaults().LLM.AgentArmDuration
+	}
+	if duration > time.Hour {
+		duration = time.Hour
+	}
+	var until time.Time
+	action := "llm.agent.disarmed"
+	if body.Armed {
+		if !cfg.AgentControlEnabled {
+			writeError(w, http.StatusConflict, errors.New("agent action approval gate is disabled in LLM settings"))
+			return
+		}
+		until = time.Now().UTC().Add(duration)
+		action = "llm.agent.armed"
+	}
+	updated, ok := a.sessions.setAgentArmed(mustSession(r).Token, until)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, errors.New("authentication required"))
+		return
+	}
+	a.deps.Audit.Record(mustUser(r).ID, action, map[string]interface{}{
+		"armed":            body.Armed,
+		"armed_until":      until,
+		"duration_seconds": int(duration / time.Second),
+	})
+	writeJSON(w, http.StatusOK, llmAgentReadinessResponse(cfg, updated))
+}
+
+func (a *App) signAgentApprovalToken(payload agentApprovalTokenPayload) string {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return ""
+	}
+	encoded := base64.RawURLEncoding.EncodeToString(data)
+	mac := hmac.New(sha256.New, a.agentApprovalSecret)
+	_, _ = mac.Write([]byte(encoded))
+	signature := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return encoded + "." + signature
+}
+
+func (a *App) verifyAgentApprovalToken(token, actorID string) (agentApprovalTokenPayload, error) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return agentApprovalTokenPayload{}, errors.New("valid approval token is required")
+	}
+	signature, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return agentApprovalTokenPayload{}, errors.New("valid approval token is required")
+	}
+	mac := hmac.New(sha256.New, a.agentApprovalSecret)
+	_, _ = mac.Write([]byte(parts[0]))
+	if !hmac.Equal(signature, mac.Sum(nil)) {
+		return agentApprovalTokenPayload{}, errors.New("approval token is invalid")
+	}
+	data, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return agentApprovalTokenPayload{}, errors.New("approval token is invalid")
+	}
+	var payload agentApprovalTokenPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return agentApprovalTokenPayload{}, errors.New("approval token is invalid")
+	}
+	if payload.PlanID != agentApprovalPlanID || strings.TrimSpace(payload.RecommendedActionID) == "" {
+		return agentApprovalTokenPayload{}, errors.New("approval token is invalid")
+	}
+	if _, ok := agentActionDefinition(payload.RecommendedActionID); !ok {
+		return agentApprovalTokenPayload{}, errors.New("approval token is invalid")
+	}
+	if payload.ActorID != actorID {
+		return agentApprovalTokenPayload{}, errors.New("approval token is not valid for this user")
+	}
+	if payload.ExpiresAt <= 0 || time.Now().UTC().After(time.Unix(payload.ExpiresAt, 0)) {
+		return agentApprovalTokenPayload{}, errors.New("approval token has expired")
+	}
+	return payload, nil
+}
+
+func validAgentApprovalChoice(choice string) bool {
+	switch choice {
+	case "deny", "allow_once":
+		return true
+	default:
+		return false
+	}
 }
 
 func (a *App) notifyAdmin(w http.ResponseWriter, r *http.Request) {
@@ -922,7 +1668,7 @@ func (a *App) getRoleSettings(w http.ResponseWriter, r *http.Request) {
 	a.settingsMu.RLock()
 	visibility := normalizeVisibilitySettings(a.deps.Config.Visibility)
 	a.settingsMu.RUnlock()
-	snapshot, err := a.Snapshot(r.Context(), models.RoleAdmin)
+	snapshot, err := a.latestSnapshot(r.Context(), models.RoleAdmin)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -953,11 +1699,11 @@ func (a *App) getAppCatalogSettings(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, cfg)
 }
 
-func (a *App) getLLMSettings(w http.ResponseWriter, _ *http.Request) {
+func (a *App) getLLMSettings(w http.ResponseWriter, r *http.Request) {
 	a.settingsMu.RLock()
 	cfg := a.deps.Config.LLM
 	a.settingsMu.RUnlock()
-	writeJSON(w, http.StatusOK, llmSettingsResponse(cfg))
+	writeJSON(w, http.StatusOK, llmSettingsResponse(cfg, mustSession(r)))
 }
 
 func (a *App) getIntegrationSettings(w http.ResponseWriter, _ *http.Request) {
@@ -999,6 +1745,7 @@ func (a *App) updateVisibilitySettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	a.invalidateSnapshot()
 	a.deps.Audit.Record(mustUser(r).ID, "settings.visibility.saved", map[string]interface{}{"path": r.URL.Path})
 	writeJSON(w, http.StatusOK, settings)
 }
@@ -1028,6 +1775,7 @@ func (a *App) updateRoleSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	a.invalidateSnapshot()
 	a.deps.Audit.Record(mustUser(r).ID, "settings.roles.saved", map[string]interface{}{"roles": len(settings.Roles)})
 	writeJSON(w, http.StatusOK, settings)
 }
@@ -1051,6 +1799,7 @@ func (a *App) updateBlacklistSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	a.invalidateSnapshot()
 	a.deps.Audit.Record(mustUser(r).ID, "settings.blacklist.saved", map[string]interface{}{"path": r.URL.Path})
 	writeJSON(w, http.StatusOK, settings)
 }
@@ -1088,6 +1837,7 @@ func (a *App) updateAppCatalogSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	a.invalidateSnapshot()
 	a.deps.Audit.Record(mustUser(r).ID, "settings.apps.saved", map[string]interface{}{"path": r.URL.Path, "icon_overrides": len(settings.IconOverrides)})
 	writeJSON(w, http.StatusOK, settings)
 }
@@ -1119,11 +1869,12 @@ func (a *App) updateLLMSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	a.invalidateSnapshot()
 	a.deps.Audit.Record(mustUser(r).ID, "settings.llm.saved", map[string]interface{}{"path": r.URL.Path, "provider": settings.Provider})
 	if chatGPTAuthPresent(current) && !chatGPTAuthPresent(settings) {
 		a.deps.Audit.Record(mustUser(r).ID, "settings.llm.chatgpt.cleared", map[string]interface{}{"path": r.URL.Path})
 	}
-	writeJSON(w, http.StatusOK, llmSettingsResponse(settings))
+	writeJSON(w, http.StatusOK, llmSettingsResponse(settings, mustSession(r)))
 }
 
 func (a *App) updateIntegrationSettings(w http.ResponseWriter, r *http.Request) {
@@ -1164,6 +1915,7 @@ func (a *App) updateIntegrationSettings(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	a.invalidateSnapshot()
 	a.deps.Audit.Record(mustUser(r).ID, "settings.integrations.saved", map[string]interface{}{
 		"path":       r.URL.Path,
 		"mode":       settings.Mode,
@@ -1192,6 +1944,7 @@ func (a *App) updateNotificationSettings(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	a.invalidateSnapshot()
 	a.deps.Audit.Record(mustUser(r).ID, "settings.notifications.saved", map[string]interface{}{"path": r.URL.Path, "enabled": settings.Enabled})
 	writeJSON(w, http.StatusOK, settings)
 }
@@ -1208,7 +1961,94 @@ type llmSettingsView struct {
 	AnthropicModel        string                      `json:"anthropic_model"`
 	AnthropicAPIKeySet    bool                        `json:"anthropic_api_key_set"`
 	Timeout               time.Duration               `json:"timeout"`
+	AgentControlEnabled   bool                        `json:"agent_control_enabled"`
+	AgentArmDuration      time.Duration               `json:"agent_arm_duration"`
 	Policies              map[string]models.LLMPolicy `json:"policies"`
+	AgentReadiness        llmAgentReadinessView       `json:"agent_readiness"`
+}
+
+type llmAgentReadinessView struct {
+	ReadOnlyToolsAvailable bool                         `json:"read_only_tools_available"`
+	MutatingToolsAvailable bool                         `json:"mutating_tools_available"`
+	AgentControlEnabled    bool                         `json:"agent_control_enabled"`
+	AgentArmed             bool                         `json:"agent_armed"`
+	AgentArmedUntil        time.Time                    `json:"agent_armed_until,omitempty"`
+	AgentArmDuration       time.Duration                `json:"agent_arm_duration"`
+	AdminToolsEnabled      bool                         `json:"admin_tools_enabled"`
+	AdminToolCallLimit     int                          `json:"admin_tool_call_limit"`
+	ReadOnlyTools          []llmAgentToolView           `json:"read_only_tools"`
+	ReviewModes            []llmAgentReviewModeView     `json:"review_modes"`
+	OpenCodeAutoReview     llmOpenCodeAutoReviewSummary `json:"opencode_auto_review"`
+}
+
+type llmAgentToolView struct {
+	Name        string `json:"name"`
+	Label       string `json:"label"`
+	Access      string `json:"access"`
+	Mutating    bool   `json:"mutating"`
+	Description string `json:"description"`
+}
+
+type llmAgentReviewModeView struct {
+	ID          string `json:"id"`
+	Label       string `json:"label"`
+	Status      string `json:"status"`
+	Enabled     bool   `json:"enabled"`
+	Description string `json:"description"`
+}
+
+type llmOpenCodeAutoReviewSummary struct {
+	ReferenceReviewed   bool   `json:"reference_reviewed"`
+	SufficientReference bool   `json:"sufficient_reference"`
+	ModelFinding        string `json:"model_finding"`
+	DesignFinding       string `json:"design_finding"`
+}
+
+type diagnosisResponse struct {
+	llm.Diagnosis
+	AgentPlan *llmAgentPlanView `json:"agent_plan,omitempty"`
+}
+
+type llmAgentPlanView struct {
+	ID                    string                   `json:"id"`
+	Title                 string                   `json:"title"`
+	Summary               string                   `json:"summary"`
+	RecommendedActionID   string                   `json:"recommended_action_id"`
+	ActionKnown           bool                     `json:"action_known"`
+	ApprovalToken         string                   `json:"approval_token"`
+	ApprovalExpiresAt     time.Time                `json:"approval_expires_at"`
+	RequiresAdminApproval bool                     `json:"requires_admin_approval"`
+	CanExecute            bool                     `json:"can_execute"`
+	Status                string                   `json:"status"`
+	Target                llmAgentPlanTargetView   `json:"target"`
+	Options               []llmAgentPlanOptionView `json:"options"`
+}
+
+type llmAgentPlanTargetView struct {
+	Kind     string `json:"kind"`
+	ID       string `json:"id,omitempty"`
+	Label    string `json:"label,omitempty"`
+	Query    string `json:"query,omitempty"`
+	Resolved bool   `json:"resolved"`
+	Reason   string `json:"reason,omitempty"`
+}
+
+type llmAgentPlanOptionView struct {
+	ID          string `json:"id"`
+	Label       string `json:"label"`
+	Description string `json:"description"`
+	Enabled     bool   `json:"enabled"`
+	Selected    bool   `json:"selected,omitempty"`
+	Reason      string `json:"reason,omitempty"`
+}
+
+type agentApprovalTokenPayload struct {
+	PlanID              string `json:"plan_id"`
+	ActorID             string `json:"actor_id"`
+	RecommendedActionID string `json:"recommended_action_id"`
+	TargetKind          string `json:"target_kind,omitempty"`
+	TargetID            string `json:"target_id,omitempty"`
+	ExpiresAt           int64  `json:"expires_at"`
 }
 
 type llmSettingsUpdate struct {
@@ -1223,56 +2063,62 @@ type llmSettingsUpdate struct {
 	AnthropicAPIKey      *string                     `json:"anthropic_api_key"`
 	ClearAnthropicAPIKey bool                        `json:"clear_anthropic_api_key"`
 	Timeout              *time.Duration              `json:"timeout"`
+	AgentControlEnabled  *bool                       `json:"agent_control_enabled"`
+	AgentArmDuration     *time.Duration              `json:"agent_arm_duration"`
 	Policies             map[string]models.LLMPolicy `json:"policies"`
 }
 
 type integrationSettingsView struct {
-	Mode              string `json:"mode"`
-	UnraidBaseURL     string `json:"unraid_base_url"`
-	UnraidAPIKeySet   bool   `json:"unraid_api_key_set"`
-	UnraidAPIKeyFile  string `json:"unraid_api_key_file,omitempty"`
-	UnraidSSHFallback bool   `json:"unraid_ssh_fallback"`
-	UnraidSSHHost     string `json:"unraid_ssh_host,omitempty"`
-	UnraidSSHPort     int    `json:"unraid_ssh_port"`
-	UnraidSSHUser     string `json:"unraid_ssh_user,omitempty"`
-	UnraidSSHKeyFile  string `json:"unraid_ssh_key_file,omitempty"`
-	UnraidSSHCommand  string `json:"unraid_ssh_command,omitempty"`
-	UniFiBaseURL      string `json:"unifi_base_url"`
-	UniFiAPIKeySet    bool   `json:"unifi_api_key_set"`
-	UniFiAPIKeyFile   string `json:"unifi_api_key_file,omitempty"`
-	UniFiSiteID       string `json:"unifi_site_id"`
-	UniFiInsecureTLS  bool   `json:"unifi_insecure_tls"`
-	InternetProbeURL  string `json:"internet_probe_url"`
-	DNSProbeHost      string `json:"dns_probe_host"`
-	RouterProbeTarget string `json:"router_probe_target"`
-	NASProbeTarget    string `json:"nas_probe_target"`
+	Mode                string `json:"mode"`
+	UnraidBaseURL       string `json:"unraid_base_url"`
+	UnraidAPIKeySet     bool   `json:"unraid_api_key_set"`
+	UnraidAPIKeyFile    string `json:"unraid_api_key_file,omitempty"`
+	UnraidSSHFallback   bool   `json:"unraid_ssh_fallback"`
+	UnraidSSHHost       string `json:"unraid_ssh_host,omitempty"`
+	UnraidSSHPort       int    `json:"unraid_ssh_port"`
+	UnraidSSHUser       string `json:"unraid_ssh_user,omitempty"`
+	UnraidSSHKeyFile    string `json:"unraid_ssh_key_file,omitempty"`
+	UnraidSSHCommand    string `json:"unraid_ssh_command,omitempty"`
+	UniFiBaseURL        string `json:"unifi_base_url"`
+	UniFiAPIKeySet      bool   `json:"unifi_api_key_set"`
+	UniFiAPIKeyFile     string `json:"unifi_api_key_file,omitempty"`
+	UniFiSiteID         string `json:"unifi_site_id"`
+	UniFiInsecureTLS    bool   `json:"unifi_insecure_tls"`
+	UniFiNASClientHint  string `json:"unifi_nas_client_hint,omitempty"`
+	ExpectedNASLinkMbps int    `json:"expected_nas_link_mbps,omitempty"`
+	InternetProbeURL    string `json:"internet_probe_url"`
+	DNSProbeHost        string `json:"dns_probe_host"`
+	RouterProbeTarget   string `json:"router_probe_target"`
+	NASProbeTarget      string `json:"nas_probe_target"`
 }
 
 type integrationSettingsUpdate struct {
-	Mode              *string `json:"mode"`
-	UnraidBaseURL     *string `json:"unraid_base_url"`
-	UnraidAPIKey      *string `json:"unraid_api_key"`
-	ClearUnraidAPIKey bool    `json:"clear_unraid_api_key"`
-	UnraidAPIKeyFile  *string `json:"unraid_api_key_file"`
-	UnraidSSHFallback *bool   `json:"unraid_ssh_fallback"`
-	UnraidSSHHost     *string `json:"unraid_ssh_host"`
-	UnraidSSHPort     *int    `json:"unraid_ssh_port"`
-	UnraidSSHUser     *string `json:"unraid_ssh_user"`
-	UnraidSSHKeyFile  *string `json:"unraid_ssh_key_file"`
-	UnraidSSHCommand  *string `json:"unraid_ssh_command"`
-	UniFiBaseURL      *string `json:"unifi_base_url"`
-	UniFiAPIKey       *string `json:"unifi_api_key"`
-	ClearUniFiAPIKey  bool    `json:"clear_unifi_api_key"`
-	UniFiAPIKeyFile   *string `json:"unifi_api_key_file"`
-	UniFiSiteID       *string `json:"unifi_site_id"`
-	UniFiInsecureTLS  *bool   `json:"unifi_insecure_tls"`
-	InternetProbeURL  *string `json:"internet_probe_url"`
-	DNSProbeHost      *string `json:"dns_probe_host"`
-	RouterProbeTarget *string `json:"router_probe_target"`
-	NASProbeTarget    *string `json:"nas_probe_target"`
+	Mode                *string `json:"mode"`
+	UnraidBaseURL       *string `json:"unraid_base_url"`
+	UnraidAPIKey        *string `json:"unraid_api_key"`
+	ClearUnraidAPIKey   bool    `json:"clear_unraid_api_key"`
+	UnraidAPIKeyFile    *string `json:"unraid_api_key_file"`
+	UnraidSSHFallback   *bool   `json:"unraid_ssh_fallback"`
+	UnraidSSHHost       *string `json:"unraid_ssh_host"`
+	UnraidSSHPort       *int    `json:"unraid_ssh_port"`
+	UnraidSSHUser       *string `json:"unraid_ssh_user"`
+	UnraidSSHKeyFile    *string `json:"unraid_ssh_key_file"`
+	UnraidSSHCommand    *string `json:"unraid_ssh_command"`
+	UniFiBaseURL        *string `json:"unifi_base_url"`
+	UniFiAPIKey         *string `json:"unifi_api_key"`
+	ClearUniFiAPIKey    bool    `json:"clear_unifi_api_key"`
+	UniFiAPIKeyFile     *string `json:"unifi_api_key_file"`
+	UniFiSiteID         *string `json:"unifi_site_id"`
+	UniFiInsecureTLS    *bool   `json:"unifi_insecure_tls"`
+	UniFiNASClientHint  *string `json:"unifi_nas_client_hint"`
+	ExpectedNASLinkMbps *int    `json:"expected_nas_link_mbps"`
+	InternetProbeURL    *string `json:"internet_probe_url"`
+	DNSProbeHost        *string `json:"dns_probe_host"`
+	RouterProbeTarget   *string `json:"router_probe_target"`
+	NASProbeTarget      *string `json:"nas_probe_target"`
 }
 
-func llmSettingsResponse(cfg config.LLMConfig) llmSettingsView {
+func llmSettingsResponse(cfg config.LLMConfig, sess session) llmSettingsView {
 	return llmSettingsView{
 		Enabled:               cfg.Enabled,
 		Provider:              cfg.Provider,
@@ -1285,7 +2131,106 @@ func llmSettingsResponse(cfg config.LLMConfig) llmSettingsView {
 		AnthropicModel:        cfg.AnthropicModel,
 		AnthropicAPIKeySet:    strings.TrimSpace(cfg.AnthropicAPIKey) != "",
 		Timeout:               cfg.Timeout,
+		AgentControlEnabled:   cfg.AgentControlEnabled,
+		AgentArmDuration:      cfg.AgentArmDuration,
 		Policies:              cfg.Policies,
+		AgentReadiness:        llmAgentReadinessResponse(cfg, sess),
+	}
+}
+
+func llmAgentReadinessResponse(cfg config.LLMConfig, sess session) llmAgentReadinessView {
+	adminPolicy := cfg.Policies["admin_requested"]
+	armed, armedUntil := agentSessionArmed(cfg, sess)
+	tools := make([]llmAgentToolView, 0, len(llm.ReadOnlyAgentToolNames()))
+	for _, name := range llm.ReadOnlyAgentToolNames() {
+		tools = append(tools, llmAgentToolView{
+			Name:        name,
+			Label:       llmAgentToolLabel(name),
+			Access:      "admin",
+			Mutating:    false,
+			Description: "Refreshes sanitized NoobBoard status through the normal collectors.",
+		})
+	}
+	return llmAgentReadinessView{
+		ReadOnlyToolsAvailable: true,
+		MutatingToolsAvailable: false,
+		AgentControlEnabled:    cfg.AgentControlEnabled,
+		AgentArmed:             armed,
+		AgentArmedUntil:        armedUntil,
+		AgentArmDuration:       cfg.AgentArmDuration,
+		AdminToolsEnabled:      adminPolicy.AgentToolsEnabled && adminPolicy.RecipientRole == models.RoleAdmin,
+		AdminToolCallLimit:     adminPolicy.AgentMaxToolCalls,
+		ReadOnlyTools:          tools,
+		ReviewModes: []llmAgentReviewModeView{
+			{
+				ID:          "read_only",
+				Label:       "Read-only diagnosis",
+				Status:      "available",
+				Enabled:     adminPolicy.AgentToolsEnabled && adminPolicy.RecipientRole == models.RoleAdmin,
+				Description: "The model may refresh sanitized live status but cannot execute repairs.",
+			},
+			{
+				ID:          "propose",
+				Label:       "Approval popup",
+				Status:      agentProposeModeStatus(cfg.AgentControlEnabled, armed),
+				Enabled:     false,
+				Description: "The model proposes a fix and NoobBoard shows a normal approval popup; execution remains locked until repair tools exist.",
+			},
+			{
+				ID:          "auto_review",
+				Label:       "Auto-review",
+				Status:      "blocked",
+				Enabled:     false,
+				Description: "Future mode: a separate reviewer model validates proposed actions before approval or execution.",
+			},
+			{
+				ID:          "auto_action",
+				Label:       "Auto action",
+				Status:      "blocked",
+				Enabled:     false,
+				Description: "Future mode: only a narrow admin allowlist with rate limits and a kill switch.",
+			},
+		},
+		OpenCodeAutoReview: llmOpenCodeAutoReviewSummary{
+			ReferenceReviewed:   true,
+			SufficientReference: true,
+			ModelFinding:        "The referenced package examples use gpt-5.5 with xhigh reasoning and dynamic different-family selection; this is not evidence that Codex auto-review uses 5.4 Thinking.",
+			DesignFinding:       "Useful as a review workflow reference, not as a direct infrastructure-action implementation.",
+		},
+	}
+}
+
+func agentSessionArmed(cfg config.LLMConfig, sess session) (bool, time.Time) {
+	armedUntil := sess.AgentArmedUntil.UTC()
+	armed := cfg.AgentControlEnabled && !armedUntil.IsZero() && time.Now().UTC().Before(armedUntil)
+	if !armed {
+		return false, time.Time{}
+	}
+	return true, armedUntil
+}
+
+func agentProposeModeStatus(controlEnabled, armed bool) string {
+	if !controlEnabled {
+		return "locked"
+	}
+	if armed {
+		return "armed"
+	}
+	return "planned"
+}
+
+func llmAgentToolLabel(name string) string {
+	switch name {
+	case "noobboard_current_status":
+		return "Current status"
+	case "noobboard_server_status":
+		return "Server status"
+	case "noobboard_network_status":
+		return "Network status"
+	case "noobboard_app_status":
+		return "App status"
+	default:
+		return strings.ReplaceAll(name, "_", " ")
 	}
 }
 
@@ -1333,6 +2278,12 @@ func decodeLLMSettingsUpdate(r *http.Request, current config.LLMConfig) (config.
 	if update.Timeout != nil {
 		settings.Timeout = *update.Timeout
 	}
+	if update.AgentControlEnabled != nil {
+		settings.AgentControlEnabled = *update.AgentControlEnabled
+	}
+	if update.AgentArmDuration != nil {
+		settings.AgentArmDuration = *update.AgentArmDuration
+	}
 	if update.Policies != nil {
 		settings.Policies = update.Policies
 	}
@@ -1341,25 +2292,27 @@ func decodeLLMSettingsUpdate(r *http.Request, current config.LLMConfig) (config.
 
 func integrationSettingsResponse(cfg config.IntegrationConfig) integrationSettingsView {
 	return integrationSettingsView{
-		Mode:              cfg.Mode,
-		UnraidBaseURL:     cfg.UnraidBaseURL,
-		UnraidAPIKeySet:   strings.TrimSpace(cfg.UnraidAPIKey) != "",
-		UnraidAPIKeyFile:  cfg.UnraidAPIKeyFile,
-		UnraidSSHFallback: cfg.UnraidSSHFallback,
-		UnraidSSHHost:     cfg.UnraidSSHHost,
-		UnraidSSHPort:     cfg.UnraidSSHPort,
-		UnraidSSHUser:     cfg.UnraidSSHUser,
-		UnraidSSHKeyFile:  cfg.UnraidSSHKeyFile,
-		UnraidSSHCommand:  cfg.UnraidSSHCommand,
-		UniFiBaseURL:      cfg.UniFiBaseURL,
-		UniFiAPIKeySet:    strings.TrimSpace(cfg.UniFiAPIKey) != "",
-		UniFiAPIKeyFile:   cfg.UniFiAPIKeyFile,
-		UniFiSiteID:       cfg.UniFiSiteID,
-		UniFiInsecureTLS:  cfg.UniFiInsecureTLS,
-		InternetProbeURL:  cfg.InternetProbeURL,
-		DNSProbeHost:      cfg.DNSProbeHost,
-		RouterProbeTarget: cfg.RouterProbeTarget,
-		NASProbeTarget:    cfg.NASProbeTarget,
+		Mode:                cfg.Mode,
+		UnraidBaseURL:       cfg.UnraidBaseURL,
+		UnraidAPIKeySet:     strings.TrimSpace(cfg.UnraidAPIKey) != "",
+		UnraidAPIKeyFile:    cfg.UnraidAPIKeyFile,
+		UnraidSSHFallback:   cfg.UnraidSSHFallback,
+		UnraidSSHHost:       cfg.UnraidSSHHost,
+		UnraidSSHPort:       cfg.UnraidSSHPort,
+		UnraidSSHUser:       cfg.UnraidSSHUser,
+		UnraidSSHKeyFile:    cfg.UnraidSSHKeyFile,
+		UnraidSSHCommand:    cfg.UnraidSSHCommand,
+		UniFiBaseURL:        cfg.UniFiBaseURL,
+		UniFiAPIKeySet:      strings.TrimSpace(cfg.UniFiAPIKey) != "",
+		UniFiAPIKeyFile:     cfg.UniFiAPIKeyFile,
+		UniFiSiteID:         cfg.UniFiSiteID,
+		UniFiInsecureTLS:    cfg.UniFiInsecureTLS,
+		UniFiNASClientHint:  cfg.UniFiNASClientHint,
+		ExpectedNASLinkMbps: cfg.ExpectedNASLinkMbps,
+		InternetProbeURL:    cfg.InternetProbeURL,
+		DNSProbeHost:        cfg.DNSProbeHost,
+		RouterProbeTarget:   cfg.RouterProbeTarget,
+		NASProbeTarget:      cfg.NASProbeTarget,
 	}
 }
 
@@ -1422,6 +2375,12 @@ func decodeIntegrationSettingsUpdate(r *http.Request, current config.Integration
 	if update.UniFiInsecureTLS != nil {
 		settings.UniFiInsecureTLS = *update.UniFiInsecureTLS
 	}
+	if update.UniFiNASClientHint != nil {
+		settings.UniFiNASClientHint = strings.TrimSpace(*update.UniFiNASClientHint)
+	}
+	if update.ExpectedNASLinkMbps != nil {
+		settings.ExpectedNASLinkMbps = *update.ExpectedNASLinkMbps
+	}
 	if update.InternetProbeURL != nil {
 		settings.InternetProbeURL = strings.TrimRight(strings.TrimSpace(*update.InternetProbeURL), "/")
 	}
@@ -1475,6 +2434,7 @@ func normalizeIntegrationSettings(settings config.IntegrationConfig) (config.Int
 	settings.UniFiAPIKey = strings.TrimSpace(settings.UniFiAPIKey)
 	settings.UniFiAPIKeyFile = strings.TrimSpace(settings.UniFiAPIKeyFile)
 	settings.UniFiSiteID = strings.TrimSpace(settings.UniFiSiteID)
+	settings.UniFiNASClientHint = strings.TrimSpace(settings.UniFiNASClientHint)
 	settings.InternetProbeURL = strings.TrimRight(strings.TrimSpace(settings.InternetProbeURL), "/")
 	settings.DNSProbeHost = strings.TrimSpace(settings.DNSProbeHost)
 	settings.RouterProbeTarget = strings.TrimRight(strings.TrimSpace(settings.RouterProbeTarget), "/")
@@ -1509,6 +2469,8 @@ func integrationSettingsPresent(settings config.IntegrationConfig) bool {
 		settings.UniFiBaseURL != "" ||
 		settings.UniFiAPIKey != "" ||
 		settings.UniFiAPIKeyFile != "" ||
+		settings.UniFiNASClientHint != "" ||
+		settings.ExpectedNASLinkMbps != 0 ||
 		settings.InternetProbeURL != "" ||
 		settings.DNSProbeHost != "" ||
 		settings.RouterProbeTarget != "" ||
@@ -1624,7 +2586,8 @@ func collectorsForConfig(cfg config.Config) Collectors {
 			}
 		}
 		if cfg.Integrations.UniFiBaseURL != "" && cfg.Integrations.UniFiAPIKey != "" {
-			collectors.UniFi = unifi.NewLiveClient(cfg.Integrations.UniFiBaseURL, cfg.Integrations.UniFiAPIKey, cfg.Integrations.UniFiSiteID, cfg.Integrations.UniFiInsecureTLS)
+			nasHint := firstNonEmpty(cfg.Integrations.UniFiNASClientHint, cfg.Integrations.NASProbeTarget, cfg.Integrations.UnraidBaseURL)
+			collectors.UniFi = unifi.NewLiveClient(cfg.Integrations.UniFiBaseURL, cfg.Integrations.UniFiAPIKey, cfg.Integrations.UniFiSiteID, cfg.Integrations.UniFiInsecureTLS, unifi.WithNASLinkMonitoring(nasHint, cfg.Integrations.ExpectedNASLinkMbps))
 		}
 	}
 	return collectors
@@ -1721,6 +2684,12 @@ func normalizeLLMSettings(settings config.LLMConfig) config.LLMConfig {
 	}
 	if settings.Timeout == 0 {
 		settings.Timeout = defaults.Timeout
+	}
+	if settings.AgentArmDuration <= 0 {
+		settings.AgentArmDuration = defaults.AgentArmDuration
+	}
+	if settings.AgentArmDuration > time.Hour {
+		settings.AgentArmDuration = time.Hour
 	}
 	settings.Policies = normalizeLLMPolicies(settings.Policies, defaults.Policies)
 	return settings
@@ -2021,10 +2990,11 @@ func mustSession(r *http.Request) session {
 }
 
 type session struct {
-	Token     string
-	CSRFToken string
-	User      users.User
-	ExpiresAt time.Time
+	Token           string
+	CSRFToken       string
+	User            users.User
+	ExpiresAt       time.Time
+	AgentArmedUntil time.Time
 }
 
 type sessionStore struct {
@@ -2065,6 +3035,31 @@ func (s *sessionStore) get(token string) (session, bool) {
 		delete(s.entries, token)
 		return session{}, false
 	}
+	if !entry.AgentArmedUntil.IsZero() && !now.Before(entry.AgentArmedUntil) {
+		entry.AgentArmedUntil = time.Time{}
+		s.entries[token] = entry
+	}
+	return entry, true
+}
+
+func (s *sessionStore) setAgentArmed(token string, until time.Time) (session, bool) {
+	now := time.Now().UTC()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry, ok := s.entries[token]
+	if !ok || now.After(entry.ExpiresAt) {
+		delete(s.entries, token)
+		return session{}, false
+	}
+	if until.IsZero() || !until.After(now) {
+		entry.AgentArmedUntil = time.Time{}
+	} else {
+		if until.After(entry.ExpiresAt) {
+			until = entry.ExpiresAt
+		}
+		entry.AgentArmedUntil = until.UTC()
+	}
+	s.entries[token] = entry
 	return entry, true
 }
 

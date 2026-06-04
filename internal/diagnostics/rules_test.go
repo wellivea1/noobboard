@@ -91,3 +91,48 @@ func TestUniFiOfflineDevicesProduceNetworkFact(t *testing.T) {
 		t.Fatalf("expected UniFi offline-device fact, got %#v", result.Facts)
 	}
 }
+
+func TestNASLinkSpeedProducesAdminOnlyUniFiFact(t *testing.T) {
+	snapshot := loadFixture(t, "all_systems_online")
+	snapshot.Infrastructure.NASLinkSpeedMbps = 100
+	snapshot.Infrastructure.ExpectedNASLinkMbps = 1000
+	result := NewRuleEngine().Evaluate(snapshot)
+	found := false
+	for _, fact := range result.Facts {
+		if fact.ID == "nas_link_speed_degraded" {
+			found = true
+			if fact.Type != models.IncidentUnifiIssue || fact.Severity != models.SeverityMedium || fact.VisibleToUsers {
+				t.Fatalf("unexpected NAS link fact: %#v", fact)
+			}
+			if !strings.Contains(strings.Join(fact.Evidence, "; "), "NAS link 100 Mbps expected 1000 Mbps") {
+				t.Fatalf("unexpected evidence: %#v", fact.Evidence)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected NAS link-speed fact, got %#v", result.Facts)
+	}
+}
+
+func TestUnraidUnreadNotificationsProduceAdminOnlyFact(t *testing.T) {
+	snapshot := loadFixture(t, "all_systems_online")
+	snapshot.Infrastructure.UnraidNotificationCount = 3
+	snapshot.Infrastructure.UnraidAlertCount = 1
+	snapshot.Infrastructure.UnraidWarningCount = 2
+	result := NewRuleEngine().Evaluate(snapshot)
+	found := false
+	for _, fact := range result.Facts {
+		if fact.ID == "unraid_notifications" {
+			found = true
+			if fact.Type != models.IncidentStorageWarning || fact.Severity != models.SeverityHigh || fact.VisibleToUsers {
+				t.Fatalf("unexpected Unraid notification fact: %#v", fact)
+			}
+			if !strings.Contains(strings.Join(fact.Evidence, "; "), "1 alert(s), 2 warning(s)") {
+				t.Fatalf("unexpected evidence: %#v", fact.Evidence)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected Unraid notification fact, got %#v", result.Facts)
+	}
+}

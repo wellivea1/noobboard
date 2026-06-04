@@ -599,7 +599,11 @@ func validDiagnosisMap() map[string]interface{} {
 		"general_user_summary":  "Everything looks online.",
 		"admin_message":         "No action is needed.",
 		"recommended_action_id": "none",
-		"should_notify_admin":   false,
+		"recommended_action_target": map[string]interface{}{
+			"kind":       "none",
+			"id_or_name": "",
+		},
+		"should_notify_admin": false,
 	}
 }
 
