@@ -104,6 +104,8 @@ type flags struct {
 	UserDetailEmptyStateVisible bool     `json:"userDetailEmptyStateVisible,omitempty"`
 	UserDetailBackReturned      bool     `json:"userDetailBackReturned,omitempty"`
 	UserDetailFocusReturned     bool     `json:"userDetailFocusReturned,omitempty"`
+	UserRepairActionVisible     bool     `json:"userRepairActionVisible,omitempty"`
+	UserRepairActionLabel       string   `json:"userRepairActionLabel,omitempty"`
 	UserMenuToggleVisible       bool     `json:"userMenuToggleVisible,omitempty"`
 	UserDrawerOpen              bool     `json:"userDrawerOpen,omitempty"`
 	UserDrawerHidden            bool     `json:"userDrawerHidden,omitempty"`
@@ -999,6 +1001,9 @@ func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, a
 	if mobileUserAppDetail.SmallTouchTargetCount > 0 || mobileUserInfraDetail.SmallTouchTargetCount > 0 {
 		failures = append(failures, "mobile detail touch targets below 44px detected")
 	}
+	if !desktopUserAppDetail.UserRepairActionVisible || !mobileUserAppDetail.UserRepairActionVisible {
+		failures = append(failures, "compact app detail repair affordance did not render")
+	}
 	if !mobileUserDrawer.UserDrawerOpen {
 		failures = append(failures, "general user settings drawer did not open")
 	}
@@ -1445,6 +1450,8 @@ const userAppDetailExpression = `(async () => {
   const visibleText = visibleCompactText(panel);
   const bannedMatches = visibleText.match(/\b(container|docker|unraid|array|parity|endpoint|graphql|probe|wan|lan|api|ssh|telemetry|smart|syslog|filesystem|cache pool|gateway|https|dns|unifi)\b/gi) || [];
   const historyVisible = !!panel?.querySelector('.history-list, .detail-history .detail-empty');
+  const repairActions = panel ? [...panel.querySelectorAll('.user-repair-actions button')].filter((element) => visibleElement(element)) : [];
+  const repairActionLabel = repairActions.map((element) => (element.textContent || element.getAttribute('aria-label') || '').trim()).filter(Boolean).join('|');
   const emptyNodes = panel ? [...panel.querySelectorAll('.detail-empty')] : [];
   const emptyStateVisible = emptyNodes
     .some((element) => visibleElement(element) && /no changes recorded yet/i.test(element.textContent || ''));
@@ -1455,6 +1462,8 @@ const userAppDetailExpression = `(async () => {
     userDetailTitle: panel?.querySelector('.detail-title h2')?.textContent || '',
     userDetailHistoryVisible: historyVisible,
     userDetailEmptyStateVisible: emptyStateVisible,
+    userRepairActionVisible: /\b(ask admin|restart now)\b/i.test(repairActionLabel),
+    userRepairActionLabel: repairActionLabel,
     bannedTermCount: bannedMatches.length,
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow: hasButtonTextOverflow(),

@@ -1031,6 +1031,364 @@ func TestAgentApprovalGlobalRateLimitBlocksDocker(t *testing.T) {
 	}
 }
 
+func TestGeneralUserDiagnoseIncludesRepairRequestPlan(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "general-user-repair-plan")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+	cfg.LLM.Provider = "openai"
+	cfg.LLM.OpenAIAuthMethod = config.OpenAIAuthMethodAPIKey
+	cfg.LLM.OpenAIAPIKey = "sk-test-local"
+
+	app := newTestApp(t, cfg)
+	app.deps.Collectors.Docker = &recordingDockerCollector{apps: []models.AppStatus{{
+		AppID:                 "emby",
+		DisplayName:           "Emby",
+		ContainerID:           "container:Emby",
+		ContainerName:         "Emby",
+		Category:              "docker",
+		DockerState:           models.DockerExited,
+		CurrentStatus:         models.StatusOffline,
+		VisibleToGeneralUsers: true,
+	}}}
+	app.settingsMu.Lock()
+	app.deps.LLM = &recordingLLMClient{
+		diagnosis: llm.Diagnosis{
+			Severity:            models.SeverityHigh,
+			Confidence:          0.9,
+			IncidentType:        models.IncidentAppDown,
+			AffectedServices:    []string{"Emby"},
+			Diagnosis:           "Emby is down.",
+			GeneralUserSummary:  "Emby is not working.",
+			RecommendedActionID: "ask_admin_to_restart_container",
+			RecommendedTarget:   llm.ActionTarget{Kind: "app", IDOrName: "emby"},
+			ShouldNotifyAdmin:   true,
+		},
+	}
+	app.settingsMu.Unlock()
+
+	router := app.Router()
+	cookie, csrf := loginAs(t, router, "viewer", "change-me-now")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/user/diagnose", strings.NewReader(`{"question":"what is wrong with Emby?"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("general diagnose status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var response diagnosisResponse
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.AgentPlan == nil || !response.AgentPlan.CanRequestRepair || response.AgentPlan.ApprovalToken != "" || response.AgentPlan.CanExecute {
+		t.Fatalf("general-user plan should only expose a request affordance: %#v", response.AgentPlan)
+	}
+	if response.AgentPlan.Target.ID != "emby" || response.AgentPlan.Status != "request_available" {
+		t.Fatalf("general-user plan did not resolve Emby: %#v", response.AgentPlan)
+	}
+}
+
+func TestGeneralUserRepairRequestCanBeApprovedByArmedAdmin(t *testing.T) {
+	oldDelay := agentRepairVerificationDelay
+	agentRepairVerificationDelay = 0
+	t.Cleanup(func() { agentRepairVerificationDelay = oldDelay })
+
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "general-user-repair-request-approve")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+	cfg.LLM.AgentControlEnabled = true
+	cfg.AppCatalog.AgentRepairAllowed = map[string]bool{"emby": true}
+
+	app := newTestApp(t, cfg)
+	collector := &recordingDockerCollector{apps: []models.AppStatus{{
+		AppID:                 "emby",
+		DisplayName:           "Emby",
+		ContainerID:           "container:Emby",
+		ContainerName:         "Emby",
+		Category:              "docker",
+		DockerState:           models.DockerExited,
+		CurrentStatus:         models.StatusOffline,
+		VisibleToGeneralUsers: true,
+	}},
+		afterControlApps: []models.AppStatus{{
+			AppID:                 "emby",
+			DisplayName:           "Emby",
+			ContainerID:           "container:Emby",
+			ContainerName:         "Emby",
+			Category:              "docker",
+			DockerState:           models.DockerRunning,
+			CurrentStatus:         models.StatusOnline,
+			VisibleToGeneralUsers: true,
+		}}}
+	app.deps.Collectors.Docker = collector
+
+	router := app.Router()
+	viewerCookie, viewerCSRF := loginAs(t, router, "viewer", "change-me-now")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/user/repair-request", strings.NewReader(`{"app_id":"emby","action_id":"ask_admin_to_restart_container","diagnosis_summary":"Emby is not working."}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", viewerCSRF)
+	req.AddCookie(viewerCookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("create repair request status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var created struct {
+		Request models.RepairRequest `json:"request"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Request.ID == "" || created.Request.Status != models.RepairRequestPending || created.Request.RequesterID != "user-1" {
+		t.Fatalf("created repair request = %#v", created.Request)
+	}
+
+	adminCookie, adminCSRF := loginAdmin(t, router)
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/admin/agent/arm", strings.NewReader(`{"armed":true,"duration_seconds":60}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", adminCSRF)
+	req.AddCookie(adminCookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("arm agent status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/admin/repair-requests/"+created.Request.ID+"/decision", strings.NewReader(`{"choice":"approve"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", adminCSRF)
+	req.AddCookie(adminCookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("approve repair request status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if collector.callCount != 1 || collector.called != docker.ActionRestart || collector.app.AppID != "emby" {
+		t.Fatalf("repair request did not restart Emby once: count=%d action=%q app=%#v", collector.callCount, collector.called, collector.app)
+	}
+	stored, err := app.deps.Store.RepairRequestByID(created.Request.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != models.RepairRequestExecuted || stored.Outcome == nil || !stored.Outcome.Recovered {
+		t.Fatalf("stored repair request outcome = %#v", stored)
+	}
+}
+
+func TestGeneralUserDirectRestartCanRestartOptedInApp(t *testing.T) {
+	oldDelay := agentRepairVerificationDelay
+	agentRepairVerificationDelay = 0
+	t.Cleanup(func() { agentRepairVerificationDelay = oldDelay })
+
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "general-user-direct-restart")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+	cfg.AppCatalog.GeneralUserRestartsEnabled = true
+	cfg.AppCatalog.RestartAllowedGeneralUser = map[string]bool{"emby": true}
+
+	app := newTestApp(t, cfg)
+	collector := &recordingDockerCollector{apps: []models.AppStatus{{
+		AppID:                 "emby",
+		DisplayName:           "Emby",
+		ContainerID:           "container:Emby",
+		ContainerName:         "Emby",
+		Category:              "docker",
+		DockerState:           models.DockerExited,
+		CurrentStatus:         models.StatusOffline,
+		VisibleToGeneralUsers: true,
+	}},
+		afterControlApps: []models.AppStatus{{
+			AppID:                 "emby",
+			DisplayName:           "Emby",
+			ContainerID:           "container:Emby",
+			ContainerName:         "Emby",
+			Category:              "docker",
+			DockerState:           models.DockerRunning,
+			CurrentStatus:         models.StatusOnline,
+			VisibleToGeneralUsers: true,
+		}}}
+	app.deps.Collectors.Docker = collector
+
+	snapshot, err := app.Snapshot(context.Background(), models.RoleGeneralUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Apps) != 1 || !snapshot.Apps[0].RestartAllowedGeneralUser || snapshot.Apps[0].AgentRepairAllowed {
+		t.Fatalf("general-user snapshot did not expose only user restart opt-in: %#v", snapshot.Apps)
+	}
+
+	router := app.Router()
+	viewerCookie, viewerCSRF := loginAs(t, router, "viewer", "change-me-now")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/user/apps/emby/restart", strings.NewReader(`{"confirmed":true,"confirm_app_id":"emby"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", viewerCSRF)
+	req.AddCookie(viewerCookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("direct restart status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Status  string                    `json:"status"`
+		Outcome llmAgentRepairOutcomeView `json:"outcome"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Status != "executed" || !response.Outcome.Verified || !response.Outcome.Recovered {
+		t.Fatalf("direct restart outcome = %#v", response)
+	}
+	if response.Outcome.Message != "Restart: restarted - recovered." {
+		t.Fatalf("direct restart message = %q", response.Outcome.Message)
+	}
+	if collector.callCount != 1 || collector.called != docker.ActionRestart || collector.app.AppID != "emby" || !collector.app.RestartAllowedGeneralUser {
+		t.Fatalf("direct restart did not restart opted-in app once: count=%d action=%q app=%#v", collector.callCount, collector.called, collector.app)
+	}
+}
+
+func TestGeneralUserDirectRestartRefusesUnsafeTargets(t *testing.T) {
+	cases := []struct {
+		name        string
+		cfg         func(config.Config) config.Config
+		app         models.AppStatus
+		wantStatus  int
+		wantNoCalls bool
+	}{
+		{
+			name: "global switch off",
+			cfg: func(cfg config.Config) config.Config {
+				cfg.AppCatalog.RestartAllowedGeneralUser = map[string]bool{"emby": true}
+				return cfg
+			},
+			app: models.AppStatus{
+				AppID:                 "emby",
+				DisplayName:           "Emby",
+				ContainerID:           "container:Emby",
+				ContainerName:         "Emby",
+				Category:              "docker",
+				DockerState:           models.DockerExited,
+				CurrentStatus:         models.StatusOffline,
+				VisibleToGeneralUsers: true,
+			},
+			wantStatus:  http.StatusConflict,
+			wantNoCalls: true,
+		},
+		{
+			name: "per-app opt-in missing",
+			cfg: func(cfg config.Config) config.Config {
+				cfg.AppCatalog.GeneralUserRestartsEnabled = true
+				cfg.AppCatalog.RestartAllowedGeneralUser = map[string]bool{}
+				return cfg
+			},
+			app: models.AppStatus{
+				AppID:                 "emby",
+				DisplayName:           "Emby",
+				ContainerID:           "container:Emby",
+				ContainerName:         "Emby",
+				Category:              "docker",
+				DockerState:           models.DockerExited,
+				CurrentStatus:         models.StatusOffline,
+				VisibleToGeneralUsers: true,
+			},
+			wantStatus:  http.StatusConflict,
+			wantNoCalls: true,
+		},
+		{
+			name: "hidden app",
+			cfg: func(cfg config.Config) config.Config {
+				cfg.AppCatalog.GeneralUserRestartsEnabled = true
+				cfg.AppCatalog.RestartAllowedGeneralUser = map[string]bool{"emby": true}
+				return cfg
+			},
+			app: models.AppStatus{
+				AppID:                 "emby",
+				DisplayName:           "Emby",
+				ContainerID:           "container:Emby",
+				ContainerName:         "Emby",
+				Category:              "docker",
+				DockerState:           models.DockerExited,
+				CurrentStatus:         models.StatusOffline,
+				VisibleToGeneralUsers: false,
+			},
+			wantStatus:  http.StatusNotFound,
+			wantNoCalls: true,
+		},
+		{
+			name: "blacklisted app",
+			cfg: func(cfg config.Config) config.Config {
+				cfg.AppCatalog.GeneralUserRestartsEnabled = true
+				cfg.AppCatalog.RestartAllowedGeneralUser = map[string]bool{"emby": true}
+				cfg.Privacy.BlacklistAppIDs = []string{"emby"}
+				return cfg
+			},
+			app: models.AppStatus{
+				AppID:                 "emby",
+				DisplayName:           "Emby",
+				ContainerID:           "container:Emby",
+				ContainerName:         "Emby",
+				Category:              "docker",
+				DockerState:           models.DockerExited,
+				CurrentStatus:         models.StatusOffline,
+				VisibleToGeneralUsers: true,
+			},
+			wantStatus:  http.StatusNotFound,
+			wantNoCalls: true,
+		},
+		{
+			name: "already online",
+			cfg: func(cfg config.Config) config.Config {
+				cfg.AppCatalog.GeneralUserRestartsEnabled = true
+				cfg.AppCatalog.RestartAllowedGeneralUser = map[string]bool{"emby": true}
+				return cfg
+			},
+			app: models.AppStatus{
+				AppID:                 "emby",
+				DisplayName:           "Emby",
+				ContainerID:           "container:Emby",
+				ContainerName:         "Emby",
+				Category:              "docker",
+				DockerState:           models.DockerRunning,
+				CurrentStatus:         models.StatusOnline,
+				VisibleToGeneralUsers: true,
+			},
+			wantStatus:  http.StatusConflict,
+			wantNoCalls: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.Defaults()
+			cfg.Database.Path = serverCacheTestPath(t, "general-user-direct-restart-"+strings.ReplaceAll(tc.name, " ", "-"))
+			cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+			cfg = tc.cfg(cfg)
+
+			app := newTestApp(t, cfg)
+			collector := &recordingDockerCollector{apps: []models.AppStatus{tc.app}}
+			app.deps.Collectors.Docker = collector
+
+			router := app.Router()
+			viewerCookie, viewerCSRF := loginAs(t, router, "viewer", "change-me-now")
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/api/user/apps/emby/restart", strings.NewReader(`{"confirmed":true,"confirm_app_id":"emby"}`))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-CSRF-Token", viewerCSRF)
+			req.AddCookie(viewerCookie)
+			router.ServeHTTP(rec, req)
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("direct restart status = %d, want %d, body = %s", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+			if tc.wantNoCalls && collector.callCount != 0 {
+				t.Fatalf("direct restart called docker for refused case: count=%d action=%q app=%#v", collector.callCount, collector.called, collector.app)
+			}
+		})
+	}
+}
+
 func TestLLMSettingsKeysAreWriteOnly(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Database.Path = serverCacheTestPath(t, "llm-settings-keys")
@@ -2388,7 +2746,9 @@ func TestAppCatalogSettingsPersistRepairOptIn(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/settings/apps", strings.NewReader(`{
 		"icon_overrides":{" emby ":"/app-icons/media-server.svg"},
-		"agent_repair_allowed":{" emby ":true,"plex":false," ":true}
+		"agent_repair_allowed":{" emby ":true,"plex":false," ":true},
+		"general_user_restarts_enabled":true,
+		"restart_allowed_general_user":{" emby ":true,"plex":false," ":true}
 	}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-CSRF-Token", csrf)
@@ -2407,12 +2767,18 @@ func TestAppCatalogSettingsPersistRepairOptIn(t *testing.T) {
 	if !response.AgentRepairAllowed["emby"] || response.AgentRepairAllowed["plex"] {
 		t.Fatalf("repair opt-in map was not normalized: %#v", response.AgentRepairAllowed)
 	}
+	if !response.GeneralUserRestartsEnabled || !response.RestartAllowedGeneralUser["emby"] || response.RestartAllowedGeneralUser["plex"] {
+		t.Fatalf("user restart opt-in map was not normalized: %#v", response)
+	}
 	stored, ok, err := app.deps.Store.RuntimeSettings()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !ok || !stored.AppCatalog.AgentRepairAllowed["emby"] {
 		t.Fatalf("repair opt-in was not persisted: ok=%v settings=%#v", ok, stored.AppCatalog)
+	}
+	if !ok || !stored.AppCatalog.GeneralUserRestartsEnabled || !stored.AppCatalog.RestartAllowedGeneralUser["emby"] {
+		t.Fatalf("user restart opt-in was not persisted: ok=%v settings=%#v", ok, stored.AppCatalog)
 	}
 }
 

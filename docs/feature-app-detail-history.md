@@ -600,17 +600,20 @@ executed as a command.
 - **GR0 — Quality fixes (small, do first):** lengthen/iterate the verification
   poll; make `notify-admin` deliver + carry context; stop rendering an approval
   popup for non-executable recommendations.
-- **GR1 — Request path:** `RepairRequest` model + store, `POST /api/user/repair-request`,
+- **GR1 - Request path: IMPLEMENTED.** `RepairRequest` model + store, `POST /api/user/repair-request`,
   admin pending-requests queue + approve/deny wired to execution, requester
   outcome feedback. Compact "Ask an admin to fix this."
-- **GR2 — Direct opt-in path:** wire `RestartAllowedGeneralUser` (catalog + admin
-  toggle + projection + master switch), `POST /api/user/apps/{id}/restart` with
-  the shared envelope, compact "Restart now" with confirm.
-- **GR3 — Tests, `/security-review`, docs, harness:** general-user repair-request
-  and direct-restart flows; verify non-admins cannot exceed limits or repair
-  non-opted-in/blacklisted/hidden apps; harness coverage for the new compact
-  affordances (plain language, ≥44px, no overflow); update `security.md` +
-  `llm-policy.md`.
+- **GR2 - Direct opt-in path: IMPLEMENTED.** `RestartAllowedGeneralUser` is
+  wired through app catalog settings, snapshot projection, and the compact app
+  detail "Restart now" affordance; `POST /api/user/apps/{id}/restart` uses the
+  shared repair cooldown/rate-limit and verifies the result.
+- **GR3 - Tests, `/security-review`, docs, harness:** backend tests now cover
+  general-user repair requests, direct restart success, and refusal for
+  non-opted-in/hidden/blacklisted/online apps; `security.md` and
+  `api-config.md` describe the gates. Remaining harness work: add visual flags
+  for the new compact affordances (plain language, >=44px, no overflow) and
+  update `/security-review` output when that endpoint includes feature-specific
+  assertions.
 
 ## Open choices for the general-user work
 - **Direct path & the LLM:** Path B is a plain button on a resolved app (no model

@@ -17,6 +17,8 @@ const state = {
   selectedRole: "",
   selectedUser: "",
   auditEntries: [],
+  repairRequests: [],
+  userRepairRequests: [],
   notificationPreferences: new Map(),
   notificationPreferencesLoaded: false,
   notificationPreferencesLoading: false,
@@ -665,7 +667,10 @@ function setActiveTab(tabName) {
   $("page-title").textContent = titles[tabName] || "System overview";
   renderPageSubtitle();
   closeNav();
-  if (tabName === "admin") loadAudit();
+  if (tabName === "admin") {
+    loadAudit();
+    loadRepairRequests();
+  }
   if (tabName === "settings") loadSettings();
 }
 
@@ -718,6 +723,7 @@ async function refresh() {
   try {
     const snapshot = await api("/api/status/refresh", { method: "POST" });
     state.snapshot = snapshot;
+    if (!hasAdminSurface()) await loadUserRepairRequests({ render: false, quiet: true });
     renderSourcePill(snapshot);
     renderSnapshot(snapshot);
     renderPageSubtitle();
@@ -1355,11 +1361,87 @@ function renderAppDetail(app, history) {
       detailMetric("Last working", relativeTime(history?.last_seen_online)),
       detailMetric("Last 7 days", uptimeText(history?.uptime_pct_7d)),
     ),
+    userRepairDetailActions(app),
     node("section", { class: "detail-history" },
       node("h3", { text: "Recent changes" }),
       renderHistoryTimeline(history, "app"),
     ),
   );
+}
+
+function userRepairDetailActions(app) {
+  if (hasAdminSurface() || !isUserRepairCandidate(app)) return null;
+  const canRestart = !!app.restart_allowed_general_user;
+  const request = latestUserRepairRequestForApp(app.app_id);
+  const pending = request?.status === "pending";
+  return node("section", { class: "detail-actions user-repair-actions" },
+    canRestart ? node("button", {
+      type: "button",
+      class: "primary command",
+      "data-glyph": "r",
+      onclick: (event) => runUserAppRestart(app, event.currentTarget),
+      text: "Restart now",
+    }) : node("button", {
+      type: "button",
+      class: "primary command",
+      "data-glyph": "!",
+      disabled: pending,
+      onclick: (event) => requestAdminRepairForApp(app, event.currentTarget),
+      text: pending ? "Asked admin" : "Ask admin",
+    }),
+    request ? node("span", {
+      class: `settings-state-pill user-repair-state ${userRepairRequestTone(request)}`,
+      text: userRepairRequestStatusText(request),
+    }) : null,
+  );
+}
+
+function isUserRepairCandidate(app) {
+  const status = normalizeStatus(app?.current_status);
+  return status !== "online" && (app?.data_source === "unraid-docker" || app?.docker_state || app?.container_id || app?.container_name);
+}
+
+function requestAdminRepairForApp(app, button = null) {
+  return requestAdminRepair({
+    recommended_action_id: "ask_admin_to_restart_container",
+    target: { id: app.app_id, label: appDisplayName(app) },
+  }, {
+    general_user_summary: plainAppSummary(app),
+  }, button);
+}
+
+async function runUserAppRestart(app, button = null) {
+  const appID = app?.app_id || "";
+  const label = appDisplayName(app);
+  if (!appID) {
+    showNotice("App id is required.", "error");
+    return;
+  }
+  if (!confirm(`Restart ${label}?`)) return;
+  const original = button?.textContent || "";
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Restarting";
+  }
+  try {
+    const result = await api(`/api/user/apps/${encodeURIComponent(appID)}/restart`, {
+      method: "POST",
+      body: JSON.stringify({ confirmed: true, confirm_app_id: appID }),
+    });
+    if (result.outcome) {
+      showNotice(agentRepairOutcomeNotice(result.outcome), result.outcome.recovered ? "info" : "error");
+    } else {
+      showNotice(`Restart requested for ${label}.`);
+    }
+    await refresh();
+  } catch (error) {
+    showNotice(error.message, "error");
+  } finally {
+    if (button?.isConnected) {
+      button.disabled = false;
+      button.textContent = original;
+    }
+  }
 }
 
 function renderInfraDetail(history) {
@@ -2174,6 +2256,7 @@ async function runDiagnosis(question, output, options = {}) {
       output.replaceChildren(
         node("strong", { text: "Answer" }),
         node("p", { text: result.general_user_summary || result.diagnosis || "I could not find a clear answer." }),
+        result.agent_plan?.can_request_repair ? renderUserRepairRequestPrompt(result.agent_plan, result) : null,
         result.should_notify_admin ? node("p", { class: "muted", text: "Tell the admin if you need this fixed." }) : null,
       );
     }
@@ -2211,6 +2294,101 @@ function renderAgentPlanPrompt(plan) {
       }),
     ) : null,
   );
+}
+
+function renderUserRepairRequestPrompt(plan, diagnosis = {}) {
+  const target = plan?.target || {};
+  if (!plan?.can_request_repair || !target.id) return null;
+  const label = target.label || target.id;
+  return node("section", { class: "agent-plan-prompt user-repair-prompt" },
+    node("div", { class: "agent-plan-head" },
+      node("span", {},
+        node("strong", { text: "Ask admin to fix this" }),
+        node("small", { text: `${label} can be sent to an admin for review.` }),
+      ),
+      node("span", { class: "settings-state-pill state-warn", text: "Admin review" }),
+    ),
+    node("div", { class: "agent-plan-actions" },
+      node("button", {
+        type: "button",
+        class: "primary command",
+        "data-glyph": "!",
+        onclick: (event) => requestAdminRepair(plan, diagnosis, event.currentTarget),
+        text: "Ask admin",
+      }),
+    ),
+  );
+}
+
+async function requestAdminRepair(plan, diagnosis = {}, button = null) {
+  if (!plan?.target?.id) return;
+  const original = button?.textContent || "";
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Sending";
+  }
+  try {
+    const summary = diagnosis.general_user_summary || diagnosis.diagnosis || plan.summary || "A user asked for help with this app.";
+    const result = await api("/api/user/repair-request", {
+      method: "POST",
+      body: JSON.stringify({
+        app_id: plan.target.id,
+        action_id: plan.recommended_action_id || "ask_admin_to_restart_container",
+        diagnosis_summary: summary,
+      }),
+    });
+    if (result.request) upsertUserRepairRequest(result.request);
+    showNotice("Request sent to admin.");
+    if (button) button.textContent = "Sent";
+    refreshCompactRepairStatus();
+  } catch (error) {
+    showNotice(error.message, "error");
+    if (button) {
+      button.disabled = false;
+      button.textContent = original;
+    }
+  }
+}
+
+function upsertUserRepairRequest(request) {
+  if (!request?.id) return;
+  const existing = state.userRepairRequests.findIndex((item) => item.id === request.id);
+  if (existing >= 0) state.userRepairRequests[existing] = request;
+  else state.userRepairRequests.unshift(request);
+  state.userRepairRequests.sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+}
+
+function latestUserRepairRequestForApp(appID) {
+  const id = String(appID || "").trim();
+  if (!id) return null;
+  return (state.userRepairRequests || []).find((request) => request.app_id === id) || null;
+}
+
+function userRepairRequestTone(request) {
+  if (request?.status === "pending") return "state-warn";
+  if (request?.status === "executed" && request?.outcome?.recovered) return "state-ok";
+  if (request?.status === "failed") return "state-bad";
+  return "state-muted";
+}
+
+function userRepairRequestStatusText(request) {
+  if (request?.status === "pending") return "Waiting for admin";
+  if (request?.status === "denied") return "Admin declined";
+  if (request?.status === "failed") return "Fix failed";
+  if (request?.status === "executed") {
+    if (request?.outcome?.recovered) return "Fixed";
+    return "Admin ran fix";
+  }
+  return "Request updated";
+}
+
+function refreshCompactRepairStatus() {
+  if (hasAdminSurface()) return;
+  if (state.userView === "app-detail" && state.userDetailID) {
+    loadAppDetail(state.userDetailID, { focus: false });
+  } else if (state.snapshot) {
+    renderUserHome(state.snapshot);
+  }
 }
 
 function agentPlanTargetText(plan) {
@@ -2508,6 +2686,100 @@ async function loadAudit() {
     state.auditEntries = [];
     $("audit-row-count").textContent = "0 events";
     $("audit-output").replaceChildren(node("div", { class: "empty", text: error.message }));
+  }
+}
+
+async function loadRepairRequests() {
+  if (!hasAdminSurface()) return;
+  const output = $("repair-requests-output");
+  if (!output) return;
+  output.replaceChildren(node("div", { class: "empty", text: "Loading requests..." }));
+  try {
+    const data = await api("/api/admin/repair-requests");
+    state.repairRequests = Array.isArray(data) ? data : [];
+    renderRepairRequests();
+  } catch (error) {
+    state.repairRequests = [];
+    output.replaceChildren(node("div", { class: "empty", text: error.message }));
+  }
+}
+
+async function loadUserRepairRequests(options = {}) {
+  if (hasAdminSurface()) return;
+  try {
+    const data = await api("/api/user/repair-requests");
+    state.userRepairRequests = Array.isArray(data) ? data : [];
+    if (options.render !== false) refreshCompactRepairStatus();
+  } catch (error) {
+    state.userRepairRequests = [];
+    if (!options.quiet) showNotice(error.message, "error");
+  }
+}
+
+function renderRepairRequests() {
+  const output = $("repair-requests-output");
+  if (!output) return;
+  const requests = state.repairRequests || [];
+  if (!requests.length) {
+    output.replaceChildren(node("div", { class: "empty", text: "No repair requests." }));
+    return;
+  }
+  output.replaceChildren(...requests.map(renderRepairRequestRow));
+}
+
+function renderRepairRequestRow(request) {
+  const pending = request.status === "pending";
+  const outcome = request.outcome || {};
+  const note = outcome.message || request.resolution_note || request.diagnosis_summary || "No details provided.";
+  return node("article", { class: `repair-request-row ${request.status || "pending"}` },
+    node("div", { class: "repair-request-main" },
+      node("strong", { text: request.app_label || request.app_id || "App" }),
+      node("span", { class: "muted", text: `${request.requester_name || "User"} - ${formatTime(request.created_at)}` }),
+      node("p", { text: note }),
+    ),
+    node("div", { class: "repair-request-actions" },
+      node("span", { class: `settings-state-pill ${pending ? "state-warn" : outcome.recovered ? "state-ok" : "state-muted"}`, text: request.status || "pending" }),
+      pending ? node("button", {
+        type: "button",
+        class: "primary command",
+        "data-glyph": "v",
+        onclick: (event) => decideRepairRequest(request.id, "approve", event.currentTarget),
+        text: "Approve",
+      }) : null,
+      pending ? node("button", {
+        type: "button",
+        class: "command",
+        "data-glyph": "x",
+        onclick: (event) => decideRepairRequest(request.id, "deny", event.currentTarget),
+        text: "Deny",
+      }) : null,
+    ),
+  );
+}
+
+async function decideRepairRequest(id, choice, button = null) {
+  const original = button?.textContent || "";
+  if (button) {
+    button.disabled = true;
+    button.textContent = choice === "approve" ? "Running" : "Saving";
+  }
+  try {
+    const result = await api(`/api/admin/repair-requests/${encodeURIComponent(id)}/decision`, {
+      method: "POST",
+      body: JSON.stringify({ choice }),
+    });
+    if (result.outcome) {
+      showNotice(agentRepairOutcomeNotice(result.outcome), result.outcome.recovered ? "info" : "error");
+    } else {
+      showNotice(choice === "approve" ? "Repair request approved." : "Repair request denied.");
+    }
+    await loadRepairRequests();
+  } catch (error) {
+    showNotice(error.message, "error");
+    if (button) {
+      button.disabled = false;
+      button.textContent = original;
+    }
   }
 }
 
@@ -3229,6 +3501,8 @@ function renderBlacklistSettings(item, data) {
 function renderAppImageSettings(item, data) {
   const overrides = { ...(data?.icon_overrides || {}) };
   const repairAllowed = { ...(data?.agent_repair_allowed || {}) };
+  const userRestartEnabled = settingToggle("Allow standard-user restart buttons", !!data?.general_user_restarts_enabled);
+  const userRestartAllowed = { ...(data?.restart_allowed_general_user || {}) };
   const apps = state.snapshot?.apps || [];
   const appRows = [];
   const appKeys = new Set();
@@ -3241,7 +3515,8 @@ function renderAppImageSettings(item, data) {
       inputmode: "url",
     });
     const repairToggle = settingToggle("Allow automatic repair", key ? !!repairAllowed[key] : false);
-    appRows.push({ key, input, repairInput: repairToggle.input });
+    const userRestartToggle = settingToggle("Allow user restart", key ? !!userRestartAllowed[key] : false);
+    appRows.push({ key, input, repairInput: repairToggle.input, userRestartInput: userRestartToggle.input });
     return node("div", { class: "settings-app-image-row" },
       renderAppLogo(app),
       node("span", { class: "settings-row-main" },
@@ -3251,6 +3526,7 @@ function renderAppImageSettings(item, data) {
       node("div", { class: "settings-app-controls" },
         input,
         repairToggle.element,
+        userRestartToggle.element,
       ),
     );
   });
@@ -3282,6 +3558,11 @@ function renderAppImageSettings(item, data) {
   extras.forEach(([key, url]) => addExtra(key, url));
   const body = node("div", { class: "settings-form" },
     node("section", { class: "settings-subsection" },
+      node("h4", { text: "Standard-user restarts" }),
+      userRestartEnabled.element,
+      node("p", { class: "muted", text: "When enabled, only apps with the per-app user restart toggle can show a compact-view restart button." }),
+    ),
+    node("section", { class: "settings-subsection" },
       node("h4", { text: "Known apps" }),
       node("div", { class: "settings-row-list" }, appList.length ? appList : node("div", { class: "empty", text: "No apps loaded." })),
     ),
@@ -3296,10 +3577,12 @@ function renderAppImageSettings(item, data) {
   return settingsCard(item, body, (status) => {
     const icon_overrides = {};
     const agent_repair_allowed = {};
+    const restart_allowed_general_user = {};
     for (const row of appRows) {
       const url = row.input.value.trim();
       if (row.key && url) icon_overrides[row.key] = url;
       if (row.key && row.repairInput.checked) agent_repair_allowed[row.key] = true;
+      if (row.key && row.userRestartInput.checked) restart_allowed_general_user[row.key] = true;
     }
     for (const row of extraRows) {
       const key = row.keyInput.value.trim();
@@ -3309,7 +3592,15 @@ function renderAppImageSettings(item, data) {
     for (const [key, allowed] of Object.entries(repairAllowed)) {
       if (allowed && !appKeys.has(key)) agent_repair_allowed[key] = true;
     }
-    return saveSettingsPayload(item.title, item.path, { icon_overrides, agent_repair_allowed }, status);
+    for (const [key, allowed] of Object.entries(userRestartAllowed)) {
+      if (allowed && !appKeys.has(key)) restart_allowed_general_user[key] = true;
+    }
+    return saveSettingsPayload(item.title, item.path, {
+      icon_overrides,
+      agent_repair_allowed,
+      general_user_restarts_enabled: userRestartEnabled.input.checked,
+      restart_allowed_general_user,
+    }, status);
   });
 }
 
@@ -4261,6 +4552,7 @@ $("user-notify-admin").addEventListener("click", () => notifyAdmin("A standard u
 $("user-app-detail-back").addEventListener("click", closeCompactDetail);
 $("user-infra-detail-back").addEventListener("click", closeCompactDetail);
 $("audit-refresh").addEventListener("click", loadAudit);
+$("repair-requests-refresh").addEventListener("click", loadRepairRequests);
 $("audit-filter").addEventListener("input", renderAuditTable);
 $("settings-refresh").addEventListener("click", loadSettings);
 $("settings-menu").addEventListener("click", (event) => {

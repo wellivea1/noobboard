@@ -131,6 +131,32 @@ func TestConfigValidationRejectsUnsafeAppIconURL(t *testing.T) {
 	}
 }
 
+func TestLoadParsesAppCatalogRepairFlags(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+app_catalog:
+  agent_repair_allowed: emby;plex
+  general_user_restarts_enabled: true
+  restart_allowed_general_user: emby,jellyfin
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.AppCatalog.AgentRepairAllowed["emby"] || !cfg.AppCatalog.AgentRepairAllowed["plex"] {
+		t.Fatalf("agent repair flags were not parsed: %#v", cfg.AppCatalog.AgentRepairAllowed)
+	}
+	if !cfg.AppCatalog.GeneralUserRestartsEnabled {
+		t.Fatalf("general-user restart switch was not parsed: %#v", cfg.AppCatalog)
+	}
+	if !cfg.AppCatalog.RestartAllowedGeneralUser["emby"] || !cfg.AppCatalog.RestartAllowedGeneralUser["jellyfin"] {
+		t.Fatalf("general-user restart flags were not parsed: %#v", cfg.AppCatalog.RestartAllowedGeneralUser)
+	}
+}
+
 func TestConfigValidationRejectsInvalidProbeSettings(t *testing.T) {
 	cfg := Defaults()
 	cfg.Integrations.InternetProbeURL = "ftp://example.invalid/probe"

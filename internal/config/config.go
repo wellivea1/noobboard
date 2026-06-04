@@ -80,8 +80,10 @@ type PrivacyConfig struct {
 }
 
 type AppCatalogConfig struct {
-	IconOverrides      map[string]string `json:"icon_overrides"`
-	AgentRepairAllowed map[string]bool   `json:"agent_repair_allowed,omitempty"`
+	IconOverrides              map[string]string `json:"icon_overrides"`
+	AgentRepairAllowed         map[string]bool   `json:"agent_repair_allowed,omitempty"`
+	GeneralUserRestartsEnabled bool              `json:"general_user_restarts_enabled,omitempty"`
+	RestartAllowedGeneralUser  map[string]bool   `json:"restart_allowed_general_user,omitempty"`
 }
 
 type NotificationConfig struct {
@@ -205,8 +207,9 @@ func Defaults() Config {
 			RedactEmails:      true,
 		},
 		AppCatalog: AppCatalogConfig{
-			IconOverrides:      map[string]string{},
-			AgentRepairAllowed: map[string]bool{},
+			IconOverrides:             map[string]string{},
+			AgentRepairAllowed:        map[string]bool{},
+			RestartAllowedGeneralUser: map[string]bool{},
 		},
 		Notifications: NotificationConfig{
 			Enabled:             true,
@@ -379,6 +382,11 @@ func (c Config) Validate() error {
 	for key := range c.AppCatalog.AgentRepairAllowed {
 		if strings.TrimSpace(key) == "" {
 			return errors.New("app automatic repair key is required")
+		}
+	}
+	for key := range c.AppCatalog.RestartAllowedGeneralUser {
+		if strings.TrimSpace(key) == "" {
+			return errors.New("app general-user restart key is required")
 		}
 	}
 	switch c.Integrations.Mode {
@@ -977,6 +985,12 @@ func applyConfigKey(cfg *Config, section, key, value string) {
 		cfg.LLM.ActionAutoReviewReasoning = value
 	case "llm.action_auto_review_reference_paths":
 		cfg.LLM.ActionAutoReviewReferencePaths = splitList(value)
+	case "app_catalog.agent_repair_allowed":
+		cfg.AppCatalog.AgentRepairAllowed = splitBoolMap(value)
+	case "app_catalog.general_user_restarts_enabled":
+		cfg.AppCatalog.GeneralUserRestartsEnabled = parseBool(value)
+	case "app_catalog.restart_allowed_general_user":
+		cfg.AppCatalog.RestartAllowedGeneralUser = splitBoolMap(value)
 	case "integrations.mode":
 		cfg.Integrations.Mode = value
 	case "integrations.unraid_base_url":
@@ -1040,6 +1054,17 @@ func splitList(value string) []string {
 	for _, part := range parts {
 		if trimmed := strings.TrimSpace(part); trimmed != "" {
 			out = append(out, strings.TrimRight(trimmed, "/"))
+		}
+	}
+	return out
+}
+
+func splitBoolMap(value string) map[string]bool {
+	values := splitList(value)
+	out := make(map[string]bool, len(values))
+	for _, value := range values {
+		if value != "" {
+			out[value] = true
 		}
 	}
 	return out

@@ -25,6 +25,12 @@ type Store interface {
 	UpsertNotificationPreference(models.NotificationPreference) error
 	NotificationPreferencesForUser(userID string) ([]models.NotificationPreference, error)
 	AllNotificationPreferences() ([]models.NotificationPreference, error)
+	AppendNotification(NotificationRecord) error
+	NotificationsForUser(userID string, limit int) ([]NotificationRecord, error)
+	UpsertRepairRequest(models.RepairRequest) error
+	RepairRequestByID(id string) (models.RepairRequest, error)
+	RepairRequests() ([]models.RepairRequest, error)
+	RepairRequestsForUser(userID string) ([]models.RepairRequest, error)
 	RuntimeSettings() (RuntimeSettings, bool, error)
 	SaveRuntimeSettings(RuntimeSettings) error
 	Flush() error
@@ -34,6 +40,7 @@ type State struct {
 	Incidents               []models.Incident               `json:"incidents"`
 	NotificationPreferences []models.NotificationPreference `json:"notification_preferences"`
 	Notifications           []NotificationRecord            `json:"notifications"`
+	RepairRequests          []models.RepairRequest          `json:"repair_requests,omitempty"`
 	Audit                   []models.AuditEntry             `json:"audit"`
 	Users                   []UserRecord                    `json:"users"`
 	RuntimeSettings         *RuntimeSettings                `json:"runtime_settings,omitempty"`
@@ -211,6 +218,74 @@ func (s *FileStore) AllNotificationPreferences() ([]models.NotificationPreferenc
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]models.NotificationPreference(nil), s.state.NotificationPreferences...), nil
+}
+
+func (s *FileStore) AppendNotification(record NotificationRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.state.Notifications = append(s.state.Notifications, record)
+	if len(s.state.Notifications) > 1000 {
+		s.state.Notifications = s.state.Notifications[len(s.state.Notifications)-1000:]
+	}
+	return s.persistLocked()
+}
+
+func (s *FileStore) NotificationsForUser(userID string, limit int) ([]NotificationRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []NotificationRecord
+	for i := len(s.state.Notifications) - 1; i >= 0; i-- {
+		record := s.state.Notifications[i]
+		if record.UserID == "" || record.UserID == userID {
+			out = append(out, record)
+			if limit > 0 && len(out) >= limit {
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
+func (s *FileStore) UpsertRepairRequest(request models.RepairRequest) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, existing := range s.state.RepairRequests {
+		if existing.ID == request.ID {
+			s.state.RepairRequests[i] = request
+			return s.persistLocked()
+		}
+	}
+	s.state.RepairRequests = append(s.state.RepairRequests, request)
+	return s.persistLocked()
+}
+
+func (s *FileStore) RepairRequestByID(id string) (models.RepairRequest, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, request := range s.state.RepairRequests {
+		if request.ID == id {
+			return request, nil
+		}
+	}
+	return models.RepairRequest{}, ErrNotFound
+}
+
+func (s *FileStore) RepairRequests() ([]models.RepairRequest, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]models.RepairRequest(nil), s.state.RepairRequests...), nil
+}
+
+func (s *FileStore) RepairRequestsForUser(userID string) ([]models.RepairRequest, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []models.RepairRequest
+	for _, request := range s.state.RepairRequests {
+		if request.RequesterID == userID {
+			out = append(out, request)
+		}
+	}
+	return out, nil
 }
 
 func (s *FileStore) RuntimeSettings() (RuntimeSettings, bool, error) {
