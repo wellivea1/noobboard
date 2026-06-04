@@ -462,8 +462,9 @@ func TestChatGPTModelNormalizesUnsupportedCodexModels(t *testing.T) {
 	}{
 		{name: "empty", model: "", want: DefaultChatGPTCodexModel},
 		{name: "unsupported saved model", model: "unsupported-codex-model", want: DefaultChatGPTCodexModel},
-		{name: "allowed default", model: "gpt-5.3-codex", want: "gpt-5.3-codex"},
-		{name: "deprecated codex model", model: "gpt-5.2-codex", want: DefaultChatGPTCodexModel},
+		{name: "allowed default", model: "gpt-5.1-codex", want: "gpt-5.1-codex"},
+		{name: "allowed codex model", model: "gpt-5.2-codex", want: "gpt-5.2-codex"},
+		{name: "unsupported chatgpt account model", model: "gpt-5.3-codex", want: DefaultChatGPTCodexModel},
 		{name: "future non-allowlisted model", model: "codex-preview-future", want: DefaultChatGPTCodexModel},
 		{name: "unknown", model: "gpt-chatgpt-test", want: DefaultChatGPTCodexModel},
 	}
