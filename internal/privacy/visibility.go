@@ -37,6 +37,7 @@ func FilterSnapshotForRole(snapshot models.Snapshot, role models.Role, redactor 
 		app.RecentLogs = nil
 		app.LLMVisibleAdmin = false
 		app.RestartAllowedAdminOnly = false
+		app.AgentRepairAllowed = false
 		filteredApps = append(filteredApps, app)
 	}
 	snapshot.Apps = filteredApps

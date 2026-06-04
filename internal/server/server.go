@@ -70,6 +70,8 @@ type App struct {
 	runtimeIntegrationsSet bool
 	openAIAuth             *openAIAuthStore
 	agentApprovalSecret    []byte
+	agentApprovalMu        sync.Mutex
+	consumedAgentApprovals map[string]time.Time
 }
 
 const maxRequestBodyBytes int64 = 1 << 20
@@ -100,12 +102,13 @@ func New(deps Dependencies) (*App, error) {
 		return nil, err
 	}
 	app := &App{
-		deps:                deps,
-		sessions:            newSessionStore(deps.Config.Auth.SessionTimeout),
-		loginLimiter:        newLoginLimiter(),
-		openAIAuth:          newOpenAIAuthStore(),
-		historyRecorder:     statushistory.NewRecorder(),
-		agentApprovalSecret: approvalSecret,
+		deps:                   deps,
+		sessions:               newSessionStore(deps.Config.Auth.SessionTimeout),
+		loginLimiter:           newLoginLimiter(),
+		openAIAuth:             newOpenAIAuthStore(),
+		historyRecorder:        statushistory.NewRecorder(),
+		agentApprovalSecret:    approvalSecret,
+		consumedAgentApprovals: map[string]time.Time{},
 	}
 	if settings, ok, err := deps.Store.RuntimeSettings(); err != nil {
 		return nil, err
@@ -493,6 +496,7 @@ func probeSourceHasData(source, name string) bool {
 
 func applyAppCatalog(apps []models.AppStatus, catalog config.AppCatalogConfig) {
 	for i := range apps {
+		apps[i].AgentRepairAllowed = appCatalogFlag(apps[i], catalog.AgentRepairAllowed)
 		if iconURL := appIconOverride(apps[i], catalog.IconOverrides); iconURL != "" {
 			apps[i].IconURL = iconURL
 			apps[i].IconSource = "custom"
@@ -505,6 +509,21 @@ func applyAppCatalog(apps []models.AppStatus, catalog config.AppCatalogConfig) {
 			}
 		}
 	}
+}
+
+func appCatalogFlag(app models.AppStatus, flags map[string]bool) bool {
+	for _, key := range []string{app.AppID, app.ContainerName, app.DisplayName} {
+		if key == "" {
+			continue
+		}
+		if flags[key] {
+			return true
+		}
+		if flags[strings.ToLower(key)] {
+			return true
+		}
+	}
+	return false
 }
 
 func appIconOverride(app models.AppStatus, overrides map[string]string) string {
@@ -1320,30 +1339,35 @@ func (a *App) diagnose(w http.ResponseWriter, r *http.Request, mode llm.Mode, ro
 	a.deps.Audit.Record(mustUser(r).ID, "llm.diagnosis", map[string]interface{}{"mode": string(mode), "incident_type": string(diagnosis.IncidentType), "admin_message": diagnosis.AdminMessage})
 	response := diagnosisResponse{Diagnosis: diagnosis}
 	if mode == llm.ModeAdminRequested && role == models.RoleAdmin {
-		response.AgentPlan = a.llmAgentPlanResponse(diagnosis, full, mustUser(r).ID)
+		response.AgentPlan = a.llmAgentPlanResponse(diagnosis, full, mustUser(r).ID, mustSession(r))
 	}
 	writeJSON(w, http.StatusOK, response)
 }
 
-func (a *App) llmAgentPlanResponse(diagnosis llm.Diagnosis, snapshot models.Snapshot, actorID string) *llmAgentPlanView {
+func (a *App) llmAgentPlanResponse(diagnosis llm.Diagnosis, snapshot models.Snapshot, actorID string, sess session) *llmAgentPlanView {
 	action, known := agentActionDefinition(diagnosis.RecommendedActionID)
 	target := resolveAgentPlanTarget(action, diagnosis, snapshot)
 	requiresApproval := known && action.ApprovalEligible && (!action.RequiresAppTarget || target.Resolved)
-	status := "not_actionable"
-	if requiresApproval {
-		status = "approval_locked"
-	} else if known && action.RequiresAppTarget && !target.Resolved {
-		status = "target_unresolved"
-	}
+	a.settingsMu.RLock()
+	llmCfg := a.deps.Config.LLM
+	redactor := a.deps.Redactor
+	a.settingsMu.RUnlock()
+	armed, _ := agentSessionArmed(llmCfg, sess)
+	status, canExecute, allowReason := agentPlanExecutionState(action, target, snapshot, llmCfg, redactor, armed)
 	expiresAt := time.Now().UTC().Add(5 * time.Minute)
 	approvalToken := ""
 	if requiresApproval {
+		nonce, err := randomToken()
+		if err != nil {
+			nonce = ""
+		}
 		approvalToken = a.signAgentApprovalToken(agentApprovalTokenPayload{
 			PlanID:              agentApprovalPlanID,
 			ActorID:             actorID,
 			RecommendedActionID: action.ID,
 			TargetKind:          target.Kind,
 			TargetID:            target.ID,
+			Nonce:               nonce,
 			ExpiresAt:           expiresAt.Unix(),
 		})
 	}
@@ -1356,7 +1380,7 @@ func (a *App) llmAgentPlanResponse(diagnosis llm.Diagnosis, snapshot models.Snap
 		ApprovalToken:         approvalToken,
 		ApprovalExpiresAt:     expiresAt,
 		RequiresAdminApproval: requiresApproval,
-		CanExecute:            false,
+		CanExecute:            canExecute,
 		Status:                status,
 		Target:                target,
 		Options: []llmAgentPlanOptionView{
@@ -1371,8 +1395,8 @@ func (a *App) llmAgentPlanResponse(diagnosis llm.Diagnosis, snapshot models.Snap
 				ID:          "allow_once",
 				Label:       "Allow fix",
 				Description: "Permit this single fix attempt.",
-				Enabled:     false,
-				Reason:      agentPlanAllowReason(action, target),
+				Enabled:     canExecute,
+				Reason:      allowReason,
 			},
 		},
 	}
@@ -1384,6 +1408,8 @@ type llmAgentActionDefinition struct {
 	Summary           string
 	ApprovalEligible  bool
 	RequiresAppTarget bool
+	Executable        bool
+	DockerAction      docker.ContainerAction
 }
 
 var llmAgentActionRegistry = map[string]llmAgentActionDefinition{
@@ -1400,27 +1426,29 @@ var llmAgentActionRegistry = map[string]llmAgentActionDefinition{
 	"ask_admin_to_check": {
 		ID:               "ask_admin_to_check",
 		Title:            "Manual check recommendation",
-		Summary:          "The model suggested an admin check. Chat can show it in the normal approval popup once action tools exist.",
+		Summary:          "The model suggested an admin check. NoobBoard will not run a mutating action for this recommendation.",
 		ApprovalEligible: true,
 	},
 	"ask_admin_to_restart_container": {
 		ID:                "ask_admin_to_restart_container",
 		Title:             "Restart recommendation",
-		Summary:           "The model suggested a restart. Chat can ask for approval, but it cannot restart anything until repair tools are implemented.",
+		Summary:           "The model suggested restarting one app. NoobBoard can run one restart only after admin approval, an armed session, and per-app opt-in.",
 		ApprovalEligible:  true,
 		RequiresAppTarget: true,
+		Executable:        true,
+		DockerAction:      docker.ActionRestart,
 	},
 	"ask_admin_to_check_logs": {
 		ID:                "ask_admin_to_check_logs",
 		Title:             "Log check recommendation",
-		Summary:           "The model suggested checking logs. Chat can ask for approval once log-based repair actions exist.",
+		Summary:           "The model suggested checking logs. NoobBoard does not execute log-based repair actions.",
 		ApprovalEligible:  true,
 		RequiresAppTarget: true,
 	},
 	"ask_admin_to_check_unifi": {
 		ID:               "ask_admin_to_check_unifi",
 		Title:            "Network check recommendation",
-		Summary:          "The model suggested checking router or network status. Chat can ask for approval once network repair actions exist.",
+		Summary:          "The model suggested checking router or network status. NoobBoard does not execute network repair actions.",
 		ApprovalEligible: true,
 	},
 	"ask_admin_to_check_storage": {
@@ -1478,11 +1506,33 @@ func resolveAgentPlanTarget(action llmAgentActionDefinition, diagnosis llm.Diagn
 	return target
 }
 
-func agentPlanAllowReason(action llmAgentActionDefinition, target llmAgentPlanTargetView) string {
-	if action.RequiresAppTarget && !target.Resolved {
-		return target.Reason
+func agentPlanExecutionState(action llmAgentActionDefinition, target llmAgentPlanTargetView, snapshot models.Snapshot, cfg config.LLMConfig, redactor *privacy.Redactor, armed bool) (string, bool, string) {
+	if !action.ApprovalEligible {
+		return "not_actionable", false, ""
 	}
-	return "Locked until non-read-only tools have schema validation, audit policy, and admin approval."
+	if action.RequiresAppTarget && !target.Resolved {
+		return "target_unresolved", false, target.Reason
+	}
+	if !action.Executable {
+		return "approval_locked", false, "This recommendation is informational; NoobBoard only executes app restart repairs in this version."
+	}
+	if !cfg.AgentControlEnabled {
+		return "approval_locked", false, "Enable the action approval gate in LLM settings before a fix can run."
+	}
+	app, ok := findAppByID(snapshot.Apps, target.ID)
+	if !ok {
+		return "target_unresolved", false, "The target app is no longer present in the current app snapshot."
+	}
+	if redactor != nil && redactor.IsBlacklistedApp(app) {
+		return "approval_locked", false, "This app is privacy-blacklisted, so automatic repair is unavailable."
+	}
+	if !app.AgentRepairAllowed {
+		return "approval_locked", false, "Enable automatic repair for this app in app settings before a fix can run."
+	}
+	if !armed {
+		return "approval_needs_arm", false, "Arm this admin session before allowing this restart."
+	}
+	return "approval_ready", true, ""
 }
 
 func (a *App) recordAgentApproval(w http.ResponseWriter, r *http.Request) {
@@ -1541,8 +1591,64 @@ func (a *App) recordAgentApproval(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, errors.New("agent action approval must be armed in this admin session before a fix can run"))
 		return
 	}
-	a.deps.Audit.Record(mustUser(r).ID, "llm.agent_plan.locked", details)
-	writeError(w, http.StatusConflict, errors.New("automatic fixes are locked until mutating agent tools are implemented"))
+	if !action.Executable || action.DockerAction != docker.ActionRestart {
+		a.deps.Audit.Record(mustUser(r).ID, "llm.agent_plan.non_executable", details)
+		writeError(w, http.StatusConflict, errors.New("this recommendation does not have an executable repair action"))
+		return
+	}
+	snapshot, err := a.readOnlySnapshot(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	app, ok := findAppByID(snapshot.Apps, payload.TargetID)
+	if !ok {
+		details["reason"] = "target_unresolved"
+		a.deps.Audit.Record(mustUser(r).ID, "llm.agent_plan.refused", details)
+		writeError(w, http.StatusConflict, errors.New("approval target is no longer present in the current app snapshot"))
+		return
+	}
+	details["app_id"] = app.AppID
+	details["container_name"] = app.ContainerName
+	details["docker_action"] = string(action.DockerAction)
+	if a.redactorSnapshot().IsBlacklistedApp(app) {
+		details["reason"] = "privacy_blacklisted"
+		a.deps.Audit.Record(mustUser(r).ID, "llm.agent_plan.refused", details)
+		writeError(w, http.StatusConflict, errors.New("automatic repair is unavailable for privacy-blacklisted apps"))
+		return
+	}
+	if !app.AgentRepairAllowed {
+		details["reason"] = "app_not_opted_in"
+		a.deps.Audit.Record(mustUser(r).ID, "llm.agent_plan.refused", details)
+		writeError(w, http.StatusConflict, errors.New("automatic repair is not enabled for this app"))
+		return
+	}
+	if strings.TrimSpace(payload.Nonce) == "" {
+		writeError(w, http.StatusForbidden, errors.New("approval token is missing a replay nonce"))
+		return
+	}
+	if !a.consumeAgentApproval(payload) {
+		details["reason"] = "approval_replay"
+		a.deps.Audit.Record(mustUser(r).ID, "llm.agent_plan.replay_blocked", details)
+		writeError(w, http.StatusConflict, errors.New("approval token has already been used"))
+		return
+	}
+	result, err := a.deps.Collectors.Docker.ControlContainer(r.Context(), app, action.DockerAction)
+	if err != nil {
+		details["error"] = err.Error()
+		a.deps.Audit.Record(mustUser(r).ID, "llm.agent_plan.execute_failed", details)
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	details["can_execute"] = true
+	details["via"] = "agent_plan"
+	a.invalidateSnapshot()
+	a.deps.Audit.Record(mustUser(r).ID, "llm.agent_plan.executed", details)
+	a.deps.Audit.Record(mustUser(r).ID, "app.container.action", map[string]interface{}{"app_id": app.AppID, "action": string(action.DockerAction), "container_name": app.ContainerName, "via": "agent_plan", "plan_id": payload.PlanID, "recommended_action_id": action.ID})
+	writeJSON(w, http.StatusAccepted, map[string]interface{}{
+		"status": "executed",
+		"result": result,
+	})
 }
 
 func (a *App) setAgentArm(w http.ResponseWriter, r *http.Request) {
@@ -1650,6 +1756,28 @@ func validAgentApprovalChoice(choice string) bool {
 	default:
 		return false
 	}
+}
+
+func (a *App) consumeAgentApproval(payload agentApprovalTokenPayload) bool {
+	nonce := strings.TrimSpace(payload.Nonce)
+	if nonce == "" {
+		return false
+	}
+	expiresAt := time.Unix(payload.ExpiresAt, 0).UTC()
+	now := time.Now().UTC()
+	a.agentApprovalMu.Lock()
+	defer a.agentApprovalMu.Unlock()
+	for key, expiry := range a.consumedAgentApprovals {
+		if !expiry.After(now) {
+			delete(a.consumedAgentApprovals, key)
+		}
+	}
+	key := payload.ActorID + "|" + payload.PlanID + "|" + payload.RecommendedActionID + "|" + payload.TargetKind + "|" + payload.TargetID + "|" + nonce
+	if _, exists := a.consumedAgentApprovals[key]; exists {
+		return false
+	}
+	a.consumedAgentApprovals[key] = expiresAt
+	return true
 }
 
 func (a *App) notifyAdmin(w http.ResponseWriter, r *http.Request) {
@@ -1862,20 +1990,11 @@ func (a *App) updateAppCatalogSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	if settings.IconOverrides == nil {
-		settings.IconOverrides = map[string]string{}
-	}
-	for key, iconURL := range settings.IconOverrides {
-		normalized, err := config.NormalizeIconURL(iconURL)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, fmt.Errorf("icon override %s: %w", key, err))
-			return
-		}
-		if normalized == "" {
-			delete(settings.IconOverrides, key)
-		} else {
-			settings.IconOverrides[key] = normalized
-		}
+	var err error
+	settings, err = normalizeAppCatalogSettings(settings)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
 	}
 	a.settingsMu.Lock()
 	a.deps.Config.AppCatalog = settings
@@ -1886,7 +2005,7 @@ func (a *App) updateAppCatalogSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.invalidateSnapshot()
-	a.deps.Audit.Record(mustUser(r).ID, "settings.apps.saved", map[string]interface{}{"path": r.URL.Path, "icon_overrides": len(settings.IconOverrides)})
+	a.deps.Audit.Record(mustUser(r).ID, "settings.apps.saved", map[string]interface{}{"path": r.URL.Path, "icon_overrides": len(settings.IconOverrides), "agent_repair_allowed": len(settings.AgentRepairAllowed)})
 	writeJSON(w, http.StatusOK, settings)
 }
 
@@ -2096,6 +2215,7 @@ type agentApprovalTokenPayload struct {
 	RecommendedActionID string `json:"recommended_action_id"`
 	TargetKind          string `json:"target_kind,omitempty"`
 	TargetID            string `json:"target_id,omitempty"`
+	Nonce               string `json:"nonce,omitempty"`
 	ExpiresAt           int64  `json:"expires_at"`
 }
 
@@ -2201,7 +2321,7 @@ func llmAgentReadinessResponse(cfg config.LLMConfig, sess session) llmAgentReadi
 	}
 	return llmAgentReadinessView{
 		ReadOnlyToolsAvailable: true,
-		MutatingToolsAvailable: false,
+		MutatingToolsAvailable: true,
 		AgentControlEnabled:    cfg.AgentControlEnabled,
 		AgentArmed:             armed,
 		AgentArmedUntil:        armedUntil,
@@ -2221,8 +2341,8 @@ func llmAgentReadinessResponse(cfg config.LLMConfig, sess session) llmAgentReadi
 				ID:          "propose",
 				Label:       "Approval popup",
 				Status:      agentProposeModeStatus(cfg.AgentControlEnabled, armed),
-				Enabled:     false,
-				Description: "The model proposes a fix and NoobBoard shows a normal approval popup; execution remains locked until repair tools exist.",
+				Enabled:     cfg.AgentControlEnabled,
+				Description: "The model can propose one allowlisted app restart; NoobBoard executes it only after per-app opt-in, an armed admin session, and approval.",
 			},
 			{
 				ID:          "auto_review",
@@ -2236,7 +2356,7 @@ func llmAgentReadinessResponse(cfg config.LLMConfig, sess session) llmAgentReadi
 				Label:       "Auto action",
 				Status:      "blocked",
 				Enabled:     false,
-				Description: "Future mode: only a narrow admin allowlist with rate limits and a kill switch.",
+				Description: "Future mode: autonomous action remains blocked; current repair requires a per-action admin approval.",
 			},
 		},
 		OpenCodeAutoReview: llmOpenCodeAutoReviewSummary{
@@ -2578,10 +2698,11 @@ func (a *App) applyRuntimeSettings(settings db.RuntimeSettings) error {
 	defer a.settingsMu.Unlock()
 	a.deps.Config.Visibility = normalizeVisibilitySettings(settings.Visibility)
 	a.deps.Config.Privacy = settings.Privacy
-	if settings.AppCatalog.IconOverrides == nil {
-		settings.AppCatalog.IconOverrides = map[string]string{}
+	appCatalog, err := normalizeAppCatalogSettings(settings.AppCatalog)
+	if err != nil {
+		return err
 	}
-	a.deps.Config.AppCatalog = settings.AppCatalog
+	a.deps.Config.AppCatalog = appCatalog
 	settings.LLM = normalizeLLMSettings(settings.LLM)
 	a.deps.Config.LLM = settings.LLM
 	if integrationSettingsPresent(settings.Integrations) {
@@ -2602,6 +2723,33 @@ func (a *App) applyRuntimeSettings(settings db.RuntimeSettings) error {
 	a.deps.LLM = llm.NewClient(settings.LLM, a.deps.Redactor)
 	a.deps.Notifications.UpdateConfig(settings.Notifications)
 	return nil
+}
+
+func normalizeAppCatalogSettings(settings config.AppCatalogConfig) (config.AppCatalogConfig, error) {
+	iconOverrides := map[string]string{}
+	for key, iconURL := range settings.IconOverrides {
+		trimmedKey := strings.TrimSpace(key)
+		if trimmedKey == "" {
+			continue
+		}
+		normalized, err := config.NormalizeIconURL(iconURL)
+		if err != nil {
+			return config.AppCatalogConfig{}, fmt.Errorf("icon override %s: %w", key, err)
+		}
+		if normalized != "" {
+			iconOverrides[trimmedKey] = normalized
+		}
+	}
+	agentRepairAllowed := map[string]bool{}
+	for key, allowed := range settings.AgentRepairAllowed {
+		trimmedKey := strings.TrimSpace(key)
+		if trimmedKey != "" && allowed {
+			agentRepairAllowed[trimmedKey] = true
+		}
+	}
+	settings.IconOverrides = iconOverrides
+	settings.AgentRepairAllowed = agentRepairAllowed
+	return settings, nil
 }
 
 func collectorsForConfig(cfg config.Config) Collectors {

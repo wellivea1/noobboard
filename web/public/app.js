@@ -44,7 +44,7 @@ const NEW_USER_KEY = "__new_user__";
 const SETTINGS_ENDPOINTS = [
   { title: "Visibility", section: "visibility", path: "/api/admin/settings/visibility" },
   { title: "Blacklist", section: "blacklist", path: "/api/admin/settings/blacklist" },
-  { title: "App Images", section: "apps", path: "/api/admin/settings/apps" },
+  { title: "Apps", section: "apps", path: "/api/admin/settings/apps" },
   { title: "LLM", section: "llm", path: "/api/admin/settings/llm" },
   { title: "Integrations", section: "integrations", path: "/api/admin/settings/integrations" },
   { title: "Notifications", section: "notifications", path: "/api/admin/settings/notifications" },
@@ -2190,7 +2190,7 @@ async function runDiagnosis(question, output, options = {}) {
 
 function renderAgentPlanPrompt(plan) {
   const requiresApproval = !!plan.requires_admin_approval;
-  const statusText = plan.can_execute ? "Approval required" : "Fixes locked";
+  const statusText = plan.can_execute ? "Ready" : plan.status === "approval_needs_arm" ? "Arm first" : "Fix locked";
   const targetText = agentPlanTargetText(plan);
   return node("section", { class: "agent-plan-prompt" },
     node("div", { class: "agent-plan-head" },
@@ -2254,7 +2254,7 @@ function normalizeAgentApprovalOptions(plan) {
       description: "Permit this single fix attempt.",
       enabled: !!plan?.can_execute,
       selected: false,
-      reason: plan?.can_execute ? "" : "Locked until repair tools are implemented.",
+      reason: plan?.can_execute ? "" : "Arm this session and enable automatic repair for the target app first.",
     },
   ];
 }
@@ -2296,7 +2296,7 @@ function openAgentApprovalDialog(plan) {
     class: "openai-auth-status",
     "aria-live": "polite",
     "data-tone": plan.can_execute ? "info" : "bad",
-    text: plan.can_execute ? "Approval is required before any fix runs." : "Automatic fixes are locked until repair tools are implemented.",
+    text: plan.can_execute ? "Approval will run one restart for the selected app." : "Automatic fixes require per-app opt-in and an armed admin session.",
   });
   const updateSelection = () => {
     const selectedOption = approvalOptions.find((option) => option.id === selectedChoice);
@@ -2314,7 +2314,7 @@ function openAgentApprovalDialog(plan) {
       statusNode.textContent = "No automatic fix will run.";
     } else {
       statusNode.dataset.tone = "info";
-      statusNode.textContent = "Approval is required before any fix runs.";
+      statusNode.textContent = "NoobBoard will run one restart for this app.";
     }
   };
   const optionNodes = approvalOptions.map((option) => {
@@ -2402,7 +2402,7 @@ async function submitAgentApproval(plan, choice, button) {
         choice: selectedChoice,
       }),
     });
-    showNotice(selectedChoice === "deny" ? "Automatic fix was not allowed." : "Approval recorded.");
+    showNotice(selectedChoice === "deny" ? "Automatic fix was not allowed." : "Approved fix was sent.");
     closeAgentApprovalDialog();
   } catch (error) {
     showNotice(error.message, "error");
@@ -3191,6 +3191,7 @@ function renderBlacklistSettings(item, data) {
 
 function renderAppImageSettings(item, data) {
   const overrides = { ...(data?.icon_overrides || {}) };
+  const repairAllowed = { ...(data?.agent_repair_allowed || {}) };
   const apps = state.snapshot?.apps || [];
   const appRows = [];
   const appKeys = new Set();
@@ -3202,14 +3203,18 @@ function renderAppImageSettings(item, data) {
       placeholder: app.icon_url && app.icon_source !== "built-in" ? app.icon_url : "https://example.local/icon.png",
       inputmode: "url",
     });
-    appRows.push({ key, input });
+    const repairToggle = settingToggle("Allow automatic repair", key ? !!repairAllowed[key] : false);
+    appRows.push({ key, input, repairInput: repairToggle.input });
     return node("div", { class: "settings-app-image-row" },
       renderAppLogo(app),
       node("span", { class: "settings-row-main" },
         node("strong", { text: app.display_name || key || "App" }),
-        node("small", { text: app.icon_source ? `Current: ${app.icon_source}` : "No image source" }),
+        node("small", { text: app.icon_source ? `Image: ${app.icon_source}` : "No image source" }),
       ),
-      input,
+      node("div", { class: "settings-app-controls" },
+        input,
+        repairToggle.element,
+      ),
     );
   });
   const extraRows = [];
@@ -3253,16 +3258,21 @@ function renderAppImageSettings(item, data) {
   );
   return settingsCard(item, body, (status) => {
     const icon_overrides = {};
+    const agent_repair_allowed = {};
     for (const row of appRows) {
       const url = row.input.value.trim();
       if (row.key && url) icon_overrides[row.key] = url;
+      if (row.key && row.repairInput.checked) agent_repair_allowed[row.key] = true;
     }
     for (const row of extraRows) {
       const key = row.keyInput.value.trim();
       const url = row.urlInput.value.trim();
       if (key && url) icon_overrides[key] = url;
     }
-    return saveSettingsPayload(item.title, item.path, { icon_overrides }, status);
+    for (const [key, allowed] of Object.entries(repairAllowed)) {
+      if (allowed && !appKeys.has(key)) agent_repair_allowed[key] = true;
+    }
+    return saveSettingsPayload(item.title, item.path, { icon_overrides, agent_repair_allowed }, status);
   });
 }
 
@@ -3426,7 +3436,7 @@ function renderLLMAgentReadiness(readiness, options = {}) {
     node("div", { class: "settings-status-list" },
       settingsStatusRow("Read-only live tools", activeText, readiness.admin_tools_enabled ? "available" : "locked", readOnlyNames || "No read-only tools are registered."),
       settingsStatusRow("Action arm", agentArmStatusText(readiness), armed ? "armed" : controlEnabled ? "planned" : "locked", agentArmDetailText(readiness), armAction),
-      settingsStatusRow("Automatic fixes", readiness.mutating_tools_available ? "Available" : "Locked", readiness.mutating_tools_available ? "available" : "locked", "Chat cannot start, stop, restart, or change infrastructure yet."),
+      settingsStatusRow("Automatic fixes", readiness.mutating_tools_available ? "Restart approval available" : "Locked", readiness.mutating_tools_available ? "available" : "locked", readiness.mutating_tools_available ? "Only opted-in apps can be restarted, and every fix still needs an armed session plus approval." : "Chat cannot start, stop, restart, or change infrastructure yet."),
       settingsStatusRow("Auto-review", autoReview.enabled ? "Available" : agentModeStatusText(autoReview.status), autoReview.status || "locked", reference.sufficient_reference ? "A separate reviewer model is a future guard; user approvals still use the normal popup." : "The reviewer-model reference is documented, but execution remains locked."),
     ),
     node("p", { class: "muted agent-reference-note", text: reference.design_finding || "Future repair actions require schema validation, audit policy, and explicit approval." }),

@@ -80,7 +80,8 @@ type PrivacyConfig struct {
 }
 
 type AppCatalogConfig struct {
-	IconOverrides map[string]string `json:"icon_overrides"`
+	IconOverrides      map[string]string `json:"icon_overrides"`
+	AgentRepairAllowed map[string]bool   `json:"agent_repair_allowed,omitempty"`
 }
 
 type NotificationConfig struct {
@@ -200,7 +201,8 @@ func Defaults() Config {
 			RedactEmails:      true,
 		},
 		AppCatalog: AppCatalogConfig{
-			IconOverrides: map[string]string{},
+			IconOverrides:      map[string]string{},
+			AgentRepairAllowed: map[string]bool{},
 		},
 		Notifications: NotificationConfig{
 			Enabled:             true,
@@ -362,6 +364,11 @@ func (c Config) Validate() error {
 		}
 		if _, err := NormalizeIconURL(iconURL); err != nil {
 			return fmt.Errorf("app icon override %s: %w", key, err)
+		}
+	}
+	for key := range c.AppCatalog.AgentRepairAllowed {
+		if strings.TrimSpace(key) == "" {
+			return errors.New("app automatic repair key is required")
 		}
 	}
 	switch c.Integrations.Mode {

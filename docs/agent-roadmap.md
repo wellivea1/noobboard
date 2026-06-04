@@ -269,7 +269,7 @@ Settings destination: notifications + account), is specified in **`docs/ux-compa
 
 ## Workstream C — Customizable LLM access + optional full agent access
 
-**Status:** `in-progress` (read-only live API tools implemented; mutating repair tools not started)
+**Status:** `in-progress` (read-only live API tools implemented; approval-gated restart v1 implemented; autonomous repair, cooldown/rate-limit, and verification loop still open)
 **Goal:** (1) Make LLM access easy to customize per role/policy, and (2) add an **opt-in,
 manually enabled** "agent mode" where the LLM can *act* to resolve problems (e.g., restart
 a stuck container) rather than only producing an advisory report.
@@ -311,7 +311,9 @@ the server resolves app targets against the admin snapshot before showing an app
 popup, and unresolved app targets stay non-actionable.
 The action-approval arm gate is also in place: it is disabled by default, requires
 `agent_control_enabled=true`, and arms only the current admin session for a bounded window.
-Mutating repair execution remains locked until the explicit tool implementations exist.
+Restart execution is now available only through the server-side approval endpoint, only for
+apps explicitly opted in with `app_catalog.agent_repair_allowed`, and only for one signed
+approval token. Autonomous repair remains locked.
 
 **Design, grounded in the references:**
 - **Read-only live API tools (implemented first).** Admin-requested diagnosis can opt into
@@ -320,7 +322,7 @@ Mutating repair execution remains locked until the explicit tool implementations
   normal collectors and never expose raw API clients, credentials, shell, filesystem,
   Docker control, Unraid mutations, or UniFi configuration mutation. General-user policies
   never receive tools.
-- **Future narrow mutation allowlist.** Tools wrap existing audited operations only:
+- **Narrow mutation allowlist.** Current v1 executes only `docker_restart` for an opted-in app after a server-signed approval. Future tools wrap existing audited operations only:
   `get_status`, `get_logs` (bounded + redacted), `docker_restart`, `docker_start`,
   `docker_stop` — all already admin-only, CSRF/audit-gated, and resolved from the
   server-side snapshot. **No shell, no filesystem, no arbitrary commands, no Unraid/UniFi
@@ -358,20 +360,21 @@ Codex auto-review uses "5.4 Thinking".
 **Likely files:** new `internal/llm/agent.go` (runner + tool schema), `internal/llm/
 schema.go` (tool-call validation), `internal/server/server.go` (arming + run endpoints,
 CSRF), `internal/audit/audit.go`, `internal/config/config.go` (feature flag + allowlist),
-`web/public/app.js`. **Must update `docs/llm-policy.md` and `docs/security.md` when this
-lands** — those docs currently state the LLM has no repair tools or Docker control.
+`web/public/app.js`. Keep `docs/llm-policy.md` and `docs/security.md` aligned whenever
+the repair capability changes.
 
 ### Acceptance criteria
 - [ ] Part 1: roles/limits/provider/model are configurable from a structured UI; redaction
       and role scoping are provably unchanged.
 - [ ] Part 1: LLM settings show an agent-readiness/approval section that distinguishes
       active read-only tools from the planned approval popup, auto-review, and auto-action modes.
-- [ ] Part 2: agent mode is off by default; enabling it requires both a config flag and an
-      explicit in-app arm step.
-- [ ] Tool calls are schema-validated, restricted to the allowlist, audited with transcript,
-      and notify admins on execution.
-- [ ] `propose` mode requires per-action confirmation; `auto` mode honors the allowlist,
-      rate limits, and kill switch.
+- [x] Part 2 first slice: restart repair is off by default per app; enabling execution
+      requires both `agent_control_enabled` and an explicit in-app arm step.
+- [x] Restart approval is schema-validated, restricted to the restart allowlist, single-use,
+      and audited.
+- [ ] Add cooldown/rate-limit, post-action verification, and chat outcome reporting.
+- [ ] `propose` mode requires per-action confirmation; future `auto` mode honors the
+      allowlist, rate limits, and kill switch.
 - [ ] Redaction failures and invalid tool calls fail closed (no action taken).
 - [ ] `docs/llm-policy.md` and `docs/security.md` updated to reflect the new capability.
 - [ ] `go test ./...`, build, and `visual-check.ps1` all pass.

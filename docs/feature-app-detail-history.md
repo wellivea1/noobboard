@@ -42,14 +42,14 @@ repair. Verified on this machine: `go build ./...` ✓, `go test ./...` ✓,
   uptime, and a plain-language timeline; focus-managed back; "Check again" uses
   the shared refresh endpoint. Privacy filter strips the new Unraid/Docker infra
   fields from general users.
-- **Repair scaffold (execution-locked):** the diagnosis schema now returns a
-  closed-set `recommended_action_id` + `recommended_action_target`; the server
-  builds an `llmAgentPlanView` with an HMAC-signed, 5-min, actor/action/target
-  -bound approval token; chat renders an approval popup ("Allow fix" disabled);
-  admin can **Arm** a session (`AgentControlEnabled` gate, `AgentArmDuration`
-  ≤1h). `recordAgentApproval` verifies token + arm but **deliberately returns 409
-  "locked"** — no mutating tool runs yet. This is the clean handoff point for the
-  repair work in the section below.
+- **Approval-gated repair v1:** the diagnosis schema returns a closed-set
+  `recommended_action_id` + `recommended_action_target`; the server builds an
+  `llmAgentPlanView` with an HMAC-signed, 5-min, actor/action/target/nonce-bound
+  approval token; chat renders a normal approval popup; admin can **Arm** a
+  session (`AgentControlEnabled` gate, `AgentArmDuration` ≤1h). `allow_once`
+  now executes only `ask_admin_to_restart_container`, only for a currently
+  resolved, opted-in, non-blacklisted app, and only once per token. Non-restart
+  recommendations remain non-executing.
 
 **Follow-up implementation notes:**
 - The general-user infra-history API now restricts raw technical subjects
@@ -61,6 +61,10 @@ repair. Verified on this machine: `go build ./...` ✓, `go test ./...` ✓,
   checks banned terms/overflow/touch targets, and verifies Back restores focus.
 - `docs/security.md` records that `history.jsonl` is local operational state and
   must remain out of git.
+- The first repair slice landed: per-app `agent_repair_allowed` settings,
+  restart-only server-side execution, single-use approval tokens, and audit
+  coverage. Autonomous repair, cooldown/rate-limit, and outcome verification are
+  still open.
 - **Still optional:** the 24-hour status bar remains a nice-to-have.
 
 ---
@@ -480,9 +484,11 @@ weakening it.
 
 ## Suggested repair PR breakdown
 - **AR1:** per-app `AgentRepairAllowed` flag + admin settings toggle + plan
-  eligibility wiring (no execution yet).
+  eligibility wiring. **Landed:** stored as `app_catalog.agent_repair_allowed`
+  and projected onto admin app snapshots.
 - **AR2:** server-side actuator + single-use tokens + allowlist; unlock
   `recordAgentApproval` to execute restart; enable "Allow fix"; full audit.
+  **Landed for restart-only approval-gated v1.**
 - **AR3:** cooldown/rate-limit + outcome verification re-poll + chat outcome UI.
 - **AR4:** security review + docs + harness coverage for the armed/approved flow.
 

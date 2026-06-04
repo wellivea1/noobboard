@@ -28,7 +28,8 @@ func TestRuntimeSettingsPersistAndClone(t *testing.T) {
 			RedactEmails:         true,
 		},
 		AppCatalog: config.AppCatalogConfig{
-			IconOverrides: map[string]string{"emby": "https://example.invalid/emby.png"},
+			IconOverrides:      map[string]string{"emby": "https://example.invalid/emby.png"},
+			AgentRepairAllowed: map[string]bool{"emby": true},
 		},
 		LLM:           cfg.LLM,
 		Notifications: cfg.Notifications,
@@ -39,6 +40,7 @@ func TestRuntimeSettingsPersistAndClone(t *testing.T) {
 
 	settings.Visibility.HiddenAppIDs[0] = "mutated"
 	settings.AppCatalog.IconOverrides["emby"] = "mutated"
+	settings.AppCatalog.AgentRepairAllowed["emby"] = false
 	settings.LLM.Policies["admin_requested"] = models.LLMPolicy{}
 
 	got, ok, err := store.RuntimeSettings()
@@ -57,9 +59,13 @@ func TestRuntimeSettingsPersistAndClone(t *testing.T) {
 	if got.AppCatalog.IconOverrides["emby"] != "https://example.invalid/emby.png" {
 		t.Fatalf("saved app catalog shared caller map: %q", got.AppCatalog.IconOverrides["emby"])
 	}
+	if !got.AppCatalog.AgentRepairAllowed["emby"] {
+		t.Fatalf("saved app repair settings shared caller map: %#v", got.AppCatalog.AgentRepairAllowed)
+	}
 
 	got.Visibility.HiddenAppIDs[0] = "changed"
 	got.AppCatalog.IconOverrides["emby"] = "changed"
+	got.AppCatalog.AgentRepairAllowed["emby"] = false
 	got.LLM.Policies["admin_requested"] = models.LLMPolicy{}
 	gotAgain, _, err := store.RuntimeSettings()
 	if err != nil {
@@ -73,6 +79,9 @@ func TestRuntimeSettingsPersistAndClone(t *testing.T) {
 	}
 	if gotAgain.AppCatalog.IconOverrides["emby"] != "https://example.invalid/emby.png" {
 		t.Fatalf("loaded app catalog shared returned map: %q", gotAgain.AppCatalog.IconOverrides["emby"])
+	}
+	if !gotAgain.AppCatalog.AgentRepairAllowed["emby"] {
+		t.Fatalf("loaded app repair settings shared returned map: %#v", gotAgain.AppCatalog.AgentRepairAllowed)
 	}
 
 	reopened, err := OpenFileStore(path)
@@ -91,6 +100,9 @@ func TestRuntimeSettingsPersistAndClone(t *testing.T) {
 	}
 	if persisted.AppCatalog.IconOverrides["emby"] != "https://example.invalid/emby.png" {
 		t.Fatalf("persisted icon override = %q", persisted.AppCatalog.IconOverrides["emby"])
+	}
+	if !persisted.AppCatalog.AgentRepairAllowed["emby"] {
+		t.Fatalf("persisted app repair setting = %#v", persisted.AppCatalog.AgentRepairAllowed)
 	}
 }
 

@@ -86,6 +86,7 @@ type flags struct {
 	SettingsControlCount        int      `json:"settingsControlCount,omitempty"`
 	SettingsMenuButtonCount     int      `json:"settingsMenuButtonCount,omitempty"`
 	VisibleSettingsSections     int      `json:"visibleSettingsSections,omitempty"`
+	AgentRepairToggleCount      int      `json:"agentRepairToggleCount,omitempty"`
 	UserHomeVisible             bool     `json:"userHomeVisible,omitempty"`
 	UserHeroVisible             bool     `json:"userHeroVisible,omitempty"`
 	UserStatusCardCount         int      `json:"userStatusCardCount,omitempty"`
@@ -823,11 +824,17 @@ func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, a
 	if settings.VisibleSettingsSections != 1 {
 		failures = append(failures, "settings should show exactly one active submenu")
 	}
+	if settings.AgentRepairToggleCount == 0 {
+		failures = append(failures, "app repair opt-in toggle did not render in settings")
+	}
 	if settings.ButtonTextOverflow {
 		failures = append(failures, "desktop button text overflow detected")
 	}
 	if mobileSettings.SettingsMenuButtonCount < 6 || mobileSettings.VisibleSettingsSections != 1 {
 		failures = append(failures, "mobile settings submenu did not render correctly")
+	}
+	if mobileSettings.AgentRepairToggleCount == 0 {
+		failures = append(failures, "mobile app repair opt-in toggle did not render in settings")
 	}
 	if mobileOverview.UserMenuToggleVisible || mobileAdmin.UserMenuToggleVisible || mobileSettings.UserMenuToggleVisible {
 		failures = append(failures, "compact user menu was visible on admin mobile screens")
@@ -1684,6 +1691,11 @@ const settingsExpression = `(async () => {
   while (document.querySelectorAll('.settings-card input,.settings-card select,.settings-card button').length < 12 && Date.now() - started < 5000) {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
+  document.querySelector('#settings-menu [data-settings-section="apps"]')?.click();
+  const appsStarted = Date.now();
+  while (document.querySelectorAll('.settings-app-controls .setting-toggle').length < 1 && Date.now() - appsStarted < 5000) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
   const visibleSettingsSections = [...document.querySelectorAll('#tab-settings .settings-section')]
     .filter((element) => !element.hidden && getComputedStyle(element).display !== 'none').length;
   const settingsControlCount = document.querySelectorAll('.settings-card input,.settings-card select,.settings-card button').length;
@@ -1696,6 +1708,7 @@ const settingsExpression = `(async () => {
     settingsControlCount,
     settingsMenuButtonCount: document.querySelectorAll('#settings-menu [data-settings-section]').length,
     visibleSettingsSections,
+    agentRepairToggleCount: document.querySelectorAll('.settings-app-controls .setting-toggle').length,
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow,
     ...mobileAudit
