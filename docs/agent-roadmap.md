@@ -375,11 +375,12 @@ the repair capability changes.
 - [x] Restart approval is schema-validated, restricted to the restart allowlist, single-use,
       and audited.
 - [x] Add cooldown/rate-limit, post-action verification, and chat outcome reporting.
-- [ ] `propose` mode requires per-action confirmation; future `auto` mode honors the
-      allowlist, rate limits, and kill switch.
-- [ ] Redaction failures and invalid tool calls fail closed (no action taken).
+- [x] Current `propose` mode requires per-action confirmation through the admin
+      approval popup.
+- [ ] Future `auto` mode honors the allowlist, rate limits, and kill switch.
+- [x] Redaction failures and invalid tool calls fail closed (no action taken).
 - [x] `docs/llm-policy.md` and `docs/security.md` updated to reflect the new capability.
-- [ ] `go test ./...`, build, and `visual-check.ps1` all pass.
+- [x] `go test ./...`, build, and `cmd/visualcheck` all pass for this repair slice.
 
 ### Open questions
 - Which actions are safe enough for `auto` mode out of the box? Start with single-container
