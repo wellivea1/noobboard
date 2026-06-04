@@ -42,30 +42,34 @@ repair. Verified on this machine: `go build ./...` ✓, `go test ./...` ✓,
   uptime, and a plain-language timeline; focus-managed back; "Check again" uses
   the shared refresh endpoint. Privacy filter strips the new Unraid/Docker infra
   fields from general users.
-- **Repair scaffold (execution-locked):** the diagnosis schema now returns a
-  closed-set `recommended_action_id` + `recommended_action_target`; the server
-  builds an `llmAgentPlanView` with an HMAC-signed, 5-min, actor/action/target
-  -bound approval token; chat renders an approval popup ("Allow fix" disabled);
-  admin can **Arm** a session (`AgentControlEnabled` gate, `AgentArmDuration`
-  ≤1h). `recordAgentApproval` verifies token + arm but **deliberately returns 409
-  "locked"** — no mutating tool runs yet. This is the clean handoff point for the
-  repair work in the section below.
+- **Approval-gated repair v1:** the diagnosis schema returns a closed-set
+  `recommended_action_id` + `recommended_action_target`; the server builds an
+  `llmAgentPlanView` with an HMAC-signed, 5-min, actor/action/target/nonce-bound
+  approval token; chat renders a normal approval popup; admin can **Arm** a
+  session (`AgentControlEnabled` gate, `AgentArmDuration` ≤1h). `allow_once`
+  now executes only `ask_admin_to_restart_container`, only for a currently
+  resolved, opted-in, non-blacklisted app, and only once per token. Non-restart
+  recommendations remain non-executing.
 
-**Review findings (small, worth a follow-up):**
-- **Banned-term / plain-language leak in infra history for general users.**
-  `visibleInfraHistorySubject` returns raw display names ("DNS", "WAN", "NAS",
-  "Unraid array") and the recorder writes notes like "DNS is resolving."
-  `internet` and **`dns` are exposed to general users unconditionally**, so a
-  general user hitting `/api/infrastructure/history?subject=dns` receives the
-  banned term "DNS". The compact UI only ever opens `internet`, so the harness
-  stays green, but the API leaks technical vocabulary. Fix: for non-admins,
-  return plain-language display names + notes (or restrict general users to the
-  `internet` subject). Add a harness case that opens a non-`internet` infra
-  subject to catch this.
-- **Remaining from the original plan:** add visual-check coverage that actually
-  opens app-detail/infra-detail (assert render, back-with-focus, banned-term +
-  touch-target + overflow audits, screenshots); the optional 24-hour status bar;
-  a `docs/security.md` note that `history.jsonl` is sensitive + git-ignored.
+**Follow-up implementation notes:**
+- The general-user infra-history API now restricts raw technical subjects
+  (`dns`, `wan`, `unraid_array`) to admins. General users can query `internet`
+  and, when server visibility is enabled, `nas`; non-admin infra history
+  responses rewrite display names and notes into plain language.
+- `cmd/visualcheck` now opens app-detail and infra-detail from the compact view,
+  captures desktop + mobile screenshots, asserts render/history/empty-state,
+  checks banned terms/overflow/touch targets, and verifies Back restores focus.
+- `docs/security.md` records that `history.jsonl` is local operational state and
+  must remain out of git.
+- The approval-gated repair path now includes per-app `agent_repair_allowed`
+  settings, restart-only server-side execution, single-use approval tokens,
+  cooldown/rate-limit enforcement, post-restart verification, inline chat
+  outcome reporting, history notes, and lifecycle audit coverage. Autonomous
+  repair remains a separate future mode.
+- The visual harness now includes the LLM settings limit copy plus a rendered
+  approval dialog/outcome state, so regressions in the armed/approved chat UI are
+  caught without live LLM credentials.
+- **Still optional:** the 24-hour status bar remains a nice-to-have.
 
 ---
 
@@ -419,7 +423,7 @@ weakening it.
 1. `LLM.AgentControlEnabled` is **on** (admin setting, default **off**).
 2. The admin **armed** this session (`AgentArmDuration` ≤ 1h, auto-expires).
 3. A valid, **single-use**, unexpired approval token bound to actor + action +
-   target (HMAC already implemented; add one-time consumption).
+   target.
 4. The action is in the **executable allowlist** (v1: `restart` only).
 5. The target app is **opted in** to auto-repair (per-app flag, default off) and
    not blacklisted.
@@ -449,15 +453,16 @@ weakening it.
   expiry) so an approval executes at most once; reject replays.
 - **Action allowlist:** hardcode `{restart}` for v1. Explicitly reject stop/start/
   delete/exec/anything else. Never expose shell/exec.
-- **Cooldown + rate limit:** e.g. ≤1 agent restart per app / 10 min and ≤5 agent
-  actions / hour globally; over-limit → audited refusal, surfaced in chat.
+- **Cooldown + rate limit:** at most 1 agent restart per app per 10 min and 5
+  agent actions per hour globally; over-limit is an audited refusal surfaced in
+  chat.
 - **Kill switch:** disarm or `AgentControlEnabled=off` disables instantly; arm
   auto-expires. One target per approval (no bulk).
 
 ## R3 — Outcome verification & reporting
 - After executing, force a `refreshSnapshot` after a short delay, compare the
   target's before/after status, and write a history `StatusEvent` note
-  ("Auto-repair: restarted — recovered" / "still not responding").
+  ("Auto-repair: restarted - recovered" / "still not responding").
 - Return the outcome to chat (recovered / still down, before→after). On failure,
   **do not auto-retry**; surface to the admin.
 - Audit the full lifecycle: proposed → approved (by whom) → executed → verified.
@@ -484,11 +489,15 @@ weakening it.
 
 ## Suggested repair PR breakdown
 - **AR1:** per-app `AgentRepairAllowed` flag + admin settings toggle + plan
-  eligibility wiring (no execution yet).
+  eligibility wiring. **Landed:** stored as `app_catalog.agent_repair_allowed`
+  and projected onto admin app snapshots.
 - **AR2:** server-side actuator + single-use tokens + allowlist; unlock
   `recordAgentApproval` to execute restart; enable "Allow fix"; full audit.
+  **Landed for restart-only approval-gated v1.**
 - **AR3:** cooldown/rate-limit + outcome verification re-poll + chat outcome UI.
+  **Landed for approval-gated restart v1.**
 - **AR4:** security review + docs + harness coverage for the armed/approved flow.
+  **Landed for approval-gated restart v1.**
 
 ## Repair-specific open choices
 - **Autonomy level (key decision).** v1 recommended: **approval-gated while
@@ -498,7 +507,7 @@ weakening it.
   first; treat autonomous as a separate, clearly-flagged follow-up.
 - **Executable action scope for v1:** restart-only (recommended) vs. also
   start/stop.
-- **Cooldown/rate-limit defaults:** suggested 1/app/10min, 5/hour global.
+- **Cooldown/rate-limit defaults:** current v1 uses 1/app/10min, 5/hour global.
 - **Per-app flag:** new `AgentRepairAllowed` (recommended) vs. reusing an existing
   restart-permission flag.
 

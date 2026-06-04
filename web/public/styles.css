@@ -1099,6 +1099,30 @@ label {
   gap: 8px;
 }
 
+.agent-repair-outcome {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.agent-repair-outcome.recovered {
+  border-color: rgba(112, 199, 146, 0.6);
+  background: rgba(112, 199, 146, 0.1);
+}
+
+.agent-repair-outcome.unresolved {
+  border-color: rgba(224, 140, 91, 0.65);
+  background: rgba(224, 140, 91, 0.1);
+}
+
+.agent-repair-outcome small {
+  color: var(--muted);
+  line-height: 1.35;
+}
+
 .agent-approval-content {
   gap: 16px;
 }
@@ -2370,6 +2394,19 @@ button.command.app-control:focus-visible {
   min-height: 52px;
   border-bottom: 1px solid var(--border-soft);
   padding: 6px 8px;
+}
+
+.settings-app-controls {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.settings-app-controls .setting-toggle {
+  min-height: 34px;
+  padding: 0 2px;
+  color: var(--muted);
+  font-size: 0.78rem;
 }
 
 .settings-app-image-row .app-logo {
@@ -4188,6 +4225,10 @@ body.compact-view .assistant-toggle {
   }
 
   .settings-app-image-row input {
+    grid-column: 1 / -1;
+  }
+
+  .settings-app-controls {
     grid-column: 1 / -1;
   }
 

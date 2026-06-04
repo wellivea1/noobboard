@@ -101,6 +101,7 @@ type AppStatus struct {
 	NotificationOptInAllowed    bool           `json:"notification_opt_in_allowed"`
 	RestartAllowedAdminOnly     bool           `json:"restart_allowed_admin_only"`
 	RestartAllowedGeneralUser   bool           `json:"restart_allowed_general_user"`
+	AgentRepairAllowed          bool           `json:"agent_repair_allowed,omitempty"`
 	SubscriptionCount           int            `json:"subscription_count"`
 	RecentLogs                  []LogLine      `json:"recent_logs,omitempty"`
 	CurrentProbeResult          ProbeResult    `json:"current_probe_result"`

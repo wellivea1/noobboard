@@ -40,83 +40,99 @@ type visualResult struct {
 }
 
 type screenshots struct {
-	DesktopOverview    string `json:"desktopOverview"`
-	DesktopServer      string `json:"desktopServer"`
-	DesktopRouter      string `json:"desktopRouter"`
-	DesktopApps        string `json:"desktopApps"`
-	DesktopIncidents   string `json:"desktopIncidents"`
-	DesktopDiagnostics string `json:"desktopDiagnostics"`
-	DesktopAdmin       string `json:"desktopAdmin"`
-	DesktopSettings    string `json:"desktopSettings"`
-	MobileOverview     string `json:"mobileOverview"`
-	MobileRouter       string `json:"mobileRouter"`
-	MobileApps         string `json:"mobileApps"`
-	MobileIncidents    string `json:"mobileIncidents"`
-	MobileDiagnostics  string `json:"mobileDiagnostics"`
-	MobileAdmin        string `json:"mobileAdmin"`
-	MobileSettings     string `json:"mobileSettings"`
-	MobileUserHome     string `json:"mobileUserHome"`
-	MobileUserDrawer   string `json:"mobileUserDrawer"`
-	MobileUserSettings string `json:"mobileUserSettings"`
+	DesktopOverview        string `json:"desktopOverview"`
+	DesktopServer          string `json:"desktopServer"`
+	DesktopRouter          string `json:"desktopRouter"`
+	DesktopApps            string `json:"desktopApps"`
+	DesktopIncidents       string `json:"desktopIncidents"`
+	DesktopDiagnostics     string `json:"desktopDiagnostics"`
+	DesktopAdmin           string `json:"desktopAdmin"`
+	DesktopSettings        string `json:"desktopSettings"`
+	DesktopAgentRepair     string `json:"desktopAgentRepair"`
+	DesktopUserAppDetail   string `json:"desktopUserAppDetail"`
+	DesktopUserInfraDetail string `json:"desktopUserInfraDetail"`
+	MobileOverview         string `json:"mobileOverview"`
+	MobileRouter           string `json:"mobileRouter"`
+	MobileApps             string `json:"mobileApps"`
+	MobileIncidents        string `json:"mobileIncidents"`
+	MobileDiagnostics      string `json:"mobileDiagnostics"`
+	MobileAdmin            string `json:"mobileAdmin"`
+	MobileSettings         string `json:"mobileSettings"`
+	MobileUserHome         string `json:"mobileUserHome"`
+	MobileUserAppDetail    string `json:"mobileUserAppDetail"`
+	MobileUserInfraDetail  string `json:"mobileUserInfraDetail"`
+	MobileUserDrawer       string `json:"mobileUserDrawer"`
+	MobileUserSettings     string `json:"mobileUserSettings"`
 }
 
 type flags struct {
-	DashboardVisible        bool     `json:"dashboardVisible,omitempty"`
-	LoginHidden             bool     `json:"loginHidden,omitempty"`
-	PageTitle               string   `json:"pageTitle,omitempty"`
-	StatusRowCount          int      `json:"statusRowCount,omitempty"`
-	OverviewCardCount       int      `json:"overviewCardCount,omitempty"`
-	OverviewMoveButtonCount int      `json:"overviewMoveButtonCount,omitempty"`
-	OverviewRearrangeReady  bool     `json:"overviewRearrangeReady,omitempty"`
-	PageSubtitle            string   `json:"pageSubtitle,omitempty"`
-	ServerHealthRowCount    int      `json:"serverHealthRowCount,omitempty"`
-	RouterStatusRowCount    int      `json:"routerStatusRowCount,omitempty"`
-	AppCardCount            int      `json:"appCardCount,omitempty"`
-	AppLogoCount            int      `json:"appLogoCount,omitempty"`
-	IncidentCardCount       int      `json:"incidentCardCount,omitempty"`
-	DiagnosticPanelCount    int      `json:"diagnosticPanelCount,omitempty"`
-	AuditTableRowCount      int      `json:"auditTableRowCount,omitempty"`
-	RawSnapshotCollapsed    bool     `json:"rawSnapshotCollapsed,omitempty"`
-	AssistantOverlapCount   int      `json:"assistantOverlapCount,omitempty"`
-	SettingsEditorCount     int      `json:"settingsEditorCount,omitempty"`
-	SettingsControlCount    int      `json:"settingsControlCount,omitempty"`
-	SettingsMenuButtonCount int      `json:"settingsMenuButtonCount,omitempty"`
-	VisibleSettingsSections int      `json:"visibleSettingsSections,omitempty"`
-	UserHomeVisible         bool     `json:"userHomeVisible,omitempty"`
-	UserHeroVisible         bool     `json:"userHeroVisible,omitempty"`
-	UserStatusCardCount     int      `json:"userStatusCardCount,omitempty"`
-	UserAppCardCount        int      `json:"userAppCardCount,omitempty"`
-	UserAppLogoCount        int      `json:"userAppLogoCount,omitempty"`
-	UserChatVisible         bool     `json:"userChatVisible,omitempty"`
-	UserMenuToggleVisible   bool     `json:"userMenuToggleVisible,omitempty"`
-	UserDrawerOpen          bool     `json:"userDrawerOpen,omitempty"`
-	UserDrawerHidden        bool     `json:"userDrawerHidden,omitempty"`
-	UserDrawerFocusReturned bool     `json:"userDrawerFocusReturned,omitempty"`
-	UserDrawerBodyUnlocked  bool     `json:"userDrawerBodyUnlocked,omitempty"`
-	DrawerBannedTermCount   int      `json:"drawerBannedTermCount,omitempty"`
-	DrawerSmallTargetCount  int      `json:"drawerSmallTouchTargetCount,omitempty"`
-	DrawerAdminControlCount int      `json:"drawerAdminControlCount,omitempty"`
-	DrawerNotificationRows  int      `json:"drawerNotificationRows,omitempty"`
-	DrawerEmptyStateVisible bool     `json:"drawerEmptyStateVisible,omitempty"`
-	DrawerSignOutVisible    bool     `json:"drawerSignOutVisible,omitempty"`
-	BannedTermCount         int      `json:"bannedTermCount,omitempty"`
-	IconOnlyPrimaryActions  int      `json:"iconOnlyPrimaryActionCount,omitempty"`
-	AdminTabsVisible        bool     `json:"adminTabsVisible,omitempty"`
-	ViewportFitCover        bool     `json:"viewportFitCover,omitempty"`
-	AppleMobileCapable      bool     `json:"appleMobileCapable,omitempty"`
-	ManifestIconCount       int      `json:"manifestIconCount,omitempty"`
-	SmallTouchTargetCount   int      `json:"smallTouchTargetCount,omitempty"`
-	SmallTouchTargets       []string `json:"smallTouchTargets,omitempty"`
-	SourcePillText          string   `json:"sourcePillText,omitempty"`
-	DetailSectionCount      int      `json:"detailSectionCount,omitempty"`
-	MonitorHideButtonCount  int      `json:"monitorHideButtonCount,omitempty"`
-	NormalRemoveButtonCount int      `json:"normalRemoveButtonCount,omitempty"`
-	MonitorRestoreVisible   bool     `json:"monitorRestoreVisible,omitempty"`
-	MonitorHideRestored     bool     `json:"monitorHideRestored,omitempty"`
-	BodyHorizontalOverflow  bool     `json:"bodyHorizontalOverflow"`
-	ButtonTextOverflow      bool     `json:"buttonTextOverflow"`
-	ElementBoundsOverflow   bool     `json:"elementBoundsOverflow"`
-	ElementBoundsOffender   string   `json:"elementBoundsOffender,omitempty"`
+	DashboardVisible            bool     `json:"dashboardVisible,omitempty"`
+	LoginHidden                 bool     `json:"loginHidden,omitempty"`
+	PageTitle                   string   `json:"pageTitle,omitempty"`
+	StatusRowCount              int      `json:"statusRowCount,omitempty"`
+	OverviewCardCount           int      `json:"overviewCardCount,omitempty"`
+	OverviewMoveButtonCount     int      `json:"overviewMoveButtonCount,omitempty"`
+	OverviewRearrangeReady      bool     `json:"overviewRearrangeReady,omitempty"`
+	PageSubtitle                string   `json:"pageSubtitle,omitempty"`
+	ServerHealthRowCount        int      `json:"serverHealthRowCount,omitempty"`
+	RouterStatusRowCount        int      `json:"routerStatusRowCount,omitempty"`
+	AppCardCount                int      `json:"appCardCount,omitempty"`
+	AppLogoCount                int      `json:"appLogoCount,omitempty"`
+	IncidentCardCount           int      `json:"incidentCardCount,omitempty"`
+	DiagnosticPanelCount        int      `json:"diagnosticPanelCount,omitempty"`
+	AuditTableRowCount          int      `json:"auditTableRowCount,omitempty"`
+	RawSnapshotCollapsed        bool     `json:"rawSnapshotCollapsed,omitempty"`
+	AssistantOverlapCount       int      `json:"assistantOverlapCount,omitempty"`
+	SettingsEditorCount         int      `json:"settingsEditorCount,omitempty"`
+	SettingsControlCount        int      `json:"settingsControlCount,omitempty"`
+	SettingsMenuButtonCount     int      `json:"settingsMenuButtonCount,omitempty"`
+	VisibleSettingsSections     int      `json:"visibleSettingsSections,omitempty"`
+	AgentRepairToggleCount      int      `json:"agentRepairToggleCount,omitempty"`
+	AgentReadinessLimitVisible  bool     `json:"agentReadinessLimitVisible,omitempty"`
+	AgentApprovalDialogVisible  bool     `json:"agentApprovalDialogVisible,omitempty"`
+	AgentRepairOutcomeVisible   bool     `json:"agentRepairOutcomeVisible,omitempty"`
+	AgentRepairOutcomeRecovered bool     `json:"agentRepairOutcomeRecovered,omitempty"`
+	UserHomeVisible             bool     `json:"userHomeVisible,omitempty"`
+	UserHeroVisible             bool     `json:"userHeroVisible,omitempty"`
+	UserStatusCardCount         int      `json:"userStatusCardCount,omitempty"`
+	UserAppCardCount            int      `json:"userAppCardCount,omitempty"`
+	UserAppLogoCount            int      `json:"userAppLogoCount,omitempty"`
+	UserChatVisible             bool     `json:"userChatVisible,omitempty"`
+	UserDetailVisible           bool     `json:"userDetailVisible,omitempty"`
+	UserDetailTitle             string   `json:"userDetailTitle,omitempty"`
+	UserDetailHistoryVisible    bool     `json:"userDetailHistoryVisible,omitempty"`
+	UserDetailEmptyStateVisible bool     `json:"userDetailEmptyStateVisible,omitempty"`
+	UserDetailBackReturned      bool     `json:"userDetailBackReturned,omitempty"`
+	UserDetailFocusReturned     bool     `json:"userDetailFocusReturned,omitempty"`
+	UserMenuToggleVisible       bool     `json:"userMenuToggleVisible,omitempty"`
+	UserDrawerOpen              bool     `json:"userDrawerOpen,omitempty"`
+	UserDrawerHidden            bool     `json:"userDrawerHidden,omitempty"`
+	UserDrawerFocusReturned     bool     `json:"userDrawerFocusReturned,omitempty"`
+	UserDrawerBodyUnlocked      bool     `json:"userDrawerBodyUnlocked,omitempty"`
+	DrawerBannedTermCount       int      `json:"drawerBannedTermCount,omitempty"`
+	DrawerSmallTargetCount      int      `json:"drawerSmallTouchTargetCount,omitempty"`
+	DrawerAdminControlCount     int      `json:"drawerAdminControlCount,omitempty"`
+	DrawerNotificationRows      int      `json:"drawerNotificationRows,omitempty"`
+	DrawerEmptyStateVisible     bool     `json:"drawerEmptyStateVisible,omitempty"`
+	DrawerSignOutVisible        bool     `json:"drawerSignOutVisible,omitempty"`
+	BannedTermCount             int      `json:"bannedTermCount,omitempty"`
+	IconOnlyPrimaryActions      int      `json:"iconOnlyPrimaryActionCount,omitempty"`
+	AdminTabsVisible            bool     `json:"adminTabsVisible,omitempty"`
+	ViewportFitCover            bool     `json:"viewportFitCover,omitempty"`
+	AppleMobileCapable          bool     `json:"appleMobileCapable,omitempty"`
+	ManifestIconCount           int      `json:"manifestIconCount,omitempty"`
+	SmallTouchTargetCount       int      `json:"smallTouchTargetCount,omitempty"`
+	SmallTouchTargets           []string `json:"smallTouchTargets,omitempty"`
+	SourcePillText              string   `json:"sourcePillText,omitempty"`
+	DetailSectionCount          int      `json:"detailSectionCount,omitempty"`
+	MonitorHideButtonCount      int      `json:"monitorHideButtonCount,omitempty"`
+	NormalRemoveButtonCount     int      `json:"normalRemoveButtonCount,omitempty"`
+	MonitorRestoreVisible       bool     `json:"monitorRestoreVisible,omitempty"`
+	MonitorHideRestored         bool     `json:"monitorHideRestored,omitempty"`
+	BodyHorizontalOverflow      bool     `json:"bodyHorizontalOverflow"`
+	ButtonTextOverflow          bool     `json:"buttonTextOverflow"`
+	ElementBoundsOverflow       bool     `json:"elementBoundsOverflow"`
+	ElementBoundsOffender       string   `json:"elementBoundsOffender,omitempty"`
 }
 
 func main() {
@@ -357,6 +373,15 @@ func run(opts options) (visualResult, error) {
 		return result, err
 	}
 
+	agentRepair, err := evalFlags(cdp, agentRepairExpression)
+	if err != nil {
+		return result, err
+	}
+	result.Screenshots.DesktopAgentRepair = filepath.Join(cache, "visual-desktop-agent-repair-"+runID+".png")
+	if err := captureScreenshot(cdp, result.Screenshots.DesktopAgentRepair); err != nil {
+		return result, err
+	}
+
 	monitorCustomization, err := evalFlags(cdp, monitorCustomizationExpression)
 	if err != nil {
 		return result, err
@@ -445,6 +470,91 @@ func run(opts options) (visualResult, error) {
 	if err := captureScreenshot(cdp, result.Screenshots.MobileSettings); err != nil {
 		return result, err
 	}
+
+	if _, err := cdp.call("Emulation.setDeviceMetricsOverride", map[string]any{
+		"width":             1440,
+		"height":            1000,
+		"deviceScaleFactor": 1,
+		"mobile":            false,
+	}); err != nil {
+		return result, err
+	}
+	if _, err := cdp.call("Emulation.setTouchEmulationEnabled", map[string]any{
+		"enabled": false,
+	}); err != nil {
+		return result, err
+	}
+	if _, err := cdp.call("Emulation.setEmulatedMedia", map[string]any{
+		"features": []map[string]any{
+			{"name": "pointer", "value": "fine"},
+			{"name": "any-pointer", "value": "fine"},
+		},
+	}); err != nil {
+		return result, err
+	}
+	if _, err := cdp.call("Network.clearBrowserCookies", nil); err != nil {
+		return result, err
+	}
+	if _, err := cdp.call("Page.navigate", map[string]any{"url": baseURL}); err != nil {
+		return result, err
+	}
+	if err := waitDocumentReady(cdp); err != nil {
+		return result, err
+	}
+	if _, err := evalFlags(cdp, generalUserExpression); err != nil {
+		return result, err
+	}
+	desktopUserAppDetail, err := evalFlags(cdp, userAppDetailExpression)
+	if err != nil {
+		return result, err
+	}
+	result.Screenshots.DesktopUserAppDetail = filepath.Join(cache, "visual-desktop-user-app-detail-"+runID+".png")
+	if err := captureScreenshot(cdp, result.Screenshots.DesktopUserAppDetail); err != nil {
+		return result, err
+	}
+	desktopUserAppBack, err := evalFlags(cdp, userDetailBackExpression)
+	if err != nil {
+		return result, err
+	}
+	desktopUserAppDetail.UserDetailBackReturned = desktopUserAppBack.UserDetailBackReturned
+	desktopUserAppDetail.UserDetailFocusReturned = desktopUserAppBack.UserDetailFocusReturned
+	desktopUserInfraDetail, err := evalFlags(cdp, userInfraDetailExpression)
+	if err != nil {
+		return result, err
+	}
+	result.Screenshots.DesktopUserInfraDetail = filepath.Join(cache, "visual-desktop-user-infra-detail-"+runID+".png")
+	if err := captureScreenshot(cdp, result.Screenshots.DesktopUserInfraDetail); err != nil {
+		return result, err
+	}
+	desktopUserInfraBack, err := evalFlags(cdp, userDetailBackExpression)
+	if err != nil {
+		return result, err
+	}
+	desktopUserInfraDetail.UserDetailBackReturned = desktopUserInfraBack.UserDetailBackReturned
+	desktopUserInfraDetail.UserDetailFocusReturned = desktopUserInfraBack.UserDetailFocusReturned
+
+	if _, err := cdp.call("Emulation.setDeviceMetricsOverride", map[string]any{
+		"width":             390,
+		"height":            844,
+		"deviceScaleFactor": 2,
+		"mobile":            true,
+	}); err != nil {
+		return result, err
+	}
+	if _, err := cdp.call("Emulation.setTouchEmulationEnabled", map[string]any{
+		"enabled":        true,
+		"maxTouchPoints": 5,
+	}); err != nil {
+		return result, err
+	}
+	if _, err := cdp.call("Emulation.setEmulatedMedia", map[string]any{
+		"features": []map[string]any{
+			{"name": "pointer", "value": "coarse"},
+			{"name": "any-pointer", "value": "coarse"},
+		},
+	}); err != nil {
+		return result, err
+	}
 	if _, err := cdp.call("Network.clearBrowserCookies", nil); err != nil {
 		return result, err
 	}
@@ -462,6 +572,34 @@ func run(opts options) (visualResult, error) {
 	if err := captureScreenshot(cdp, result.Screenshots.MobileUserHome); err != nil {
 		return result, err
 	}
+	mobileUserAppDetail, err := evalFlags(cdp, userAppDetailExpression)
+	if err != nil {
+		return result, err
+	}
+	result.Screenshots.MobileUserAppDetail = filepath.Join(cache, "visual-mobile-user-app-detail-"+runID+".png")
+	if err := captureScreenshot(cdp, result.Screenshots.MobileUserAppDetail); err != nil {
+		return result, err
+	}
+	mobileUserAppBack, err := evalFlags(cdp, userDetailBackExpression)
+	if err != nil {
+		return result, err
+	}
+	mobileUserAppDetail.UserDetailBackReturned = mobileUserAppBack.UserDetailBackReturned
+	mobileUserAppDetail.UserDetailFocusReturned = mobileUserAppBack.UserDetailFocusReturned
+	mobileUserInfraDetail, err := evalFlags(cdp, userInfraDetailExpression)
+	if err != nil {
+		return result, err
+	}
+	result.Screenshots.MobileUserInfraDetail = filepath.Join(cache, "visual-mobile-user-infra-detail-"+runID+".png")
+	if err := captureScreenshot(cdp, result.Screenshots.MobileUserInfraDetail); err != nil {
+		return result, err
+	}
+	mobileUserInfraBack, err := evalFlags(cdp, userDetailBackExpression)
+	if err != nil {
+		return result, err
+	}
+	mobileUserInfraDetail.UserDetailBackReturned = mobileUserInfraBack.UserDetailBackReturned
+	mobileUserInfraDetail.UserDetailFocusReturned = mobileUserInfraBack.UserDetailFocusReturned
 	mobileUserDrawer, err := evalFlags(cdp, userDrawerOpenExpression)
 	if err != nil {
 		return result, err
@@ -480,27 +618,32 @@ func run(opts options) (visualResult, error) {
 	}
 
 	result.Flags = map[string]flags{
-		"overview":          overview,
-		"server":            serverFlags,
-		"router":            router,
-		"apps":              apps,
-		"incidents":         incidents,
-		"diagnostics":       diagnostics,
-		"admin":             admin,
-		"settings":          settings,
-		"customization":     monitorCustomization,
-		"mobileOverview":    mobileOverview,
-		"mobileRouter":      mobileRouter,
-		"mobileApps":        mobileApps,
-		"mobileIncidents":   mobileIncidents,
-		"mobileDiagnostics": mobileDiagnostics,
-		"mobileAdmin":       mobileAdmin,
-		"mobileSettings":    mobileSettings,
-		"mobileUserHome":    mobileUserHome,
-		"mobileUserDrawer":  mobileUserDrawer,
-		"mobileDrawerClose": mobileUserDrawerClose,
+		"overview":               overview,
+		"server":                 serverFlags,
+		"router":                 router,
+		"apps":                   apps,
+		"incidents":              incidents,
+		"diagnostics":            diagnostics,
+		"admin":                  admin,
+		"settings":               settings,
+		"agentRepair":            agentRepair,
+		"customization":          monitorCustomization,
+		"mobileOverview":         mobileOverview,
+		"mobileRouter":           mobileRouter,
+		"mobileApps":             mobileApps,
+		"mobileIncidents":        mobileIncidents,
+		"mobileDiagnostics":      mobileDiagnostics,
+		"mobileAdmin":            mobileAdmin,
+		"mobileSettings":         mobileSettings,
+		"desktopUserAppDetail":   desktopUserAppDetail,
+		"desktopUserInfraDetail": desktopUserInfraDetail,
+		"mobileUserHome":         mobileUserHome,
+		"mobileUserAppDetail":    mobileUserAppDetail,
+		"mobileUserInfraDetail":  mobileUserInfraDetail,
+		"mobileUserDrawer":       mobileUserDrawer,
+		"mobileDrawerClose":      mobileUserDrawerClose,
 	}
-	if err := assertVisualFlags(overview, serverFlags, router, apps, incidents, diagnostics, admin, settings, monitorCustomization, mobileOverview, mobileRouter, mobileApps, mobileIncidents, mobileDiagnostics, mobileAdmin, mobileSettings, mobileUserHome, mobileUserDrawer, mobileUserDrawerClose); err != nil {
+	if err := assertVisualFlags(overview, serverFlags, router, apps, incidents, diagnostics, admin, settings, agentRepair, monitorCustomization, mobileOverview, mobileRouter, mobileApps, mobileIncidents, mobileDiagnostics, mobileAdmin, mobileSettings, desktopUserAppDetail, desktopUserInfraDetail, mobileUserHome, mobileUserAppDetail, mobileUserInfraDetail, mobileUserDrawer, mobileUserDrawerClose); err != nil {
 		return result, err
 	}
 
@@ -631,7 +774,7 @@ func captureScreenshot(cdp *cdpClient, path string) error {
 	return os.WriteFile(path, data, 0o644)
 }
 
-func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, admin, settings, customization, mobileOverview, mobileRouter, mobileApps, mobileIncidents, mobileDiagnostics, mobileAdmin, mobileSettings, mobileUserHome, mobileUserDrawer, mobileUserDrawerClose flags) error {
+func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, admin, settings, agentRepair, customization, mobileOverview, mobileRouter, mobileApps, mobileIncidents, mobileDiagnostics, mobileAdmin, mobileSettings, desktopUserAppDetail, desktopUserInfraDetail, mobileUserHome, mobileUserAppDetail, mobileUserInfraDetail, mobileUserDrawer, mobileUserDrawerClose flags) error {
 	var failures []string
 	if !overview.DashboardVisible {
 		failures = append(failures, "dashboard was not visible after login")
@@ -696,11 +839,32 @@ func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, a
 	if settings.VisibleSettingsSections != 1 {
 		failures = append(failures, "settings should show exactly one active submenu")
 	}
+	if settings.AgentRepairToggleCount == 0 {
+		failures = append(failures, "app repair opt-in toggle did not render in settings")
+	}
+	if !settings.AgentReadinessLimitVisible {
+		failures = append(failures, "agent readiness cooldown/rate limit text did not render")
+	}
 	if settings.ButtonTextOverflow {
 		failures = append(failures, "desktop button text overflow detected")
 	}
+	if !agentRepair.AgentApprovalDialogVisible {
+		failures = append(failures, "agent approval dialog did not render")
+	}
+	if !agentRepair.AgentRepairOutcomeVisible || !agentRepair.AgentRepairOutcomeRecovered {
+		failures = append(failures, "agent repair outcome did not render as recovered")
+	}
+	if agentRepair.BodyHorizontalOverflow || agentRepair.ButtonTextOverflow || agentRepair.ElementBoundsOverflow {
+		failures = append(failures, "agent repair UI layout overflow detected: "+agentRepair.ElementBoundsOffender)
+	}
 	if mobileSettings.SettingsMenuButtonCount < 6 || mobileSettings.VisibleSettingsSections != 1 {
 		failures = append(failures, "mobile settings submenu did not render correctly")
+	}
+	if mobileSettings.AgentRepairToggleCount == 0 {
+		failures = append(failures, "mobile app repair opt-in toggle did not render in settings")
+	}
+	if !mobileSettings.AgentReadinessLimitVisible {
+		failures = append(failures, "mobile agent readiness cooldown/rate limit text did not render")
 	}
 	if mobileOverview.UserMenuToggleVisible || mobileAdmin.UserMenuToggleVisible || mobileSettings.UserMenuToggleVisible {
 		failures = append(failures, "compact user menu was visible on admin mobile screens")
@@ -803,6 +967,37 @@ func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, a
 	}
 	if mobileUserHome.ElementBoundsOverflow {
 		failures = append(failures, "general user mobile component bounds overflow detected: "+mobileUserHome.ElementBoundsOffender)
+	}
+	for name, detail := range map[string]flags{
+		"desktop app detail":   desktopUserAppDetail,
+		"desktop infra detail": desktopUserInfraDetail,
+		"mobile app detail":    mobileUserAppDetail,
+		"mobile infra detail":  mobileUserInfraDetail,
+	} {
+		if !detail.UserDetailVisible {
+			failures = append(failures, name+" did not render")
+		}
+		if strings.TrimSpace(detail.UserDetailTitle) == "" {
+			failures = append(failures, name+" title did not render")
+		}
+		if !detail.UserDetailHistoryVisible {
+			failures = append(failures, name+" history timeline or empty state did not render")
+		}
+		if detail.BannedTermCount != 0 {
+			failures = append(failures, name+" leaked technical terms")
+		}
+		if detail.BodyHorizontalOverflow || detail.ButtonTextOverflow {
+			failures = append(failures, name+" layout overflow detected")
+		}
+		if detail.ElementBoundsOverflow {
+			failures = append(failures, name+" component bounds overflow detected: "+detail.ElementBoundsOffender)
+		}
+		if !detail.UserDetailBackReturned || !detail.UserDetailFocusReturned {
+			failures = append(failures, name+" back control did not return to status with focus restored")
+		}
+	}
+	if mobileUserAppDetail.SmallTouchTargetCount > 0 || mobileUserInfraDetail.SmallTouchTargetCount > 0 {
+		failures = append(failures, "mobile detail touch targets below 44px detected")
 	}
 	if !mobileUserDrawer.UserDrawerOpen {
 		failures = append(failures, "general user settings drawer did not open")
@@ -1231,6 +1426,102 @@ const generalUserExpression = `(async () => {
   };
 })()`
 
+const userAppDetailExpression = `(async () => {
+  const card = document.querySelector('#user-apps .user-app-card');
+  window.__visualLastDetailTrigger = card;
+  card?.focus();
+  card?.click();
+  const started = Date.now();
+  const loaded = () => {
+    const panel = document.querySelector('#user-app-detail');
+    const loading = [...document.querySelectorAll('#user-app-detail .detail-empty')]
+      .some((element) => /loading/i.test(element.textContent || ''));
+    return document.body.dataset.compactView === 'app-detail' && panel && !panel.hidden && !loading;
+  };
+  while (!loaded() && Date.now() - started < 5000) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  const panel = document.querySelector('#user-app-detail');
+  const visibleText = visibleCompactText(panel);
+  const bannedMatches = visibleText.match(/\b(container|docker|unraid|array|parity|endpoint|graphql|probe|wan|lan|api|ssh|telemetry|smart|syslog|filesystem|cache pool|gateway|https|dns|unifi)\b/gi) || [];
+  const historyVisible = !!panel?.querySelector('.history-list, .detail-history .detail-empty');
+  const emptyNodes = panel ? [...panel.querySelectorAll('.detail-empty')] : [];
+  const emptyStateVisible = emptyNodes
+    .some((element) => visibleElement(element) && /no changes recorded yet/i.test(element.textContent || ''));
+  const mobileAudit = await auditMobileShell();
+  return {
+    pageTitle: document.querySelector('#page-title')?.textContent || '',
+    userDetailVisible: !!(panel && !panel.hidden && visibleElement(panel)),
+    userDetailTitle: panel?.querySelector('.detail-title h2')?.textContent || '',
+    userDetailHistoryVisible: historyVisible,
+    userDetailEmptyStateVisible: emptyStateVisible,
+    bannedTermCount: bannedMatches.length,
+    bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
+    buttonTextOverflow: hasButtonTextOverflow(),
+    ...mobileAudit
+  };
+})()`
+
+const userInfraDetailExpression = `(async () => {
+  const technical = document.querySelector('.user-technical-details');
+  if (technical && !technical.open) technical.open = true;
+  const cards = [...document.querySelectorAll('#user-status-grid .user-status-card.has-detail')];
+  const card = cards.find((element) => /router|internet/i.test(element.getAttribute('aria-label') || element.textContent || '')) || cards[0];
+  window.__visualLastDetailTrigger = card;
+  card?.focus();
+  card?.click();
+  const started = Date.now();
+  const loaded = () => {
+    const panel = document.querySelector('#user-infra-detail');
+    const loading = [...document.querySelectorAll('#user-infra-detail .detail-empty')]
+      .some((element) => /loading/i.test(element.textContent || ''));
+    return document.body.dataset.compactView === 'infra-detail' && panel && !panel.hidden && !loading;
+  };
+  while (!loaded() && Date.now() - started < 5000) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  const panel = document.querySelector('#user-infra-detail');
+  const visibleText = visibleCompactText(panel);
+  const bannedMatches = visibleText.match(/\b(container|docker|unraid|array|parity|endpoint|graphql|probe|wan|lan|api|ssh|telemetry|smart|syslog|filesystem|cache pool|gateway|https|dns|unifi)\b/gi) || [];
+  const historyVisible = !!panel?.querySelector('.history-list, .detail-history .detail-empty');
+  const emptyNodes = panel ? [...panel.querySelectorAll('.detail-empty')] : [];
+  const emptyStateVisible = emptyNodes
+    .some((element) => visibleElement(element) && /no changes recorded yet/i.test(element.textContent || ''));
+  const mobileAudit = await auditMobileShell();
+  return {
+    pageTitle: document.querySelector('#page-title')?.textContent || '',
+    userDetailVisible: !!(panel && !panel.hidden && visibleElement(panel)),
+    userDetailTitle: panel?.querySelector('.detail-title h2')?.textContent || '',
+    userDetailHistoryVisible: historyVisible,
+    userDetailEmptyStateVisible: emptyStateVisible,
+    bannedTermCount: bannedMatches.length,
+    bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
+    buttonTextOverflow: hasButtonTextOverflow(),
+    ...mobileAudit
+  };
+})()`
+
+const userDetailBackExpression = `(async () => {
+  const trigger = window.__visualLastDetailTrigger;
+  const back = document.querySelector('#user-app-detail:not([hidden]) .detail-back, #user-infra-detail:not([hidden]) .detail-back');
+  back?.click();
+  const started = Date.now();
+  while (document.body.dataset.compactView !== 'status' && Date.now() - started < 5000) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  const mobileAudit = await auditMobileShell();
+  return {
+    pageTitle: document.querySelector('#page-title')?.textContent || '',
+    userDetailBackReturned: document.body.dataset.compactView === 'status' &&
+      document.querySelector('#user-app-detail')?.hidden &&
+      document.querySelector('#user-infra-detail')?.hidden,
+    userDetailFocusReturned: !!trigger && document.activeElement === trigger,
+    bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
+    buttonTextOverflow: hasButtonTextOverflow(),
+    ...mobileAudit
+  };
+})()`
+
 const userDrawerOpenExpression = `(async () => {
   const toggle = document.querySelector('#user-menu-toggle');
   if (toggle && !visibleElement(toggle)) {
@@ -1430,9 +1721,21 @@ const settingsExpression = `(async () => {
   while (document.querySelectorAll('.settings-card input,.settings-card select,.settings-card button').length < 12 && Date.now() - started < 5000) {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
+  document.querySelector('#settings-menu [data-settings-section="apps"]')?.click();
+  const appsStarted = Date.now();
+  while (document.querySelectorAll('.settings-app-controls .setting-toggle').length < 1 && Date.now() - appsStarted < 5000) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  const agentRepairToggleCount = document.querySelectorAll('.settings-app-controls .setting-toggle').length;
+  document.querySelector('#settings-menu [data-settings-section="llm"]')?.click();
+  const llmStarted = Date.now();
+  while (!document.querySelector('.agent-readiness') && Date.now() - llmStarted < 5000) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
   const visibleSettingsSections = [...document.querySelectorAll('#tab-settings .settings-section')]
     .filter((element) => !element.hidden && getComputedStyle(element).display !== 'none').length;
   const settingsControlCount = document.querySelectorAll('.settings-card input,.settings-card select,.settings-card button').length;
+  const readinessText = document.querySelector('.agent-readiness')?.textContent || '';
   const buttonTextOverflow = hasButtonTextOverflow();
   const mobileAudit = await auditMobileShell();
   return {
@@ -1442,8 +1745,69 @@ const settingsExpression = `(async () => {
     settingsControlCount,
     settingsMenuButtonCount: document.querySelectorAll('#settings-menu [data-settings-section]').length,
     visibleSettingsSections,
+    agentRepairToggleCount,
+    agentReadinessLimitVisible: readinessText.includes('1 per app') && readinessText.includes('5 total'),
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow,
+    ...mobileAudit
+  };
+})()`
+
+const agentRepairExpression = `(async () => {
+  document.querySelector('[data-tab="diagnostics"]')?.click();
+  const started = Date.now();
+  while (document.querySelector('#tab-diagnostics')?.hidden && Date.now() - started < 5000) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  const output = document.querySelector('#diagnostic-output');
+  const plan = {
+    id: 'visual-repair-plan',
+    title: 'Restart recommendation',
+    summary: 'The model suggested restarting one app. NoobBoard can run one restart only after admin approval, an armed session, and per-app opt-in.',
+    recommended_action_id: 'ask_admin_to_restart_container',
+    requires_admin_approval: true,
+    can_execute: true,
+    status: 'approval_ready',
+    approval_token: 'visual-token',
+    target: { kind: 'app', id: 'emby', label: 'Emby', resolved: true },
+    options: [
+      { id: 'deny', label: 'Do not allow', description: 'Keep the diagnosis and do not permit an automatic fix.', enabled: true, selected: true },
+      { id: 'allow_once', label: 'Allow fix', description: 'Permit this single fix attempt.', enabled: true }
+    ]
+  };
+  if (output && typeof renderAgentPlanPrompt === 'function') {
+    output.classList.remove('muted', 'chat-empty');
+    output.classList.add('chat-result');
+    output.replaceChildren(renderAgentPlanPrompt(plan));
+  }
+  if (typeof openAgentApprovalDialog === 'function') {
+    openAgentApprovalDialog(plan);
+  }
+  const dialogVisible = !!document.querySelector('.agent-approval-dialog') && visibleElement(document.querySelector('.agent-approval-dialog'));
+  if (typeof closeAgentApprovalDialog === 'function') {
+    closeAgentApprovalDialog({ returnFocus: false });
+  }
+  if (typeof appendAgentRepairOutcome === 'function') {
+    appendAgentRepairOutcome({
+      action: 'restart',
+      target_id: 'emby',
+      target_label: 'Emby',
+      before_status: 'offline',
+      after_status: 'online',
+      recovered: true,
+      verified: true,
+      message: 'Auto-repair: restarted - recovered.'
+    });
+  }
+  const outcome = document.querySelector('.agent-repair-outcome');
+  const mobileAudit = await auditMobileShell();
+  return {
+    pageTitle: document.querySelector('#page-title')?.textContent || '',
+    agentApprovalDialogVisible: dialogVisible,
+    agentRepairOutcomeVisible: !!outcome && visibleElement(outcome),
+    agentRepairOutcomeRecovered: !!outcome && outcome.classList.contains('recovered') && (outcome.textContent || '').includes('offline -> online'),
+    bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
+    buttonTextOverflow: hasButtonTextOverflow(),
     ...mobileAudit
   };
 })()`
