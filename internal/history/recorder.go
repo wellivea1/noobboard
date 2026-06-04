@@ -26,6 +26,12 @@ func NewRecorder() *Recorder {
 	return &Recorder{previous: map[string]subjectState{}}
 }
 
+func (r *Recorder) Observe(snapshot models.Snapshot) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.previous = subjectsFromSnapshot(snapshot)
+}
+
 func (r *Recorder) Record(snapshot models.Snapshot) []models.StatusEvent {
 	r.mu.Lock()
 	defer r.mu.Unlock()

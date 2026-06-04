@@ -542,6 +542,10 @@ func TestAgentApprovalEndpointAuditsAndFailsClosed(t *testing.T) {
 }
 
 func TestAgentApprovalExecutesOptedInRestartOnce(t *testing.T) {
+	oldDelay := agentRepairVerificationDelay
+	agentRepairVerificationDelay = 0
+	t.Cleanup(func() { agentRepairVerificationDelay = oldDelay })
+
 	cfg := config.Defaults()
 	cfg.Database.Path = serverCacheTestPath(t, "agent-approval-executes")
 	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
@@ -561,7 +565,17 @@ func TestAgentApprovalExecutesOptedInRestartOnce(t *testing.T) {
 		DockerState:           models.DockerExited,
 		CurrentStatus:         models.StatusOffline,
 		VisibleToGeneralUsers: true,
-	}}}
+	}},
+		afterControlApps: []models.AppStatus{{
+			AppID:                 "emby",
+			DisplayName:           "Emby",
+			ContainerID:           "container:Emby",
+			ContainerName:         "Emby",
+			Category:              "docker",
+			DockerState:           models.DockerRunning,
+			CurrentStatus:         models.StatusOnline,
+			VisibleToGeneralUsers: true,
+		}}}
 	app.deps.Collectors.Docker = collector
 	app.settingsMu.Lock()
 	app.deps.LLM = &recordingLLMClient{
@@ -639,21 +653,47 @@ func TestAgentApprovalExecutesOptedInRestartOnce(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("approve restart status = %d, body = %s", rec.Code, rec.Body.String())
 	}
+	var approval struct {
+		Status  string                    `json:"status"`
+		Outcome llmAgentRepairOutcomeView `json:"outcome"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&approval); err != nil {
+		t.Fatal(err)
+	}
+	if approval.Status != "executed" || !approval.Outcome.Verified || !approval.Outcome.Recovered {
+		t.Fatalf("approval outcome did not report recovered execution: %#v", approval)
+	}
+	if approval.Outcome.BeforeStatus != models.StatusOffline || approval.Outcome.AfterStatus != models.StatusOnline {
+		t.Fatalf("approval outcome statuses = %s -> %s", approval.Outcome.BeforeStatus, approval.Outcome.AfterStatus)
+	}
 	if collector.callCount != 1 || collector.called != docker.ActionRestart || collector.app.AppID != "emby" || !collector.app.AgentRepairAllowed {
 		t.Fatalf("restart was not executed exactly once on resolved opted-in app: count=%d action=%q app=%#v", collector.callCount, collector.called, collector.app)
 	}
-	tail, err := app.deps.Store.AuditTail(5)
+	history, err := app.deps.History.Query(db.HistoryFilter{SubjectType: models.SubjectApp, SubjectID: "emby", Limit: 5})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var sawExecuted bool
+	if len(history) == 0 || history[0].Note != "Auto-repair: restarted - recovered." || history[0].From != models.StatusOffline || history[0].To != models.StatusOnline {
+		t.Fatalf("repair verification history event missing: %#v", history)
+	}
+	tail, err := app.deps.Store.AuditTail(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawApproved, sawExecuted, sawVerified bool
 	for _, entry := range tail {
+		if entry.Action == "llm.agent_plan.approved" {
+			sawApproved = true
+		}
 		if entry.Action == "llm.agent_plan.executed" {
 			sawExecuted = true
 		}
+		if entry.Action == "llm.agent_plan.verified" {
+			sawVerified = true
+		}
 	}
-	if !sawExecuted {
-		t.Fatalf("executed approval was not audited: %#v", tail)
+	if !sawApproved || !sawExecuted || !sawVerified {
+		t.Fatalf("approval lifecycle was not audited: %#v", tail)
 	}
 
 	rec = httptest.NewRecorder()
@@ -674,6 +714,140 @@ func TestAgentApprovalExecutesOptedInRestartOnce(t *testing.T) {
 	}
 	if len(tail) == 0 || tail[len(tail)-1].Action != "llm.agent_plan.replay_blocked" {
 		t.Fatalf("replay was not audited: %#v", tail)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/admin/diagnose", strings.NewReader(`{"question":"can you restart Emby again?"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("second diagnose status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var secondDiagnosis diagnosisResponse
+	if err := json.NewDecoder(rec.Body).Decode(&secondDiagnosis); err != nil {
+		t.Fatal(err)
+	}
+	if secondDiagnosis.AgentPlan == nil || secondDiagnosis.AgentPlan.Status != "approval_rate_limited" || secondDiagnosis.AgentPlan.CanExecute {
+		t.Fatalf("second plan was not rate-limited by cooldown: %#v", secondDiagnosis.AgentPlan)
+	}
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/admin/agent/approval", strings.NewReader(fmt.Sprintf(`{"approval_token":%q,"choice":"allow_once"}`, secondDiagnosis.AgentPlan.ApprovalToken)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("cooldown approval status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if collector.callCount != 1 {
+		t.Fatalf("cooldown approval called docker again: count=%d", collector.callCount)
+	}
+	tail, err = app.deps.Store.AuditTail(5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tail) == 0 || tail[len(tail)-1].Action != "llm.agent_plan.rate_limited" {
+		t.Fatalf("cooldown refusal was not audited: %#v", tail)
+	}
+}
+
+func TestAgentApprovalGlobalRateLimitBlocksDocker(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "agent-approval-global-rate")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+	cfg.LLM.Provider = "openai"
+	cfg.LLM.OpenAIAuthMethod = config.OpenAIAuthMethodAPIKey
+	cfg.LLM.OpenAIAPIKey = "sk-test-local"
+	cfg.LLM.AgentControlEnabled = true
+	cfg.AppCatalog.AgentRepairAllowed = map[string]bool{"emby": true}
+
+	app := newTestApp(t, cfg)
+	collector := &recordingDockerCollector{apps: []models.AppStatus{{
+		AppID:                 "emby",
+		DisplayName:           "Emby",
+		ContainerID:           "container:Emby",
+		ContainerName:         "Emby",
+		Category:              "docker",
+		DockerState:           models.DockerExited,
+		CurrentStatus:         models.StatusOffline,
+		VisibleToGeneralUsers: true,
+	}}}
+	app.deps.Collectors.Docker = collector
+	app.settingsMu.Lock()
+	app.deps.LLM = &recordingLLMClient{
+		diagnosis: llm.Diagnosis{
+			Severity:            models.SeverityHigh,
+			Confidence:          0.9,
+			IncidentType:        models.IncidentAppDown,
+			AffectedServices:    []string{"Emby"},
+			Diagnosis:           "Emby is down.",
+			AdminMessage:        "Restart Emby once.",
+			RecommendedActionID: "ask_admin_to_restart_container",
+			RecommendedTarget:   llm.ActionTarget{Kind: "app", IDOrName: "emby"},
+		},
+	}
+	app.settingsMu.Unlock()
+	now := time.Now().UTC()
+	app.agentRepairMu.Lock()
+	app.agentRepairGlobal = []time.Time{
+		now.Add(-time.Minute),
+		now.Add(-2 * time.Minute),
+		now.Add(-3 * time.Minute),
+		now.Add(-4 * time.Minute),
+		now.Add(-5 * time.Minute),
+	}
+	app.agentRepairMu.Unlock()
+
+	router := app.Router()
+	cookie, csrf := loginAdmin(t, router)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/agent/arm", strings.NewReader(`{"armed":true,"duration_seconds":60}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("arm agent status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/admin/diagnose", strings.NewReader(`{"question":"what is wrong with Emby?"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("diagnose status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var diagnosis diagnosisResponse
+	if err := json.NewDecoder(rec.Body).Decode(&diagnosis); err != nil {
+		t.Fatal(err)
+	}
+	if diagnosis.AgentPlan == nil || diagnosis.AgentPlan.Status != "approval_rate_limited" || diagnosis.AgentPlan.CanExecute {
+		t.Fatalf("global-limited plan was not locked: %#v", diagnosis.AgentPlan)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/admin/agent/approval", strings.NewReader(fmt.Sprintf(`{"approval_token":%q,"choice":"allow_once"}`, diagnosis.AgentPlan.ApprovalToken)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("rate-limited approval status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if collector.callCount != 0 {
+		t.Fatalf("global rate-limited approval called docker: count=%d", collector.callCount)
+	}
+	tail, err := app.deps.Store.AuditTail(5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tail) == 0 || tail[len(tail)-1].Action != "llm.agent_plan.rate_limited" {
+		t.Fatalf("global rate limit refusal was not audited: %#v", tail)
 	}
 }
 
@@ -2307,13 +2481,14 @@ func (c *notifyingDockerCollector) Logs(context.Context, models.AppStatus, docke
 }
 
 type recordingDockerCollector struct {
-	apps       []models.AppStatus
-	logs       []models.LogLine
-	called     docker.ContainerAction
-	callCount  int
-	app        models.AppStatus
-	logApp     models.AppStatus
-	logOptions docker.LogOptions
+	apps             []models.AppStatus
+	afterControlApps []models.AppStatus
+	logs             []models.LogLine
+	called           docker.ContainerAction
+	callCount        int
+	app              models.AppStatus
+	logApp           models.AppStatus
+	logOptions       docker.LogOptions
 }
 
 func (c *recordingDockerCollector) Apps(context.Context) ([]models.AppStatus, error) {
@@ -2324,6 +2499,9 @@ func (c *recordingDockerCollector) ControlContainer(_ context.Context, app model
 	c.called = action
 	c.callCount++
 	c.app = app
+	if len(c.afterControlApps) > 0 {
+		c.apps = append([]models.AppStatus(nil), c.afterControlApps...)
+	}
 	return docker.ControlResult{
 		Action:        action,
 		AppID:         app.AppID,

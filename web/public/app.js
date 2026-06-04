@@ -2395,14 +2395,19 @@ async function submitAgentApproval(plan, choice, button) {
     button.textContent = "Recording";
   }
   try {
-    await api("/api/admin/agent/approval", {
+    const response = await api("/api/admin/agent/approval", {
       method: "POST",
       body: JSON.stringify({
         approval_token: plan.approval_token || "",
         choice: selectedChoice,
       }),
     });
-    showNotice(selectedChoice === "deny" ? "Automatic fix was not allowed." : "Approved fix was sent.");
+    if (selectedChoice === "allow_once" && response.outcome) {
+      appendAgentRepairOutcome(response.outcome);
+      showNotice(agentRepairOutcomeNotice(response.outcome), response.outcome.recovered ? "info" : "error");
+    } else {
+      showNotice("Automatic fix was not allowed.");
+    }
     closeAgentApprovalDialog();
   } catch (error) {
     showNotice(error.message, "error");
@@ -2412,6 +2417,38 @@ async function submitAgentApproval(plan, choice, button) {
       button.textContent = originalText;
     }
   }
+}
+
+function appendAgentRepairOutcome(outcome) {
+  const prompt = document.querySelector(".agent-plan-prompt");
+  if (!prompt) return;
+  prompt.querySelector(".agent-repair-outcome")?.remove();
+  prompt.append(renderAgentRepairOutcome(outcome));
+}
+
+function renderAgentRepairOutcome(outcome) {
+  const recovered = !!outcome?.recovered;
+  const verified = !!outcome?.verified;
+  const before = repairStatusText(outcome?.before_status);
+  const after = repairStatusText(outcome?.after_status);
+  const message = String(outcome?.message || "").trim() || (verified ? "Repair verification completed." : "Repair was sent, but verification did not complete.");
+  return node("div", { class: `agent-repair-outcome ${recovered ? "recovered" : verified ? "unresolved" : "unverified"}` },
+    node("strong", { text: recovered ? "Recovered" : verified ? "Still needs attention" : "Verification incomplete" }),
+    node("span", { text: `${before} -> ${after}` }),
+    node("small", { text: message }),
+  );
+}
+
+function agentRepairOutcomeNotice(outcome) {
+  if (outcome?.recovered) return "Approved fix ran and the app recovered.";
+  if (outcome?.verified) return "Approved fix ran, but the app still is not responding.";
+  return "Approved fix ran, but verification did not complete.";
+}
+
+function repairStatusText(status) {
+  const value = String(status || "unknown").trim();
+  if (!value) return "unknown";
+  return value.replace(/_/g, " ");
 }
 
 function closeAgentApprovalDialog(options = {}) {
@@ -3436,11 +3473,18 @@ function renderLLMAgentReadiness(readiness, options = {}) {
     node("div", { class: "settings-status-list" },
       settingsStatusRow("Read-only live tools", activeText, readiness.admin_tools_enabled ? "available" : "locked", readOnlyNames || "No read-only tools are registered."),
       settingsStatusRow("Action arm", agentArmStatusText(readiness), armed ? "armed" : controlEnabled ? "planned" : "locked", agentArmDetailText(readiness), armAction),
-      settingsStatusRow("Automatic fixes", readiness.mutating_tools_available ? "Restart approval available" : "Locked", readiness.mutating_tools_available ? "available" : "locked", readiness.mutating_tools_available ? "Only opted-in apps can be restarted, and every fix still needs an armed session plus approval." : "Chat cannot start, stop, restart, or change infrastructure yet."),
+      settingsStatusRow("Automatic fixes", readiness.mutating_tools_available ? "Restart approval available" : "Locked", readiness.mutating_tools_available ? "available" : "locked", readiness.mutating_tools_available ? agentRepairLimitDetail(readiness) : "Chat cannot start, stop, restart, or change infrastructure yet."),
       settingsStatusRow("Auto-review", autoReview.enabled ? "Available" : agentModeStatusText(autoReview.status), autoReview.status || "locked", reference.sufficient_reference ? "A separate reviewer model is a future guard; user approvals still use the normal popup." : "The reviewer-model reference is documented, but execution remains locked."),
     ),
     node("p", { class: "muted agent-reference-note", text: reference.design_finding || "Future repair actions require schema validation, audit policy, and explicit approval." }),
   );
+}
+
+function agentRepairLimitDetail(readiness) {
+  const cooldownSeconds = durationToSeconds(readiness.repair_cooldown) || 600;
+  const windowSeconds = durationToSeconds(readiness.repair_rate_limit_window) || 3600;
+  const max = Number(readiness.repair_rate_limit_max || 5);
+  return `Only opted-in apps can be restarted. Limit: 1 per app every ${formatSeconds(cooldownSeconds)}, ${max} total per ${formatSeconds(windowSeconds)}.`;
 }
 
 function agentArmStatusText(readiness) {
@@ -3458,6 +3502,16 @@ function timeOnly(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "the configured expiry";
   return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+function formatSeconds(seconds) {
+  const value = Number(seconds || 0);
+  if (!Number.isFinite(value) || value <= 0) return "configured window";
+  if (value < 60) return `${Math.round(value)}s`;
+  const minutes = value / 60;
+  if (minutes < 60) return `${Math.round(minutes)}m`;
+  const hours = minutes / 60;
+  return `${Math.round(hours)}h`;
 }
 
 async function setAgentArm(armed, durationSeconds, button) {

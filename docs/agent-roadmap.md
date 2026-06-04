@@ -166,7 +166,7 @@ complementary, and either can run first without breaking the other.
 - [ ] No secret is written to a git-tracked path or returned in any API response.
 - [ ] With an installer-pre-seeded admin, the wizard still runs and continues from the
       accounts step (no re-entry forced, no error); existing `auth:` config is preserved.
-- [ ] `go test ./...`, build, and `visual-check.ps1` all pass.
+- [x] `go test ./...`, build, and `cmd/visualcheck` all pass for this repair slice.
 
 ### Open questions
 - Where should key files live by default (repo `secrets/` for dev vs `%ProgramData%\
@@ -269,7 +269,7 @@ Settings destination: notifications + account), is specified in **`docs/ux-compa
 
 ## Workstream C — Customizable LLM access + optional full agent access
 
-**Status:** `in-progress` (read-only live API tools implemented; approval-gated restart v1 implemented; autonomous repair, cooldown/rate-limit, and verification loop still open)
+**Status:** `in-progress` (read-only live API tools implemented; approval-gated restart v1 implemented with cooldown/rate-limit and verification; autonomous repair still open)
 **Goal:** (1) Make LLM access easy to customize per role/policy, and (2) add an **opt-in,
 manually enabled** "agent mode" where the LLM can *act* to resolve problems (e.g., restart
 a stuck container) rather than only producing an advisory report.
@@ -312,8 +312,10 @@ popup, and unresolved app targets stay non-actionable.
 The action-approval arm gate is also in place: it is disabled by default, requires
 `agent_control_enabled=true`, and arms only the current admin session for a bounded window.
 Restart execution is now available only through the server-side approval endpoint, only for
-apps explicitly opted in with `app_catalog.agent_repair_allowed`, and only for one signed
-approval token. Autonomous repair remains locked.
+apps explicitly opted in with `app_catalog.agent_repair_allowed`, only for one signed
+approval token, and only inside the per-app/global repair limits. The server verifies the
+target after restart and reports the outcome back to chat. Autonomous repair remains
+locked.
 
 **Design, grounded in the references:**
 - **Read-only live API tools (implemented first).** Admin-requested diagnosis can opt into
@@ -372,11 +374,11 @@ the repair capability changes.
       requires both `agent_control_enabled` and an explicit in-app arm step.
 - [x] Restart approval is schema-validated, restricted to the restart allowlist, single-use,
       and audited.
-- [ ] Add cooldown/rate-limit, post-action verification, and chat outcome reporting.
+- [x] Add cooldown/rate-limit, post-action verification, and chat outcome reporting.
 - [ ] `propose` mode requires per-action confirmation; future `auto` mode honors the
       allowlist, rate limits, and kill switch.
 - [ ] Redaction failures and invalid tool calls fail closed (no action taken).
-- [ ] `docs/llm-policy.md` and `docs/security.md` updated to reflect the new capability.
+- [x] `docs/llm-policy.md` and `docs/security.md` updated to reflect the new capability.
 - [ ] `go test ./...`, build, and `visual-check.ps1` all pass.
 
 ### Open questions

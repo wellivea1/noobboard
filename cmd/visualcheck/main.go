@@ -48,6 +48,7 @@ type screenshots struct {
 	DesktopDiagnostics     string `json:"desktopDiagnostics"`
 	DesktopAdmin           string `json:"desktopAdmin"`
 	DesktopSettings        string `json:"desktopSettings"`
+	DesktopAgentRepair     string `json:"desktopAgentRepair"`
 	DesktopUserAppDetail   string `json:"desktopUserAppDetail"`
 	DesktopUserInfraDetail string `json:"desktopUserInfraDetail"`
 	MobileOverview         string `json:"mobileOverview"`
@@ -87,6 +88,10 @@ type flags struct {
 	SettingsMenuButtonCount     int      `json:"settingsMenuButtonCount,omitempty"`
 	VisibleSettingsSections     int      `json:"visibleSettingsSections,omitempty"`
 	AgentRepairToggleCount      int      `json:"agentRepairToggleCount,omitempty"`
+	AgentReadinessLimitVisible  bool     `json:"agentReadinessLimitVisible,omitempty"`
+	AgentApprovalDialogVisible  bool     `json:"agentApprovalDialogVisible,omitempty"`
+	AgentRepairOutcomeVisible   bool     `json:"agentRepairOutcomeVisible,omitempty"`
+	AgentRepairOutcomeRecovered bool     `json:"agentRepairOutcomeRecovered,omitempty"`
 	UserHomeVisible             bool     `json:"userHomeVisible,omitempty"`
 	UserHeroVisible             bool     `json:"userHeroVisible,omitempty"`
 	UserStatusCardCount         int      `json:"userStatusCardCount,omitempty"`
@@ -368,6 +373,15 @@ func run(opts options) (visualResult, error) {
 		return result, err
 	}
 
+	agentRepair, err := evalFlags(cdp, agentRepairExpression)
+	if err != nil {
+		return result, err
+	}
+	result.Screenshots.DesktopAgentRepair = filepath.Join(cache, "visual-desktop-agent-repair-"+runID+".png")
+	if err := captureScreenshot(cdp, result.Screenshots.DesktopAgentRepair); err != nil {
+		return result, err
+	}
+
 	monitorCustomization, err := evalFlags(cdp, monitorCustomizationExpression)
 	if err != nil {
 		return result, err
@@ -612,6 +626,7 @@ func run(opts options) (visualResult, error) {
 		"diagnostics":            diagnostics,
 		"admin":                  admin,
 		"settings":               settings,
+		"agentRepair":            agentRepair,
 		"customization":          monitorCustomization,
 		"mobileOverview":         mobileOverview,
 		"mobileRouter":           mobileRouter,
@@ -628,7 +643,7 @@ func run(opts options) (visualResult, error) {
 		"mobileUserDrawer":       mobileUserDrawer,
 		"mobileDrawerClose":      mobileUserDrawerClose,
 	}
-	if err := assertVisualFlags(overview, serverFlags, router, apps, incidents, diagnostics, admin, settings, monitorCustomization, mobileOverview, mobileRouter, mobileApps, mobileIncidents, mobileDiagnostics, mobileAdmin, mobileSettings, desktopUserAppDetail, desktopUserInfraDetail, mobileUserHome, mobileUserAppDetail, mobileUserInfraDetail, mobileUserDrawer, mobileUserDrawerClose); err != nil {
+	if err := assertVisualFlags(overview, serverFlags, router, apps, incidents, diagnostics, admin, settings, agentRepair, monitorCustomization, mobileOverview, mobileRouter, mobileApps, mobileIncidents, mobileDiagnostics, mobileAdmin, mobileSettings, desktopUserAppDetail, desktopUserInfraDetail, mobileUserHome, mobileUserAppDetail, mobileUserInfraDetail, mobileUserDrawer, mobileUserDrawerClose); err != nil {
 		return result, err
 	}
 
@@ -759,7 +774,7 @@ func captureScreenshot(cdp *cdpClient, path string) error {
 	return os.WriteFile(path, data, 0o644)
 }
 
-func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, admin, settings, customization, mobileOverview, mobileRouter, mobileApps, mobileIncidents, mobileDiagnostics, mobileAdmin, mobileSettings, desktopUserAppDetail, desktopUserInfraDetail, mobileUserHome, mobileUserAppDetail, mobileUserInfraDetail, mobileUserDrawer, mobileUserDrawerClose flags) error {
+func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, admin, settings, agentRepair, customization, mobileOverview, mobileRouter, mobileApps, mobileIncidents, mobileDiagnostics, mobileAdmin, mobileSettings, desktopUserAppDetail, desktopUserInfraDetail, mobileUserHome, mobileUserAppDetail, mobileUserInfraDetail, mobileUserDrawer, mobileUserDrawerClose flags) error {
 	var failures []string
 	if !overview.DashboardVisible {
 		failures = append(failures, "dashboard was not visible after login")
@@ -827,14 +842,29 @@ func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, a
 	if settings.AgentRepairToggleCount == 0 {
 		failures = append(failures, "app repair opt-in toggle did not render in settings")
 	}
+	if !settings.AgentReadinessLimitVisible {
+		failures = append(failures, "agent readiness cooldown/rate limit text did not render")
+	}
 	if settings.ButtonTextOverflow {
 		failures = append(failures, "desktop button text overflow detected")
+	}
+	if !agentRepair.AgentApprovalDialogVisible {
+		failures = append(failures, "agent approval dialog did not render")
+	}
+	if !agentRepair.AgentRepairOutcomeVisible || !agentRepair.AgentRepairOutcomeRecovered {
+		failures = append(failures, "agent repair outcome did not render as recovered")
+	}
+	if agentRepair.BodyHorizontalOverflow || agentRepair.ButtonTextOverflow || agentRepair.ElementBoundsOverflow {
+		failures = append(failures, "agent repair UI layout overflow detected: "+agentRepair.ElementBoundsOffender)
 	}
 	if mobileSettings.SettingsMenuButtonCount < 6 || mobileSettings.VisibleSettingsSections != 1 {
 		failures = append(failures, "mobile settings submenu did not render correctly")
 	}
 	if mobileSettings.AgentRepairToggleCount == 0 {
 		failures = append(failures, "mobile app repair opt-in toggle did not render in settings")
+	}
+	if !mobileSettings.AgentReadinessLimitVisible {
+		failures = append(failures, "mobile agent readiness cooldown/rate limit text did not render")
 	}
 	if mobileOverview.UserMenuToggleVisible || mobileAdmin.UserMenuToggleVisible || mobileSettings.UserMenuToggleVisible {
 		failures = append(failures, "compact user menu was visible on admin mobile screens")
@@ -1696,9 +1726,16 @@ const settingsExpression = `(async () => {
   while (document.querySelectorAll('.settings-app-controls .setting-toggle').length < 1 && Date.now() - appsStarted < 5000) {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
+  const agentRepairToggleCount = document.querySelectorAll('.settings-app-controls .setting-toggle').length;
+  document.querySelector('#settings-menu [data-settings-section="llm"]')?.click();
+  const llmStarted = Date.now();
+  while (!document.querySelector('.agent-readiness') && Date.now() - llmStarted < 5000) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
   const visibleSettingsSections = [...document.querySelectorAll('#tab-settings .settings-section')]
     .filter((element) => !element.hidden && getComputedStyle(element).display !== 'none').length;
   const settingsControlCount = document.querySelectorAll('.settings-card input,.settings-card select,.settings-card button').length;
+  const readinessText = document.querySelector('.agent-readiness')?.textContent || '';
   const buttonTextOverflow = hasButtonTextOverflow();
   const mobileAudit = await auditMobileShell();
   return {
@@ -1708,9 +1745,69 @@ const settingsExpression = `(async () => {
     settingsControlCount,
     settingsMenuButtonCount: document.querySelectorAll('#settings-menu [data-settings-section]').length,
     visibleSettingsSections,
-    agentRepairToggleCount: document.querySelectorAll('.settings-app-controls .setting-toggle').length,
+    agentRepairToggleCount,
+    agentReadinessLimitVisible: readinessText.includes('1 per app') && readinessText.includes('5 total'),
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow,
+    ...mobileAudit
+  };
+})()`
+
+const agentRepairExpression = `(async () => {
+  document.querySelector('[data-tab="diagnostics"]')?.click();
+  const started = Date.now();
+  while (document.querySelector('#tab-diagnostics')?.hidden && Date.now() - started < 5000) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  const output = document.querySelector('#diagnostic-output');
+  const plan = {
+    id: 'visual-repair-plan',
+    title: 'Restart recommendation',
+    summary: 'The model suggested restarting one app. NoobBoard can run one restart only after admin approval, an armed session, and per-app opt-in.',
+    recommended_action_id: 'ask_admin_to_restart_container',
+    requires_admin_approval: true,
+    can_execute: true,
+    status: 'approval_ready',
+    approval_token: 'visual-token',
+    target: { kind: 'app', id: 'emby', label: 'Emby', resolved: true },
+    options: [
+      { id: 'deny', label: 'Do not allow', description: 'Keep the diagnosis and do not permit an automatic fix.', enabled: true, selected: true },
+      { id: 'allow_once', label: 'Allow fix', description: 'Permit this single fix attempt.', enabled: true }
+    ]
+  };
+  if (output && typeof renderAgentPlanPrompt === 'function') {
+    output.classList.remove('muted', 'chat-empty');
+    output.classList.add('chat-result');
+    output.replaceChildren(renderAgentPlanPrompt(plan));
+  }
+  if (typeof openAgentApprovalDialog === 'function') {
+    openAgentApprovalDialog(plan);
+  }
+  const dialogVisible = !!document.querySelector('.agent-approval-dialog') && visibleElement(document.querySelector('.agent-approval-dialog'));
+  if (typeof closeAgentApprovalDialog === 'function') {
+    closeAgentApprovalDialog({ returnFocus: false });
+  }
+  if (typeof appendAgentRepairOutcome === 'function') {
+    appendAgentRepairOutcome({
+      action: 'restart',
+      target_id: 'emby',
+      target_label: 'Emby',
+      before_status: 'offline',
+      after_status: 'online',
+      recovered: true,
+      verified: true,
+      message: 'Auto-repair: restarted - recovered.'
+    });
+  }
+  const outcome = document.querySelector('.agent-repair-outcome');
+  const mobileAudit = await auditMobileShell();
+  return {
+    pageTitle: document.querySelector('#page-title')?.textContent || '',
+    agentApprovalDialogVisible: dialogVisible,
+    agentRepairOutcomeVisible: !!outcome && visibleElement(outcome),
+    agentRepairOutcomeRecovered: !!outcome && outcome.classList.contains('recovered') && (outcome.textContent || '').includes('offline -> online'),
+    bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
+    buttonTextOverflow: hasButtonTextOverflow(),
     ...mobileAudit
   };
 })()`

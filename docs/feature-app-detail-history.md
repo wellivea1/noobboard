@@ -61,10 +61,14 @@ repair. Verified on this machine: `go build ./...` ✓, `go test ./...` ✓,
   checks banned terms/overflow/touch targets, and verifies Back restores focus.
 - `docs/security.md` records that `history.jsonl` is local operational state and
   must remain out of git.
-- The first repair slice landed: per-app `agent_repair_allowed` settings,
-  restart-only server-side execution, single-use approval tokens, and audit
-  coverage. Autonomous repair, cooldown/rate-limit, and outcome verification are
-  still open.
+- The approval-gated repair path now includes per-app `agent_repair_allowed`
+  settings, restart-only server-side execution, single-use approval tokens,
+  cooldown/rate-limit enforcement, post-restart verification, inline chat
+  outcome reporting, history notes, and lifecycle audit coverage. Autonomous
+  repair remains a separate future mode.
+- The visual harness now includes the LLM settings limit copy plus a rendered
+  approval dialog/outcome state, so regressions in the armed/approved chat UI are
+  caught without live LLM credentials.
 - **Still optional:** the 24-hour status bar remains a nice-to-have.
 
 ---
@@ -419,7 +423,7 @@ weakening it.
 1. `LLM.AgentControlEnabled` is **on** (admin setting, default **off**).
 2. The admin **armed** this session (`AgentArmDuration` ≤ 1h, auto-expires).
 3. A valid, **single-use**, unexpired approval token bound to actor + action +
-   target (HMAC already implemented; add one-time consumption).
+   target.
 4. The action is in the **executable allowlist** (v1: `restart` only).
 5. The target app is **opted in** to auto-repair (per-app flag, default off) and
    not blacklisted.
@@ -449,15 +453,16 @@ weakening it.
   expiry) so an approval executes at most once; reject replays.
 - **Action allowlist:** hardcode `{restart}` for v1. Explicitly reject stop/start/
   delete/exec/anything else. Never expose shell/exec.
-- **Cooldown + rate limit:** e.g. ≤1 agent restart per app / 10 min and ≤5 agent
-  actions / hour globally; over-limit → audited refusal, surfaced in chat.
+- **Cooldown + rate limit:** at most 1 agent restart per app per 10 min and 5
+  agent actions per hour globally; over-limit is an audited refusal surfaced in
+  chat.
 - **Kill switch:** disarm or `AgentControlEnabled=off` disables instantly; arm
   auto-expires. One target per approval (no bulk).
 
 ## R3 — Outcome verification & reporting
 - After executing, force a `refreshSnapshot` after a short delay, compare the
   target's before/after status, and write a history `StatusEvent` note
-  ("Auto-repair: restarted — recovered" / "still not responding").
+  ("Auto-repair: restarted - recovered" / "still not responding").
 - Return the outcome to chat (recovered / still down, before→after). On failure,
   **do not auto-retry**; surface to the admin.
 - Audit the full lifecycle: proposed → approved (by whom) → executed → verified.
@@ -490,7 +495,9 @@ weakening it.
   `recordAgentApproval` to execute restart; enable "Allow fix"; full audit.
   **Landed for restart-only approval-gated v1.**
 - **AR3:** cooldown/rate-limit + outcome verification re-poll + chat outcome UI.
+  **Landed for approval-gated restart v1.**
 - **AR4:** security review + docs + harness coverage for the armed/approved flow.
+  **Landed for approval-gated restart v1.**
 
 ## Repair-specific open choices
 - **Autonomy level (key decision).** v1 recommended: **approval-gated while
@@ -500,7 +507,7 @@ weakening it.
   first; treat autonomous as a separate, clearly-flagged follow-up.
 - **Executable action scope for v1:** restart-only (recommended) vs. also
   start/stop.
-- **Cooldown/rate-limit defaults:** suggested 1/app/10min, 5/hour global.
+- **Cooldown/rate-limit defaults:** current v1 uses 1/app/10min, 5/hour global.
 - **Per-app flag:** new `AgentRepairAllowed` (recommended) vs. reusing an existing
   restart-permission flag.
 

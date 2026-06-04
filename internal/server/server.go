@@ -72,6 +72,9 @@ type App struct {
 	agentApprovalSecret    []byte
 	agentApprovalMu        sync.Mutex
 	consumedAgentApprovals map[string]time.Time
+	agentRepairMu          sync.Mutex
+	agentRepairLastByApp   map[string]time.Time
+	agentRepairGlobal      []time.Time
 }
 
 const maxRequestBodyBytes int64 = 1 << 20
@@ -90,7 +93,13 @@ const (
 	defaultLogLimit     = 80
 	maxLogLimit         = 200
 	agentApprovalPlanID = "current_recommendation"
+
+	agentRepairPerAppCooldown = 10 * time.Minute
+	agentRepairGlobalWindow   = time.Hour
+	agentRepairGlobalLimit    = 5
 )
+
+var agentRepairVerificationDelay = 2 * time.Second
 
 func New(deps Dependencies) (*App, error) {
 	if deps.Store == nil || deps.Users == nil || deps.Redactor == nil || deps.LLM == nil {
@@ -109,6 +118,7 @@ func New(deps Dependencies) (*App, error) {
 		historyRecorder:        statushistory.NewRecorder(),
 		agentApprovalSecret:    approvalSecret,
 		consumedAgentApprovals: map[string]time.Time{},
+		agentRepairLastByApp:   map[string]time.Time{},
 	}
 	if settings, ok, err := deps.Store.RuntimeSettings(); err != nil {
 		return nil, err
@@ -1353,7 +1363,7 @@ func (a *App) llmAgentPlanResponse(diagnosis llm.Diagnosis, snapshot models.Snap
 	redactor := a.deps.Redactor
 	a.settingsMu.RUnlock()
 	armed, _ := agentSessionArmed(llmCfg, sess)
-	status, canExecute, allowReason := agentPlanExecutionState(action, target, snapshot, llmCfg, redactor, armed)
+	status, canExecute, allowReason := a.agentPlanExecutionState(action, target, snapshot, llmCfg, redactor, armed)
 	expiresAt := time.Now().UTC().Add(5 * time.Minute)
 	approvalToken := ""
 	if requiresApproval {
@@ -1371,7 +1381,7 @@ func (a *App) llmAgentPlanResponse(diagnosis llm.Diagnosis, snapshot models.Snap
 			ExpiresAt:           expiresAt.Unix(),
 		})
 	}
-	return &llmAgentPlanView{
+	response := &llmAgentPlanView{
 		ID:                    agentApprovalPlanID,
 		Title:                 action.Title,
 		Summary:               action.Summary,
@@ -1400,6 +1410,18 @@ func (a *App) llmAgentPlanResponse(diagnosis llm.Diagnosis, snapshot models.Snap
 			},
 		},
 	}
+	if requiresApproval {
+		a.deps.Audit.Record(actorID, "llm.agent_plan.proposed", map[string]interface{}{
+			"plan_id":               response.ID,
+			"recommended_action_id": action.ID,
+			"target_kind":           target.Kind,
+			"target_id":             target.ID,
+			"target_resolved":       target.Resolved,
+			"status":                status,
+			"can_execute":           canExecute,
+		})
+	}
+	return response
 }
 
 type llmAgentActionDefinition struct {
@@ -1506,7 +1528,7 @@ func resolveAgentPlanTarget(action llmAgentActionDefinition, diagnosis llm.Diagn
 	return target
 }
 
-func agentPlanExecutionState(action llmAgentActionDefinition, target llmAgentPlanTargetView, snapshot models.Snapshot, cfg config.LLMConfig, redactor *privacy.Redactor, armed bool) (string, bool, string) {
+func (a *App) agentPlanExecutionState(action llmAgentActionDefinition, target llmAgentPlanTargetView, snapshot models.Snapshot, cfg config.LLMConfig, redactor *privacy.Redactor, armed bool) (string, bool, string) {
 	if !action.ApprovalEligible {
 		return "not_actionable", false, ""
 	}
@@ -1532,7 +1554,100 @@ func agentPlanExecutionState(action llmAgentActionDefinition, target llmAgentPla
 	if !armed {
 		return "approval_needs_arm", false, "Arm this admin session before allowing this restart."
 	}
+	if limit := a.agentRepairLimitState(app.AppID, time.Now().UTC(), false); !limit.Allowed {
+		return "approval_rate_limited", false, limit.Message
+	}
 	return "approval_ready", true, ""
+}
+
+type agentRepairLimitDecision struct {
+	Allowed           bool
+	Reason            string
+	Message           string
+	RetryAfter        time.Duration
+	RetryAfterSeconds int
+}
+
+func (a *App) reserveAgentRepair(appID string, now time.Time) agentRepairLimitDecision {
+	return a.agentRepairLimitState(appID, now, true)
+}
+
+func (a *App) agentRepairLimitState(appID string, now time.Time, reserve bool) agentRepairLimitDecision {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	key := strings.ToLower(strings.TrimSpace(appID))
+	if key == "" {
+		key = "unknown"
+	}
+	a.agentRepairMu.Lock()
+	defer a.agentRepairMu.Unlock()
+	if a.agentRepairLastByApp == nil {
+		a.agentRepairLastByApp = map[string]time.Time{}
+	}
+	for appKey, at := range a.agentRepairLastByApp {
+		if !at.IsZero() && !at.Add(agentRepairPerAppCooldown).After(now) {
+			delete(a.agentRepairLastByApp, appKey)
+		}
+	}
+	global := a.agentRepairGlobal[:0]
+	for _, at := range a.agentRepairGlobal {
+		if at.IsZero() {
+			continue
+		}
+		if at.Add(agentRepairGlobalWindow).After(now) {
+			global = append(global, at)
+		}
+	}
+	a.agentRepairGlobal = global
+	if last := a.agentRepairLastByApp[key]; !last.IsZero() {
+		if retryAfter := last.Add(agentRepairPerAppCooldown).Sub(now); retryAfter > 0 {
+			return agentRepairLimitDecision{
+				Allowed:           false,
+				Reason:            "per_app_cooldown",
+				Message:           "Automatic repair is cooling down for this app. Try again in " + shortDurationText(retryAfter) + ".",
+				RetryAfter:        retryAfter,
+				RetryAfterSeconds: int((retryAfter + time.Second - 1) / time.Second),
+			}
+		}
+	}
+	if len(a.agentRepairGlobal) >= agentRepairGlobalLimit {
+		retryAfter := a.agentRepairGlobal[0].Add(agentRepairGlobalWindow).Sub(now)
+		if retryAfter < 0 {
+			retryAfter = 0
+		}
+		return agentRepairLimitDecision{
+			Allowed:           false,
+			Reason:            "global_rate_limit",
+			Message:           "The automatic repair rate limit has been reached. Try again in " + shortDurationText(retryAfter) + ".",
+			RetryAfter:        retryAfter,
+			RetryAfterSeconds: int((retryAfter + time.Second - 1) / time.Second),
+		}
+	}
+	if reserve {
+		a.agentRepairLastByApp[key] = now
+		a.agentRepairGlobal = append(a.agentRepairGlobal, now)
+	}
+	return agentRepairLimitDecision{Allowed: true}
+}
+
+func shortDurationText(duration time.Duration) string {
+	if duration <= 0 {
+		return "a moment"
+	}
+	if duration < time.Minute {
+		seconds := int((duration + time.Second - 1) / time.Second)
+		if seconds == 1 {
+			return "1 second"
+		}
+		return fmt.Sprintf("%d seconds", seconds)
+	}
+	minutes := int((duration + time.Minute - 1) / time.Minute)
+	if minutes == 1 {
+		return "1 minute"
+	}
+	return fmt.Sprintf("%d minutes", minutes)
 }
 
 func (a *App) recordAgentApproval(w http.ResponseWriter, r *http.Request) {
@@ -1633,22 +1748,163 @@ func (a *App) recordAgentApproval(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, errors.New("approval token has already been used"))
 		return
 	}
-	result, err := a.deps.Collectors.Docker.ControlContainer(r.Context(), app, action.DockerAction)
-	if err != nil {
-		details["error"] = err.Error()
-		a.deps.Audit.Record(mustUser(r).ID, "llm.agent_plan.execute_failed", details)
-		writeError(w, http.StatusBadGateway, err)
+	limit := a.reserveAgentRepair(app.AppID, time.Now().UTC())
+	if !limit.Allowed {
+		details["reason"] = limit.Reason
+		details["retry_after_seconds"] = limit.RetryAfterSeconds
+		a.deps.Audit.Record(mustUser(r).ID, "llm.agent_plan.rate_limited", auditDetailsCopy(details))
+		writeError(w, http.StatusConflict, errors.New(limit.Message))
 		return
 	}
 	details["can_execute"] = true
+	a.deps.Audit.Record(mustUser(r).ID, "llm.agent_plan.approved", auditDetailsCopy(details))
+	result, err := a.deps.Collectors.Docker.ControlContainer(r.Context(), app, action.DockerAction)
+	if err != nil {
+		details["error"] = err.Error()
+		a.deps.Audit.Record(mustUser(r).ID, "llm.agent_plan.execute_failed", auditDetailsCopy(details))
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
 	details["via"] = "agent_plan"
 	a.invalidateSnapshot()
-	a.deps.Audit.Record(mustUser(r).ID, "llm.agent_plan.executed", details)
+	a.deps.Audit.Record(mustUser(r).ID, "llm.agent_plan.executed", auditDetailsCopy(details))
 	a.deps.Audit.Record(mustUser(r).ID, "app.container.action", map[string]interface{}{"app_id": app.AppID, "action": string(action.DockerAction), "container_name": app.ContainerName, "via": "agent_plan", "plan_id": payload.PlanID, "recommended_action_id": action.ID})
+	outcome := a.verifyAgentRepairOutcome(r.Context(), app, action, result)
+	verifyDetails := auditDetailsCopy(details)
+	verifyDetails["verified"] = outcome.Verified
+	verifyDetails["recovered"] = outcome.Recovered
+	verifyDetails["before_status"] = string(outcome.BeforeStatus)
+	verifyDetails["after_status"] = string(outcome.AfterStatus)
+	verifyDetails["history_event_id"] = outcome.HistoryEventID
+	if outcome.Verified {
+		a.deps.Audit.Record(mustUser(r).ID, "llm.agent_plan.verified", verifyDetails)
+	} else {
+		a.deps.Audit.Record(mustUser(r).ID, "llm.agent_plan.verify_failed", verifyDetails)
+	}
 	writeJSON(w, http.StatusAccepted, map[string]interface{}{
-		"status": "executed",
-		"result": result,
+		"status":  "executed",
+		"result":  result,
+		"outcome": outcome,
 	})
+}
+
+func (a *App) verifyAgentRepairOutcome(ctx context.Context, before models.AppStatus, action llmAgentActionDefinition, result docker.ControlResult) llmAgentRepairOutcomeView {
+	beforeStatus := currentStatusOrUnknown(before.CurrentStatus)
+	targetLabel := firstNonEmpty(before.DisplayName, before.ContainerName, before.AppID)
+	outcome := llmAgentRepairOutcomeView{
+		Action:       string(action.DockerAction),
+		TargetID:     before.AppID,
+		TargetLabel:  targetLabel,
+		BeforeStatus: beforeStatus,
+		AfterStatus:  models.StatusUnknown,
+		CheckedAt:    time.Now().UTC(),
+		Message:      "Restart was sent, but NoobBoard could not verify the app status yet.",
+		ResultStatus: strings.TrimSpace(result.Status),
+	}
+	if delay := agentRepairVerificationDelay; delay > 0 {
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			outcome.Message = "Restart was sent, but verification was cancelled before NoobBoard could refresh status."
+			return outcome
+		case <-timer.C:
+		}
+	}
+	a.invalidateSnapshot()
+	afterSnapshot, err := a.refreshSnapshot(ctx, false)
+	outcome.CheckedAt = time.Now().UTC()
+	if err != nil {
+		outcome.Message = "Restart was sent, but status verification failed: " + err.Error()
+		return outcome
+	}
+	afterApp, ok := findAppByID(afterSnapshot.Apps, before.AppID)
+	if !ok {
+		outcome.Verified = true
+		outcome.AfterStatus = models.StatusUnknown
+		outcome.Message = "Auto-repair: restarted - target app was not present after refresh."
+	} else {
+		outcome.Verified = true
+		outcome.AfterStatus = currentStatusOrUnknown(afterApp.CurrentStatus)
+		outcome.TargetLabel = firstNonEmpty(afterApp.DisplayName, afterApp.ContainerName, afterApp.AppID, targetLabel)
+		outcome.Recovered = outcome.AfterStatus == models.StatusOnline
+		if outcome.Recovered {
+			outcome.Message = "Auto-repair: restarted - recovered."
+		} else {
+			outcome.Message = "Auto-repair: restarted - still not responding."
+		}
+	}
+	if historyEventID, err := a.appendAgentRepairHistoryEvent(outcome); err == nil {
+		outcome.HistoryEventID = historyEventID
+		if a.historyRecorder != nil {
+			a.historyRecorder.Observe(afterSnapshot)
+		}
+	} else {
+		outcome.HistoryError = err.Error()
+	}
+	return outcome
+}
+
+func (a *App) appendAgentRepairHistoryEvent(outcome llmAgentRepairOutcomeView) (string, error) {
+	if a.deps.History == nil || strings.TrimSpace(outcome.TargetID) == "" {
+		return "", nil
+	}
+	eventID := agentRepairHistoryEventID(outcome)
+	event := models.StatusEvent{
+		ID:          eventID,
+		SubjectType: models.SubjectApp,
+		SubjectID:   outcome.TargetID,
+		DisplayName: outcome.TargetLabel,
+		From:        outcome.BeforeStatus,
+		To:          outcome.AfterStatus,
+		At:          outcome.CheckedAt,
+		Note:        outcome.Message,
+	}
+	if event.DisplayName == "" {
+		event.DisplayName = outcome.TargetID
+	}
+	if event.At.IsZero() {
+		event.At = time.Now().UTC()
+	}
+	if err := a.deps.History.Append([]models.StatusEvent{event}); err != nil {
+		return "", err
+	}
+	return eventID, nil
+}
+
+func agentRepairHistoryEventID(outcome llmAgentRepairOutcomeView) string {
+	return fmt.Sprintf("agent-repair-%s-%d-%s", sanitizeAgentRepairIDPart(outcome.TargetID), outcome.CheckedAt.UnixNano(), outcome.AfterStatus)
+}
+
+func sanitizeAgentRepairIDPart(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	var b strings.Builder
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('-')
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}
+
+func currentStatusOrUnknown(status models.CurrentStatus) models.CurrentStatus {
+	if status == "" {
+		return models.StatusUnknown
+	}
+	return status
+}
+
+func auditDetailsCopy(details map[string]interface{}) map[string]interface{} {
+	out := make(map[string]interface{}, len(details))
+	for key, value := range details {
+		out[key] = value
+	}
+	return out
 }
 
 func (a *App) setAgentArm(w http.ResponseWriter, r *http.Request) {
@@ -2141,6 +2397,9 @@ type llmAgentReadinessView struct {
 	AgentArmed             bool                         `json:"agent_armed"`
 	AgentArmedUntil        time.Time                    `json:"agent_armed_until,omitempty"`
 	AgentArmDuration       time.Duration                `json:"agent_arm_duration"`
+	RepairCooldown         time.Duration                `json:"repair_cooldown"`
+	RepairRateLimitWindow  time.Duration                `json:"repair_rate_limit_window"`
+	RepairRateLimitMax     int                          `json:"repair_rate_limit_max"`
 	AdminToolsEnabled      bool                         `json:"admin_tools_enabled"`
 	AdminToolCallLimit     int                          `json:"admin_tool_call_limit"`
 	ReadOnlyTools          []llmAgentToolView           `json:"read_only_tools"`
@@ -2207,6 +2466,21 @@ type llmAgentPlanOptionView struct {
 	Enabled     bool   `json:"enabled"`
 	Selected    bool   `json:"selected,omitempty"`
 	Reason      string `json:"reason,omitempty"`
+}
+
+type llmAgentRepairOutcomeView struct {
+	Action         string               `json:"action"`
+	TargetID       string               `json:"target_id"`
+	TargetLabel    string               `json:"target_label"`
+	BeforeStatus   models.CurrentStatus `json:"before_status"`
+	AfterStatus    models.CurrentStatus `json:"after_status"`
+	Recovered      bool                 `json:"recovered"`
+	Verified       bool                 `json:"verified"`
+	CheckedAt      time.Time            `json:"checked_at"`
+	Message        string               `json:"message"`
+	ResultStatus   string               `json:"result_status,omitempty"`
+	HistoryEventID string               `json:"history_event_id,omitempty"`
+	HistoryError   string               `json:"history_error,omitempty"`
 }
 
 type agentApprovalTokenPayload struct {
@@ -2326,6 +2600,9 @@ func llmAgentReadinessResponse(cfg config.LLMConfig, sess session) llmAgentReadi
 		AgentArmed:             armed,
 		AgentArmedUntil:        armedUntil,
 		AgentArmDuration:       cfg.AgentArmDuration,
+		RepairCooldown:         agentRepairPerAppCooldown,
+		RepairRateLimitWindow:  agentRepairGlobalWindow,
+		RepairRateLimitMax:     agentRepairGlobalLimit,
 		AdminToolsEnabled:      adminPolicy.AgentToolsEnabled && adminPolicy.RecipientRole == models.RoleAdmin,
 		AdminToolCallLimit:     adminPolicy.AgentMaxToolCalls,
 		ReadOnlyTools:          tools,
