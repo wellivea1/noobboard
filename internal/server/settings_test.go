@@ -1741,6 +1741,85 @@ func TestInfrastructureHistoryEndpointHonorsRoleVisibility(t *testing.T) {
 	}
 }
 
+func TestInfrastructureHistoryEndpointUsesPlainLanguageForGeneralUsers(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "infra-history-plain-language")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+	app := newTestApp(t, cfg)
+	if _, err := app.refreshSnapshot(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if err := app.deps.History.Append([]models.StatusEvent{
+		{
+			ID:          "nas-event",
+			SubjectType: models.SubjectInfra,
+			SubjectID:   "nas",
+			DisplayName: "NAS",
+			From:        models.StatusOnline,
+			To:          models.StatusOffline,
+			At:          now.Add(-time.Minute),
+			Note:        "NAS is not reachable.",
+		},
+		{
+			ID:          "dns-event",
+			SubjectType: models.SubjectInfra,
+			SubjectID:   "dns",
+			DisplayName: "DNS",
+			From:        models.StatusOffline,
+			To:          models.StatusOnline,
+			At:          now.Add(-time.Minute),
+			Note:        "DNS is resolving.",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	router := app.Router()
+	viewerCookie, _ := loginAs(t, router, "viewer", "change-me-now")
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/infrastructure/history?subject=nas", nil)
+	req.AddCookie(viewerCookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("general user NAS history status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	bodyText := rec.Body.String()
+	var response models.StatusHistory
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.DisplayName != "Server" {
+		t.Fatalf("general user infra display name = %q, want Server", response.DisplayName)
+	}
+	if len(response.Events) != 1 {
+		t.Fatalf("general user NAS history events = %#v", response.Events)
+	}
+	if strings.Contains(bodyText, "NAS") || strings.Contains(bodyText, "DNS") || strings.Contains(strings.ToLower(bodyText), "unraid") || strings.Contains(strings.ToLower(bodyText), "wan") {
+		t.Fatalf("general user infra history leaked technical wording: %s", bodyText)
+	}
+	if !strings.Contains(bodyText, "Server is not responding.") {
+		t.Fatalf("general user infra history did not rewrite note plainly: %s", bodyText)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/infrastructure/history?subject=dns", nil)
+	req.AddCookie(viewerCookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("general user DNS history status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	adminCookie, _ := loginAdmin(t, router)
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/infrastructure/history?subject=dns", nil)
+	req.AddCookie(adminCookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("admin DNS history status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestAppIconEndpointPersistsAndAppliesOverride(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Database.Path = serverCacheTestPath(t, "app-icon")

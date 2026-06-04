@@ -51,21 +51,17 @@ repair. Verified on this machine: `go build ./...` ✓, `go test ./...` ✓,
   "locked"** — no mutating tool runs yet. This is the clean handoff point for the
   repair work in the section below.
 
-**Review findings (small, worth a follow-up):**
-- **Banned-term / plain-language leak in infra history for general users.**
-  `visibleInfraHistorySubject` returns raw display names ("DNS", "WAN", "NAS",
-  "Unraid array") and the recorder writes notes like "DNS is resolving."
-  `internet` and **`dns` are exposed to general users unconditionally**, so a
-  general user hitting `/api/infrastructure/history?subject=dns` receives the
-  banned term "DNS". The compact UI only ever opens `internet`, so the harness
-  stays green, but the API leaks technical vocabulary. Fix: for non-admins,
-  return plain-language display names + notes (or restrict general users to the
-  `internet` subject). Add a harness case that opens a non-`internet` infra
-  subject to catch this.
-- **Remaining from the original plan:** add visual-check coverage that actually
-  opens app-detail/infra-detail (assert render, back-with-focus, banned-term +
-  touch-target + overflow audits, screenshots); the optional 24-hour status bar;
-  a `docs/security.md` note that `history.jsonl` is sensitive + git-ignored.
+**Follow-up implementation notes:**
+- The general-user infra-history API now restricts raw technical subjects
+  (`dns`, `wan`, `unraid_array`) to admins. General users can query `internet`
+  and, when server visibility is enabled, `nas`; non-admin infra history
+  responses rewrite display names and notes into plain language.
+- `cmd/visualcheck` now opens app-detail and infra-detail from the compact view,
+  captures desktop + mobile screenshots, asserts render/history/empty-state,
+  checks banned terms/overflow/touch targets, and verifies Back restores focus.
+- `docs/security.md` records that `history.jsonl` is local operational state and
+  must remain out of git.
+- **Still optional:** the 24-hour status bar remains a nice-to-have.
 
 ---
 

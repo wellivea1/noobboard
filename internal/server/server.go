@@ -762,7 +762,7 @@ func (a *App) appHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	window := parseHistoryWindow(r.URL.Query().Get("window"))
 	limit := parseHistoryLimit(r.URL.Query().Get("limit"))
-	history, err := a.statusHistory(models.SubjectApp, app.AppID, app.DisplayName, app.CurrentStatus, app.LastSeenOnline, app.LastSeenOffline, window, limit)
+	history, err := a.statusHistory(models.SubjectApp, app.AppID, app.DisplayName, app.CurrentStatus, app.LastSeenOnline, app.LastSeenOffline, window, limit, role)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -793,7 +793,7 @@ func (a *App) infrastructureHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	window := parseHistoryWindow(r.URL.Query().Get("window"))
 	limit := parseHistoryLimit(r.URL.Query().Get("limit"))
-	history, err := a.statusHistory(models.SubjectInfra, subject, displayName, current, nil, nil, window, limit)
+	history, err := a.statusHistory(models.SubjectInfra, subject, displayName, current, nil, nil, window, limit, role)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -801,7 +801,7 @@ func (a *App) infrastructureHistory(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, history)
 }
 
-func (a *App) statusHistory(subjectType models.StatusSubjectType, subjectID, displayName string, current models.CurrentStatus, lastOnline, lastOffline *time.Time, window time.Duration, limit int) (models.StatusHistory, error) {
+func (a *App) statusHistory(subjectType models.StatusSubjectType, subjectID, displayName string, current models.CurrentStatus, lastOnline, lastOffline *time.Time, window time.Duration, limit int, role models.Role) (models.StatusHistory, error) {
 	now := time.Now().UTC()
 	since := now.Add(-window)
 	allEvents, err := a.deps.History.Query(db.HistoryFilter{SubjectType: subjectType, SubjectID: subjectID})
@@ -814,6 +814,9 @@ func (a *App) statusHistory(subjectType models.StatusSubjectType, subjectID, dis
 			continue
 		}
 		event.Note = a.deps.Redactor.RedactString(event.Note).Text
+		if role != models.RoleAdmin && subjectType == models.SubjectInfra {
+			event = plainGeneralInfraEvent(event)
+		}
 		responseEvents = append(responseEvents, event)
 		if limit > 0 && len(responseEvents) >= limit {
 			break
@@ -1110,6 +1113,19 @@ func findAppByID(apps []models.AppStatus, id string) (models.AppStatus, bool) {
 
 func visibleInfraHistorySubject(subject string, snapshot models.Snapshot, role models.Role) (models.CurrentStatus, string, bool) {
 	infra := snapshot.Infrastructure
+	if role != models.RoleAdmin {
+		switch subject {
+		case "internet":
+			return boolHistoryStatus(infra.InternetReachable), "Internet", true
+		case "nas":
+			if !snapshot.Visibility.ShowNASStatusToUsers {
+				return "", "", false
+			}
+			return boolHistoryStatus(infra.NASReachable), "Server", true
+		default:
+			return "", "", false
+		}
+	}
 	switch subject {
 	case "internet":
 		return boolHistoryStatus(infra.InternetReachable), "Internet", true
@@ -1132,6 +1148,38 @@ func visibleInfraHistorySubject(subject string, snapshot models.Snapshot, role m
 		return arrayHistoryStatus(infra), "Unraid array", true
 	default:
 		return "", "", false
+	}
+}
+
+func plainGeneralInfraEvent(event models.StatusEvent) models.StatusEvent {
+	event.DisplayName = plainGeneralInfraDisplayName(event.SubjectID)
+	event.Note = plainGeneralInfraNote(event.SubjectID, event.To)
+	return event
+}
+
+func plainGeneralInfraDisplayName(subjectID string) string {
+	switch strings.ToLower(strings.TrimSpace(subjectID)) {
+	case "nas", "unraid_array":
+		return "Server"
+	default:
+		return "Internet"
+	}
+}
+
+func plainGeneralInfraNote(subjectID string, status models.CurrentStatus) string {
+	name := plainGeneralInfraDisplayName(subjectID)
+	switch status {
+	case models.StatusOnline:
+		return name + " is working."
+	case models.StatusDegraded:
+		return name + " has a problem."
+	case models.StatusOffline:
+		if name == "Server" {
+			return "Server is not responding."
+		}
+		return "Internet is not working."
+	default:
+		return name + " status changed."
 	}
 }
 
