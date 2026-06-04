@@ -2277,6 +2277,13 @@ button.command.app-control:focus-visible {
   min-width: 0;
 }
 
+.settings-blacklist-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  min-width: 0;
+}
+
 .settings-toggle-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -2344,6 +2351,10 @@ button.command.app-control:focus-visible {
   color: var(--muted);
   font-size: 0.78rem;
   line-height: 1.35;
+}
+
+.settings-subsection > p {
+  margin: -2px 0 0;
 }
 
 .settings-choice-action {
@@ -4250,6 +4261,7 @@ body.compact-view .assistant-toggle {
 
   .settings-field-grid,
   .settings-two-col,
+  .settings-blacklist-grid,
   .settings-key-field,
   .settings-choice,
   .settings-policy-main,

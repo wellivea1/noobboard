@@ -293,7 +293,7 @@ func TestChatGPTConnectorUsesCodexResponsesEndpoint(t *testing.T) {
 	cfg.LLM.ChatGPTAccessToken = "access-token"
 	cfg.LLM.ChatGPTAccountID = "account-123"
 	cfg.LLM.ChatGPTTokenExpiresAt = time.Now().UTC().Add(time.Hour)
-	cfg.LLM.OpenAIModel = "gpt-5"
+	cfg.LLM.OpenAIModel = "unsupported-codex-model"
 	if !ProviderAvailable(cfg.LLM) {
 		t.Fatal("ChatGPT connector should be available with refresh token and account id")
 	}
@@ -461,10 +461,10 @@ func TestChatGPTModelNormalizesUnsupportedCodexModels(t *testing.T) {
 		want  string
 	}{
 		{name: "empty", model: "", want: DefaultChatGPTCodexModel},
-		{name: "legacy gpt 5", model: "gpt-5", want: DefaultChatGPTCodexModel},
-		{name: "allowed default", model: "gpt-5.5", want: "gpt-5.5"},
-		{name: "allowed mini", model: "gpt-5.4-mini", want: "gpt-5.4-mini"},
-		{name: "future codex model", model: "gpt-5.6", want: "gpt-5.6"},
+		{name: "unsupported saved model", model: "unsupported-codex-model", want: DefaultChatGPTCodexModel},
+		{name: "allowed default", model: "gpt-5.1-codex", want: "gpt-5.1-codex"},
+		{name: "allowed max", model: "gpt-5.1-codex-max", want: "gpt-5.1-codex-max"},
+		{name: "future non-allowlisted model", model: "codex-preview-future", want: DefaultChatGPTCodexModel},
 		{name: "unknown", model: "gpt-chatgpt-test", want: DefaultChatGPTCodexModel},
 	}
 	for _, tt := range tests {

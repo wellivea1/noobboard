@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -25,16 +24,17 @@ const (
 	OpenAIChatGPTClientID       = "app_EMoamEEZ73f0CkXaXp7hrann"
 	OpenAIChatGPTIssuer         = "https://auth.openai.com"
 	OpenAIChatGPTCodexEndpoint  = "https://chatgpt.com/backend-api/codex/responses"
-	DefaultChatGPTCodexModel    = "gpt-5.5"
+	DefaultChatGPTCodexModel    = "gpt-5.1-codex"
 	ChatGPTCodexReasoningHigh   = "high"
 	defaultChatGPTAccessSeconds = 3600
 )
 
 var chatGPTCodexAllowedModels = map[string]bool{
-	"gpt-5.5":             true,
-	"gpt-5.4":             true,
-	"gpt-5.4-mini":        true,
-	"gpt-5.3-codex-spark": true,
+	"gpt-5.2-codex":      true,
+	"gpt-5.1-codex":      true,
+	"gpt-5.1-codex-max":  true,
+	"gpt-5.1-codex-mini": true,
+	"gpt-5-codex":        true,
 }
 
 type ChatGPTTokenResponse struct {
@@ -271,17 +271,7 @@ func chatGPTModel(model string) string {
 }
 
 func chatGPTCodexModelAllowed(model string) bool {
-	if chatGPTCodexAllowedModels[model] {
-		return true
-	}
-	const prefix = "gpt-"
-	if !strings.HasPrefix(model, prefix) {
-		return false
-	}
-	version := strings.TrimPrefix(model, prefix)
-	parts := strings.SplitN(version, "-", 2)
-	parsed, err := strconv.ParseFloat(parts[0], 64)
-	return err == nil && parsed > 5.4
+	return chatGPTCodexAllowedModels[model]
 }
 
 var _ Client = (*ChatGPTClient)(nil)

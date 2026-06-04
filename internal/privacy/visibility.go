@@ -64,6 +64,7 @@ func FilterSnapshotForRole(snapshot models.Snapshot, role models.Role, redactor 
 		}
 	}
 	snapshot.Facts = filteredFacts
+	applyVisibleRollup(&snapshot)
 	snapshot.AdminSummary = ""
 	snapshot.AuditTail = nil
 	snapshot.LLMPolicies = nil
@@ -86,6 +87,45 @@ func FilterSnapshotForRole(snapshot models.Snapshot, role models.Role, redactor 
 	snapshot.Infrastructure.DockerNetworkCount = 0
 	snapshot.Infrastructure.DockerNetworkNames = nil
 	return snapshot
+}
+
+func applyVisibleRollup(snapshot *models.Snapshot) {
+	status := models.StatusOnline
+	for _, fact := range snapshot.Facts {
+		switch fact.Severity {
+		case models.SeverityCritical, models.SeverityHigh:
+			status = models.StatusOffline
+		case models.SeverityMedium, models.SeverityLow:
+			if status != models.StatusOffline {
+				status = models.StatusDegraded
+			}
+		}
+	}
+	for _, app := range snapshot.Apps {
+		switch app.CurrentStatus {
+		case models.StatusOffline:
+			status = models.StatusOffline
+		case models.StatusDegraded:
+			if status != models.StatusOffline {
+				status = models.StatusDegraded
+			}
+		case models.StatusUnknown:
+			if status == models.StatusOnline {
+				status = models.StatusUnknown
+			}
+		}
+	}
+	snapshot.OverallStatus = status
+	switch status {
+	case models.StatusOnline:
+		snapshot.ServerSummary = "Everything visible is working."
+	case models.StatusOffline:
+		snapshot.ServerSummary = "A visible service needs attention."
+	case models.StatusDegraded:
+		snapshot.ServerSummary = "A visible service has a problem."
+	default:
+		snapshot.ServerSummary = "Visible status is still loading."
+	}
 }
 
 func visibilityForRole(settings models.VisibilitySettings, role models.Role) models.RoleVisibility {

@@ -662,10 +662,14 @@ func (n *flexInt64) UnmarshalJSON(data []byte) error {
 		*n = flexInt64(i)
 		return nil
 	}
-	f, err := strconv.ParseFloat(text, 64)
-	if err != nil {
-		return err
+	if f, err := strconv.ParseFloat(text, 64); err == nil {
+		*n = flexInt64(f)
+		return nil
 	}
-	*n = flexInt64(f)
+	if parsed, err := time.Parse(time.RFC3339Nano, text); err == nil {
+		*n = flexInt64(parsed.Unix())
+		return nil
+	}
+	*n = 0
 	return nil
 }

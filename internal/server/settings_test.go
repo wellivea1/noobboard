@@ -1090,6 +1090,67 @@ func TestGeneralUserDiagnoseIncludesRepairRequestPlan(t *testing.T) {
 	}
 }
 
+func TestGeneralUserDiagnoseIncludesDirectRestartPlanWhenOptedIn(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "general-user-direct-restart-plan")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+	cfg.LLM.Provider = "openai"
+	cfg.LLM.OpenAIAuthMethod = config.OpenAIAuthMethodAPIKey
+	cfg.LLM.OpenAIAPIKey = "sk-test-local"
+	cfg.AppCatalog.GeneralUserRestartsEnabled = true
+	cfg.AppCatalog.RestartAllowedGeneralUser = map[string]bool{"emby": true}
+
+	app := newTestApp(t, cfg)
+	app.deps.Collectors.Docker = &recordingDockerCollector{apps: []models.AppStatus{{
+		AppID:                 "emby",
+		DisplayName:           "Emby",
+		ContainerID:           "container:Emby",
+		ContainerName:         "Emby",
+		Category:              "docker",
+		DockerState:           models.DockerExited,
+		CurrentStatus:         models.StatusOffline,
+		VisibleToGeneralUsers: true,
+	}}}
+	app.settingsMu.Lock()
+	app.deps.LLM = &recordingLLMClient{
+		diagnosis: llm.Diagnosis{
+			Severity:            models.SeverityHigh,
+			Confidence:          0.9,
+			IncidentType:        models.IncidentAppDown,
+			AffectedServices:    []string{"Emby"},
+			Diagnosis:           "Emby is down.",
+			GeneralUserSummary:  "Emby is not working.",
+			RecommendedActionID: "ask_admin_to_restart_container",
+			RecommendedTarget:   llm.ActionTarget{Kind: "app", IDOrName: "emby"},
+			ShouldNotifyAdmin:   true,
+		},
+	}
+	app.settingsMu.Unlock()
+
+	router := app.Router()
+	cookie, csrf := loginAs(t, router, "viewer", "change-me-now")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/user/diagnose", strings.NewReader(`{"question":"can you fix Emby?"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("general diagnose status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var response diagnosisResponse
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.AgentPlan == nil || !response.AgentPlan.CanExecute || !response.AgentPlan.CanRequestRepair || response.AgentPlan.ApprovalToken != "" {
+		t.Fatalf("general-user plan should expose direct restart without admin token: %#v", response.AgentPlan)
+	}
+	if response.AgentPlan.Target.ID != "emby" || response.AgentPlan.Status != "direct_restart_available" {
+		t.Fatalf("general-user direct restart plan did not resolve Emby: %#v", response.AgentPlan)
+	}
+}
+
 func TestGeneralUserRepairRequestCanBeApprovedByArmedAdmin(t *testing.T) {
 	oldDelay := agentRepairVerificationDelay
 	agentRepairVerificationDelay = 0
@@ -1247,6 +1308,82 @@ func TestGeneralUserDirectRestartCanRestartOptedInApp(t *testing.T) {
 	}
 	if collector.callCount != 1 || collector.called != docker.ActionRestart || collector.app.AppID != "emby" || !collector.app.RestartAllowedGeneralUser {
 		t.Fatalf("direct restart did not restart opted-in app once: count=%d action=%q app=%#v", collector.callCount, collector.called, collector.app)
+	}
+}
+
+func TestGeneralUserDirectRestartAutoReviewDenialBlocksDocker(t *testing.T) {
+	oldDelay := agentRepairVerificationDelay
+	agentRepairVerificationDelay = 0
+	t.Cleanup(func() { agentRepairVerificationDelay = oldDelay })
+	t.Chdir(filepath.Join("..", ".."))
+
+	cfg := config.Defaults()
+	cfg.Database.Path = filepath.Join(t.TempDir(), "dashboard.db.json")
+	cfg.FixtureDir = "fixtures"
+	cfg.LLM.Provider = "openai"
+	cfg.LLM.OpenAIAuthMethod = config.OpenAIAuthMethodAPIKey
+	cfg.LLM.OpenAIAPIKey = "sk-test-local"
+	cfg.LLM.ActionAutoReviewEnabled = true
+	cfg.LLM.ActionAutoReviewModel = "same"
+	cfg.LLM.ActionAutoReviewReferencePaths = []string{"docs/security.md"}
+	cfg.AppCatalog.GeneralUserRestartsEnabled = true
+	cfg.AppCatalog.RestartAllowedGeneralUser = map[string]bool{"emby": true}
+
+	app := newTestApp(t, cfg)
+	collector := &recordingDockerCollector{apps: []models.AppStatus{{
+		AppID:                 "emby",
+		DisplayName:           "Emby",
+		ContainerID:           "container:Emby",
+		ContainerName:         "Emby",
+		Category:              "docker",
+		DockerState:           models.DockerExited,
+		CurrentStatus:         models.StatusOffline,
+		VisibleToGeneralUsers: true,
+	}}}
+	app.deps.Collectors.Docker = collector
+	llmClient := &recordingLLMClient{
+		reviewDecision: llm.ActionReviewDecision{
+			Allow:      false,
+			Confidence: 0.88,
+			Summary:    "Local policy requires admin review.",
+			Issues:     []string{"The reviewer vetoed this direct restart."},
+			CheckedAt:  time.Now().UTC(),
+		},
+	}
+	app.settingsMu.Lock()
+	app.deps.LLM = llmClient
+	app.settingsMu.Unlock()
+
+	router := app.Router()
+	viewerCookie, viewerCSRF := loginAs(t, router, "viewer", "change-me-now")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/user/apps/emby/restart", strings.NewReader(`{"confirmed":true,"confirm_app_id":"emby"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", viewerCSRF)
+	req.AddCookie(viewerCookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("auto-review-denied direct restart status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if collector.callCount != 0 {
+		t.Fatalf("auto-review denial called docker: count=%d", collector.callCount)
+	}
+	if llmClient.reviewCalls != 1 || llmClient.reviewRequest.ActionID != "ask_admin_to_restart_container" || llmClient.reviewRequest.TargetID != "emby" || llmClient.reviewRequest.Via != "general_user_direct" {
+		t.Fatalf("auto-review request was not recorded correctly: calls=%d req=%#v", llmClient.reviewCalls, llmClient.reviewRequest)
+	}
+	tail, err := app.deps.Store.AuditTail(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawRefused bool
+	for _, entry := range tail {
+		if entry.Action == "user.app.restart.auto_review_refused" {
+			sawRefused = true
+		}
+	}
+	if !sawRefused {
+		t.Fatalf("auto-review refusal was not audited: %#v", tail)
 	}
 }
 
@@ -1964,6 +2101,12 @@ func TestCustomRoleSettingsHideAppsIncidentsAndFacts(t *testing.T) {
 	}
 	if len(snapshot.Incidents) != 0 || len(snapshot.Facts) != 0 {
 		t.Fatalf("hidden role app incidents/facts leaked: incidents=%#v facts=%#v", snapshot.Incidents, snapshot.Facts)
+	}
+	if snapshot.OverallStatus != models.StatusOnline {
+		t.Fatalf("hidden role app still affected overall status: %s summary=%q", snapshot.OverallStatus, snapshot.ServerSummary)
+	}
+	if strings.Contains(strings.ToLower(snapshot.ServerSummary), "emby") {
+		t.Fatalf("hidden role app leaked through summary: %q", snapshot.ServerSummary)
 	}
 }
 

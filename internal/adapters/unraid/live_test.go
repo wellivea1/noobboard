@@ -270,7 +270,7 @@ func TestLiveStatusCollectsParityStateFromSafeVars(t *testing.T) {
 						"mdResyncPos": "125",
 						"mdResyncAction": "check",
 						"mdResyncCorr": "1",
-						"mdResyncDt": "4",
+						"mdResyncDt": "2026-06-04T01:15:10.241Z",
 						"mdResyncDb": "100"
 					}
 				}
