@@ -24,13 +24,17 @@ const (
 	OpenAIChatGPTClientID       = "app_EMoamEEZ73f0CkXaXp7hrann"
 	OpenAIChatGPTIssuer         = "https://auth.openai.com"
 	OpenAIChatGPTCodexEndpoint  = "https://chatgpt.com/backend-api/codex/responses"
-	DefaultChatGPTCodexModel    = "gpt-5.3-codex"
+	DefaultChatGPTCodexModel    = "gpt-5.1-codex"
 	ChatGPTCodexReasoningHigh   = "high"
 	defaultChatGPTAccessSeconds = 3600
 )
 
 var chatGPTCodexAllowedModels = map[string]bool{
-	"gpt-5.3-codex": true,
+	"gpt-5.2-codex":      true,
+	"gpt-5.1-codex":      true,
+	"gpt-5.1-codex-max":  true,
+	"gpt-5.1-codex-mini": true,
+	"gpt-5-codex":        true,
 }
 
 type ChatGPTTokenResponse struct {
