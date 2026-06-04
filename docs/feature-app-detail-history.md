@@ -64,8 +64,9 @@ repair. Verified on this machine: `go build ./...` ✓, `go test ./...` ✓,
 - The approval-gated repair path now includes per-app `agent_repair_allowed`
   settings, restart-only server-side execution, single-use approval tokens,
   cooldown/rate-limit enforcement, post-restart verification, inline chat
-  outcome reporting, history notes, and lifecycle audit coverage. Autonomous
-  repair remains a separate future mode.
+  outcome reporting, history notes, and lifecycle audit coverage. Armed
+  autonomous restart repair is now implemented behind explicit admin enablement,
+  session arm, per-app opt-in, auto-review, and the same repair limits.
 - The visual harness now includes the LLM settings limit copy plus a rendered
   approval dialog/outcome state, so regressions in the armed/approved chat UI are
   caught without live LLM credentials.
@@ -498,13 +499,15 @@ weakening it.
   **Landed for approval-gated restart v1.**
 - **AR4:** security review + docs + harness coverage for the armed/approved flow.
   **Landed for approval-gated restart v1.**
+- **AR5:** armed-autonomous restart repair using the same server-side restart path,
+  plus mandatory auto-review and no popup after execution/refusal.
+  **Landed for restart-only autonomous repair.**
 
 ## Repair-specific open choices
-- **Autonomy level (key decision).** v1 recommended: **approval-gated while
-  armed** — the admin clicks "Allow fix" for each action. A later opt-in could
-  allow **armed-autonomous** repair (agent fixes allowlisted apps without a
-  per-action click during the arm window). Recommend shipping approval-gated
-  first; treat autonomous as a separate, clearly-flagged follow-up.
+- **Autonomy level (key decision).** v1 shipped as **approval-gated while
+  armed**. Armed-autonomous restart repair is now available for one non-online
+  opted-in app during the arm window, with mandatory auto-review and the same
+  cooldown/rate-limit checks.
 - **Executable action scope for v1:** restart-only (recommended) vs. also
   start/stop.
 - **Cooldown/rate-limit defaults:** current v1 uses 1/app/10min, 5/hour global.
