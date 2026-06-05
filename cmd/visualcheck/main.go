@@ -115,6 +115,8 @@ type flags struct {
 	UserRepairActionVisible     bool     `json:"userRepairActionVisible,omitempty"`
 	UserRepairDirectActionCount int      `json:"userRepairDirectActionCount,omitempty"`
 	UserRepairActionLabel       string   `json:"userRepairActionLabel,omitempty"`
+	UserPromptTryAgainVisible   bool     `json:"userPromptTryAgainVisible,omitempty"`
+	UserPromptInlineSuccess     bool     `json:"userPromptInlineSuccess,omitempty"`
 	UserMenuToggleVisible       bool     `json:"userMenuToggleVisible,omitempty"`
 	UserDrawerOpen              bool     `json:"userDrawerOpen,omitempty"`
 	UserDrawerHidden            bool     `json:"userDrawerHidden,omitempty"`
@@ -547,6 +549,10 @@ func run(opts options) (visualResult, error) {
 	if _, err := evalFlags(cdp, generalUserExpression); err != nil {
 		return result, err
 	}
+	desktopUserPromptAction, err := evalFlags(cdp, userPromptActionExpression)
+	if err != nil {
+		return result, err
+	}
 	desktopUserAppDetail, err := evalFlags(cdp, userAppDetailExpression)
 	if err != nil {
 		return result, err
@@ -661,34 +667,35 @@ func run(opts options) (visualResult, error) {
 	}
 
 	result.Flags = map[string]flags{
-		"overview":               overview,
-		"server":                 serverFlags,
-		"router":                 router,
-		"apps":                   apps,
-		"incidents":              incidents,
-		"diagnostics":            diagnostics,
-		"queue":                  queue,
-		"admin":                  admin,
-		"settings":               settings,
-		"agentRepair":            agentRepair,
-		"customization":          monitorCustomization,
-		"mobileOverview":         mobileOverview,
-		"mobileRouter":           mobileRouter,
-		"mobileApps":             mobileApps,
-		"mobileIncidents":        mobileIncidents,
-		"mobileDiagnostics":      mobileDiagnostics,
-		"mobileQueue":            mobileQueue,
-		"mobileAdmin":            mobileAdmin,
-		"mobileSettings":         mobileSettings,
-		"desktopUserAppDetail":   desktopUserAppDetail,
-		"desktopUserInfraDetail": desktopUserInfraDetail,
-		"mobileUserHome":         mobileUserHome,
-		"mobileUserAppDetail":    mobileUserAppDetail,
-		"mobileUserInfraDetail":  mobileUserInfraDetail,
-		"mobileUserDrawer":       mobileUserDrawer,
-		"mobileDrawerClose":      mobileUserDrawerClose,
+		"overview":                overview,
+		"server":                  serverFlags,
+		"router":                  router,
+		"apps":                    apps,
+		"incidents":               incidents,
+		"diagnostics":             diagnostics,
+		"queue":                   queue,
+		"admin":                   admin,
+		"settings":                settings,
+		"agentRepair":             agentRepair,
+		"customization":           monitorCustomization,
+		"mobileOverview":          mobileOverview,
+		"mobileRouter":            mobileRouter,
+		"mobileApps":              mobileApps,
+		"mobileIncidents":         mobileIncidents,
+		"mobileDiagnostics":       mobileDiagnostics,
+		"mobileQueue":             mobileQueue,
+		"mobileAdmin":             mobileAdmin,
+		"mobileSettings":          mobileSettings,
+		"desktopUserPromptAction": desktopUserPromptAction,
+		"desktopUserAppDetail":    desktopUserAppDetail,
+		"desktopUserInfraDetail":  desktopUserInfraDetail,
+		"mobileUserHome":          mobileUserHome,
+		"mobileUserAppDetail":     mobileUserAppDetail,
+		"mobileUserInfraDetail":   mobileUserInfraDetail,
+		"mobileUserDrawer":        mobileUserDrawer,
+		"mobileDrawerClose":       mobileUserDrawerClose,
 	}
-	if err := assertVisualFlags(overview, serverFlags, router, apps, incidents, diagnostics, queue, admin, settings, agentRepair, monitorCustomization, mobileOverview, mobileRouter, mobileApps, mobileIncidents, mobileDiagnostics, mobileQueue, mobileAdmin, mobileSettings, desktopUserAppDetail, desktopUserInfraDetail, mobileUserHome, mobileUserAppDetail, mobileUserInfraDetail, mobileUserDrawer, mobileUserDrawerClose); err != nil {
+	if err := assertVisualFlags(overview, serverFlags, router, apps, incidents, diagnostics, queue, admin, settings, agentRepair, monitorCustomization, mobileOverview, mobileRouter, mobileApps, mobileIncidents, mobileDiagnostics, mobileQueue, mobileAdmin, mobileSettings, desktopUserPromptAction, desktopUserAppDetail, desktopUserInfraDetail, mobileUserHome, mobileUserAppDetail, mobileUserInfraDetail, mobileUserDrawer, mobileUserDrawerClose); err != nil {
 		return result, err
 	}
 
@@ -819,7 +826,7 @@ func captureScreenshot(cdp *cdpClient, path string) error {
 	return os.WriteFile(path, data, 0o644)
 }
 
-func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, queue, admin, settings, agentRepair, customization, mobileOverview, mobileRouter, mobileApps, mobileIncidents, mobileDiagnostics, mobileQueue, mobileAdmin, mobileSettings, desktopUserAppDetail, desktopUserInfraDetail, mobileUserHome, mobileUserAppDetail, mobileUserInfraDetail, mobileUserDrawer, mobileUserDrawerClose flags) error {
+func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, queue, admin, settings, agentRepair, customization, mobileOverview, mobileRouter, mobileApps, mobileIncidents, mobileDiagnostics, mobileQueue, mobileAdmin, mobileSettings, desktopUserPromptAction, desktopUserAppDetail, desktopUserInfraDetail, mobileUserHome, mobileUserAppDetail, mobileUserInfraDetail, mobileUserDrawer, mobileUserDrawerClose flags) error {
 	var failures []string
 	if !overview.DashboardVisible {
 		failures = append(failures, "dashboard was not visible after login")
@@ -916,6 +923,9 @@ func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, q
 	}
 	if agentRepair.BodyHorizontalOverflow || agentRepair.ButtonTextOverflow || agentRepair.ElementBoundsOverflow {
 		failures = append(failures, "agent repair UI layout overflow detected: "+agentRepair.ElementBoundsOffender)
+	}
+	if !desktopUserPromptAction.UserPromptTryAgainVisible || !desktopUserPromptAction.UserPromptInlineSuccess {
+		failures = append(failures, "compact chat direct app action did not show persistent try-again success state")
 	}
 	if mobileSettings.SettingsMenuButtonCount < 6 || mobileSettings.VisibleSettingsSections != 1 {
 		failures = append(failures, "mobile settings submenu did not render correctly")
@@ -1513,6 +1523,88 @@ const generalUserExpression = `(async () => {
     sourcePillText: document.querySelector('#source-pill')?.textContent || '',
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow,
+    ...mobileAudit
+  };
+})()`
+
+const userPromptActionExpression = `(async () => {
+  const waitFor = async (predicate, timeout = 3000) => {
+    const started = Date.now();
+    let value = predicate();
+    while (!value && Date.now() - started < timeout) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      value = predicate();
+    }
+    return value;
+  };
+  document.querySelector('#user-chat-open')?.click();
+  await waitFor(() => document.body.dataset.compactView === 'chat');
+  const output = document.querySelector('#user-chat-output');
+  const plan = {
+    can_request_repair: true,
+    can_execute: true,
+    direct_action: 'start',
+    recommended_action_id: 'ask_admin_to_restart_container',
+    target: { kind: 'app', id: 'emby', label: 'Emby', resolved: true }
+  };
+  if (output && typeof renderUserRepairRequestPrompt === 'function') {
+    output.classList.remove('muted', 'chat-empty');
+    output.classList.add('chat-result');
+    output.replaceChildren(renderUserRepairRequestPrompt(plan, { general_user_summary: 'Emby is stopped.' }));
+  }
+  const prompt = document.querySelector('.user-repair-prompt');
+  const button = [...(prompt?.querySelectorAll('button') || [])].find((element) => /start now/i.test(element.textContent || ''));
+  const originalApi = window.api;
+  const originalConfirm = window.confirm;
+  const mockApi = async (path) => {
+    if (path === '/api/user/apps/emby/action') {
+      return {
+        status: 'executed',
+        outcome: {
+          action: 'start',
+          target_id: 'emby',
+          target_label: 'Emby',
+          before_status: 'offline',
+          after_status: 'online',
+          recovered: true,
+          verified: true,
+          message: 'Emby started successfully.'
+        }
+      };
+    }
+    return originalApi(path);
+  };
+  window.api = mockApi;
+  window.confirm = () => true;
+  try {
+    api = mockApi;
+  } catch (error) {}
+  try {
+    button?.click();
+    await waitFor(() => /try again/i.test(button?.textContent || '') && !!document.querySelector('.user-repair-prompt .user-action-result'));
+  } finally {
+    window.api = originalApi;
+    window.confirm = originalConfirm;
+    try {
+      api = originalApi;
+    } catch (error) {}
+  }
+  const result = document.querySelector('.user-repair-prompt .user-action-result');
+  const message = result?.textContent || '';
+  const buttonText = button?.textContent || '';
+  const chatPanel = document.querySelector('.panel.user-chat');
+  if (chatPanel) chatPanel.dataset.chatAvailable = 'true';
+  if (typeof setCompactView === 'function') setCompactView('chat');
+  await new Promise((resolve) => requestAnimationFrame(resolve));
+  const resultVisible = !!result && visibleElement(result);
+  document.querySelector('#user-status-open')?.click();
+  const mobileAudit = await auditMobileShell();
+  return {
+    pageTitle: document.querySelector('#page-title')?.textContent || '',
+    userPromptTryAgainVisible: /try again/i.test(buttonText),
+    userPromptInlineSuccess: resultVisible && message.includes('Emby started successfully.') && message.includes('Send another message or try again'),
+    bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
+    buttonTextOverflow: hasButtonTextOverflow(),
     ...mobileAudit
   };
 })()`

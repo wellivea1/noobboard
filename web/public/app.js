@@ -1833,11 +1833,14 @@ async function runUserAppRestart(app, button = null) {
   return runUserAppAction(app, "restart", button);
 }
 
-async function runUserAppAction(app, action, button = null) {
+async function runUserAppAction(app, action, button = null, options = {}) {
   const appID = app?.app_id || "";
   const label = appDisplayName(app);
   const actionName = String(action || "").trim().toLowerCase();
   const actionLabel = userAppActionLabel(actionName);
+  let keepButtonState = false;
+  let inlineSuccessOutcome = null;
+  const returnToChat = !!options.inlineSuccess && state.userView === "chat";
   if (!appID) {
     showNotice("App id is required.", "error");
     return;
@@ -1861,19 +1864,65 @@ async function runUserAppAction(app, action, button = null) {
       if (state.userView === "app-detail" && result.outcome.target_id) {
         state.userDetailID = result.outcome.target_id;
       }
-      showNotice(agentRepairOutcomeNotice(result.outcome), result.outcome.recovered ? "info" : "error");
+      if (options.inlineSuccess && result.outcome.recovered) {
+        inlineSuccessOutcome = result.outcome;
+        keepButtonState = true;
+      } else {
+        showNotice(agentRepairOutcomeNotice(result.outcome), result.outcome.recovered ? "info" : "error");
+      }
     } else {
       showNotice(`${actionLabel} requested for ${label}.`);
     }
     await refresh();
+    if (inlineSuccessOutcome) {
+      if (returnToChat) setCompactView("chat");
+      keepButtonState = renderUserAppActionInlineSuccess(button, app, actionName, inlineSuccessOutcome);
+      if (!keepButtonState) {
+        showNotice(agentRepairOutcomeNotice(inlineSuccessOutcome), "info");
+      }
+    }
   } catch (error) {
     showNotice(error.message, "error");
   } finally {
-    if (button?.isConnected) {
+    if (button?.isConnected && keepButtonState) {
+      button.disabled = false;
+    } else if (button?.isConnected) {
       button.disabled = false;
       button.textContent = original;
     }
   }
+}
+
+function renderUserAppActionInlineSuccess(button, app, action, outcome = {}) {
+  const prompt = button?.closest?.(".user-repair-prompt");
+  if (!prompt) return false;
+  const label = cleanChatText(outcome.target_label) || appDisplayName(app);
+  const actionText = directActionPastTense(action);
+  const actions = prompt.querySelector(".agent-plan-actions");
+  if (!actions) return false;
+  prompt.querySelector(".user-action-result")?.remove();
+  const result = node("div", { class: "agent-repair-outcome recovered user-action-result", role: "status", "aria-live": "polite" },
+    node("strong", { text: `${label} ${actionText} successfully.` }),
+    node("small", { text: "Send another message or try again if you continue to have issues." }),
+  );
+  actions.insertAdjacentElement("afterend", result);
+  button.disabled = false;
+  button.textContent = "Try again";
+  button.setAttribute("data-glyph", "r");
+  button.title = `Try ${userAppActionLabel(action).toLowerCase()} again`;
+  const pill = prompt.querySelector(".agent-plan-head .settings-state-pill");
+  if (pill) {
+    pill.classList.remove("state-warn", "state-muted", "state-bad");
+    pill.classList.add("state-ok");
+    pill.textContent = sentenceCase(directActionPastTense(action));
+  }
+  return true;
+}
+
+function sentenceCase(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 function userAppActionLabel(action) {
@@ -2850,7 +2899,7 @@ function renderUserRepairRequestPrompt(plan, diagnosis = {}) {
         type: "button",
         class: "primary command",
         "data-glyph": directAction === "start" ? ">" : "r",
-        onclick: (event) => runUserAppAction({ app_id: target.id, display_name: label }, directAction, event.currentTarget),
+        onclick: (event) => runUserAppAction({ app_id: target.id, display_name: label }, directAction, event.currentTarget, { inlineSuccess: true }),
         text: `${directActionLabel} now`,
       }) : null,
       node("button", {
