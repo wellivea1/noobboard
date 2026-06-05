@@ -2946,7 +2946,7 @@ function renderArrayStartPrompt(plan) {
         "data-glyph": ">",
         disabled: !canStart,
         onclick: (event) => runArrayStartAction(plan, event.currentTarget),
-        text: "Start array",
+        text: "Start storage",
       }),
     ),
   );
@@ -3482,9 +3482,9 @@ function renderAgentRepairOutcome(outcome) {
 
 function agentRepairOutcomeNotice(outcome) {
   if (String(outcome?.action || "").trim() === "start_array") {
-    if (outcome?.recovered) return "Unraid array started successfully.";
-    if (outcome?.verified) return "Start array ran, but the array still is not started.";
-    return "Start array ran, but verification did not complete.";
+    if (outcome?.recovered) return "Server storage started successfully.";
+    if (outcome?.verified) return "Start storage ran, but server storage still is not started.";
+    return "Start storage ran, but verification did not complete.";
   }
   if (outcome?.recovered) return "App action ran and the status updated.";
   if (outcome?.verified) return "App action ran, but the app still is not responding.";

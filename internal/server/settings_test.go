@@ -2643,7 +2643,7 @@ func TestUserDiagnoseSuggestsRepairWhenModelMissesSingleVisibleDownApp(t *testin
 	}
 }
 
-func TestUserDiagnoseOffersLLMOnlyArrayStartWhenArrayStopped(t *testing.T) {
+func TestUserDiagnoseOffersLLMOnlyArrayStartWhenArrayStoppedEvenWhenNASStatusHidden(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Database.Path = serverCacheTestPath(t, "compact-diagnose-array-start")
 	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
@@ -2652,7 +2652,7 @@ func TestUserDiagnoseOffersLLMOnlyArrayStartWhenArrayStopped(t *testing.T) {
 	cfg.LLM.OpenAIAPIKey = "sk-test-local"
 	cfg.Visibility.DefaultRole = models.RoleGeneralUser
 	cfg.Visibility.GeneralUserCanUseLLM = true
-	cfg.Visibility.ShowNASStatusToUsers = true
+	cfg.Visibility.ShowNASStatusToUsers = false
 
 	now := time.Now().UTC()
 	stopped := models.InfrastructureStatus{
