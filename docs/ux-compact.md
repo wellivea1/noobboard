@@ -71,8 +71,15 @@ acceptable for the owner — **leave it as-is** apart from shared components.
    - `Check again` may live in the header but must be labeled or have an `aria-label` and be
      ≥44×44.
 3. **Your apps** — list of visible apps: icon, name, plain status (`Working` / `Not working` /
-   `Problem` / `Unknown`), optional one-line plain summary. No Start/Stop/Restart on this
-   surface.
+   `Problem` / `Unknown`), optional one-line plain summary. No Start/Stop/Restart on the
+   list cards themselves.
+   Exception: the app detail page may show compact Start, Restart, and Stop controls when
+   an admin has enabled standard-user app controls and opted that app in.
+   Stopped apps should present Start as the usable fix; Restart should be disabled for an
+   exited/stopped container because the server expects Start for that state.
+   The "Ask what's wrong" diagnosis may also auto-start or auto-restart that same opted-in
+   app when the separate standard-user automatic-fixes setting is enabled; it must render the
+   outcome plainly and still offer admin escalation on refusal/failure.
 4. **Technical details** — a `<details>` disclosure, **closed by default**, that may contain
    the existing technical rows for a curious user. This is the only place banned terms may
    appear on the compact surface.

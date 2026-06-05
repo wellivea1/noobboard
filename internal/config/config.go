@@ -80,10 +80,11 @@ type PrivacyConfig struct {
 }
 
 type AppCatalogConfig struct {
-	IconOverrides              map[string]string `json:"icon_overrides"`
-	AgentRepairAllowed         map[string]bool   `json:"agent_repair_allowed,omitempty"`
-	GeneralUserRestartsEnabled bool              `json:"general_user_restarts_enabled,omitempty"`
-	RestartAllowedGeneralUser  map[string]bool   `json:"restart_allowed_general_user,omitempty"`
+	IconOverrides                map[string]string `json:"icon_overrides"`
+	AgentRepairAllowed           map[string]bool   `json:"agent_repair_allowed,omitempty"`
+	GeneralUserRestartsEnabled   bool              `json:"general_user_restarts_enabled,omitempty"`
+	GeneralUserAutoRepairEnabled bool              `json:"general_user_auto_repair_enabled,omitempty"`
+	RestartAllowedGeneralUser    map[string]bool   `json:"restart_allowed_general_user,omitempty"`
 }
 
 type NotificationConfig struct {
@@ -715,6 +716,9 @@ func applyEnv(cfg *Config) {
 	if v := envValue("NOOBBOARD_ACTION_AUTO_REVIEW_ENABLED", "HSD_ACTION_AUTO_REVIEW_ENABLED"); v != "" {
 		cfg.LLM.ActionAutoReviewEnabled = parseBool(v)
 	}
+	if v := envValue("NOOBBOARD_AGENT_CONTROL_ENABLED", "HSD_AGENT_CONTROL_ENABLED"); v != "" {
+		cfg.LLM.AgentControlEnabled = parseBool(v)
+	}
 	if v := envValue("NOOBBOARD_AGENT_AUTO_REPAIR_ENABLED", "HSD_AGENT_AUTO_REPAIR_ENABLED"); v != "" {
 		cfg.LLM.AgentAutoRepairEnabled = parseBool(v)
 	}
@@ -983,6 +987,8 @@ func applyConfigKey(cfg *Config, section, key, value string) {
 		cfg.LLM.AnthropicModel = value
 	case "llm.action_auto_review_enabled":
 		cfg.LLM.ActionAutoReviewEnabled = parseBool(value)
+	case "llm.agent_control_enabled":
+		cfg.LLM.AgentControlEnabled = parseBool(value)
 	case "llm.agent_auto_repair_enabled":
 		cfg.LLM.AgentAutoRepairEnabled = parseBool(value)
 	case "llm.action_auto_review_model":
@@ -995,6 +1001,8 @@ func applyConfigKey(cfg *Config, section, key, value string) {
 		cfg.AppCatalog.AgentRepairAllowed = splitBoolMap(value)
 	case "app_catalog.general_user_restarts_enabled":
 		cfg.AppCatalog.GeneralUserRestartsEnabled = parseBool(value)
+	case "app_catalog.general_user_auto_repair_enabled":
+		cfg.AppCatalog.GeneralUserAutoRepairEnabled = parseBool(value)
 	case "app_catalog.restart_allowed_general_user":
 		cfg.AppCatalog.RestartAllowedGeneralUser = splitBoolMap(value)
 	case "integrations.mode":

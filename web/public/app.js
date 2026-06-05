@@ -1398,18 +1398,25 @@ function renderAppDetail(app, history) {
 }
 
 function userRepairDetailActions(app) {
-  if (hasAdminSurface() || !isUserRepairCandidate(app)) return null;
-  const canRestart = !!app.restart_allowed_general_user;
+  if (hasAdminSurface()) return null;
+  const canControl = !!app.restart_allowed_general_user && isUserAppControlTarget(app);
+  if (!canControl && !isUserRepairCandidate(app)) return null;
   const request = latestUserRepairRequestForApp(app.app_id);
   const pending = request?.status === "pending";
   return node("section", { class: "detail-actions user-repair-actions" },
-    canRestart ? node("button", {
-      type: "button",
-      class: "primary command",
-      "data-glyph": "r",
-      onclick: (event) => runUserAppRestart(app, event.currentTarget),
-      text: "Restart now",
-    }) : node("button", {
+    canControl ? node("div", { class: "user-app-control-row" }, userAppControlActions(app).map((item) => {
+      const disabledReason = userAppControlDisabledReason(item.action, app);
+      return node("button", {
+        type: "button",
+        class: item.primary ? "primary command" : "command",
+        "data-glyph": item.glyph,
+        disabled: !!disabledReason,
+        title: disabledReason || item.title,
+        "aria-label": `${item.label} ${appDisplayName(app)}`,
+        onclick: (event) => runUserAppAction(app, item.action, event.currentTarget),
+        text: item.label,
+      });
+    })) : node("button", {
       type: "button",
       class: "primary command",
       "data-glyph": "!",
@@ -1424,9 +1431,31 @@ function userRepairDetailActions(app) {
   );
 }
 
+function isUserAppControlTarget(app) {
+  return !!(app?.data_source === "unraid-docker" || app?.docker_state || app?.container_id || app?.container_name);
+}
+
 function isUserRepairCandidate(app) {
   const status = normalizeStatus(app?.current_status);
-  return status !== "online" && (app?.data_source === "unraid-docker" || app?.docker_state || app?.container_id || app?.container_name);
+  return status !== "online" && isUserAppControlTarget(app);
+}
+
+function userAppControlActions() {
+  return [
+    { action: "start", label: "Start", glyph: ">", title: "Start this app", primary: true },
+    { action: "restart", label: "Restart", glyph: "r", title: "Restart this app", primary: true },
+    { action: "stop", label: "Stop", glyph: "x", title: "Stop this app", primary: false },
+  ];
+}
+
+function userAppControlDisabledReason(action, app) {
+  const status = normalizeStatus(app?.current_status);
+  const dockerState = String(app?.docker_state || "").toLowerCase();
+  if (action === "start" && (dockerState === "running" || status === "online" || status === "degraded")) return "Already running";
+  if (action === "stop" && (dockerState === "exited" || (status === "offline" && dockerState !== "running"))) return "Already stopped";
+  if (action === "restart" && dockerState === "exited") return "Stopped; use Start";
+  if (action === "restart" && status === "online") return "Working now";
+  return "";
 }
 
 function requestAdminRepairForApp(app, button = null) {
@@ -1439,27 +1468,40 @@ function requestAdminRepairForApp(app, button = null) {
 }
 
 async function runUserAppRestart(app, button = null) {
+  return runUserAppAction(app, "restart", button);
+}
+
+async function runUserAppAction(app, action, button = null) {
   const appID = app?.app_id || "";
   const label = appDisplayName(app);
+  const actionName = String(action || "").trim().toLowerCase();
+  const actionLabel = userAppActionLabel(actionName);
   if (!appID) {
     showNotice("App id is required.", "error");
     return;
   }
-  if (!confirm(`Restart ${label}?`)) return;
+  if (!["start", "stop", "restart"].includes(actionName)) {
+    showNotice("App action is not supported.", "error");
+    return;
+  }
+  if (!confirm(`${actionLabel} ${label}?`)) return;
   const original = button?.textContent || "";
   if (button) {
     button.disabled = true;
-    button.textContent = "Restarting";
+    button.textContent = userAppActionProgressText(actionName);
   }
   try {
-    const result = await api(`/api/user/apps/${encodeURIComponent(appID)}/restart`, {
+    const result = await api(`/api/user/apps/${encodeURIComponent(appID)}/action`, {
       method: "POST",
-      body: JSON.stringify({ confirmed: true, confirm_app_id: appID }),
+      body: JSON.stringify({ action: actionName, confirmed: true, confirm_app_id: appID }),
     });
     if (result.outcome) {
+      if (state.userView === "app-detail" && result.outcome.target_id) {
+        state.userDetailID = result.outcome.target_id;
+      }
       showNotice(agentRepairOutcomeNotice(result.outcome), result.outcome.recovered ? "info" : "error");
     } else {
-      showNotice(`Restart requested for ${label}.`);
+      showNotice(`${actionLabel} requested for ${label}.`);
     }
     await refresh();
   } catch (error) {
@@ -1469,6 +1511,45 @@ async function runUserAppRestart(app, button = null) {
       button.disabled = false;
       button.textContent = original;
     }
+  }
+}
+
+function userAppActionLabel(action) {
+  switch (String(action || "").trim().toLowerCase()) {
+    case "start":
+      return "Start";
+    case "stop":
+      return "Stop";
+    case "restart":
+      return "Restart";
+    default:
+      return "Control";
+  }
+}
+
+function directActionPastTense(action) {
+  switch (String(action || "").trim().toLowerCase()) {
+    case "start":
+      return "started";
+    case "stop":
+      return "stopped";
+    case "restart":
+      return "restarted";
+    default:
+      return "changed";
+  }
+}
+
+function userAppActionProgressText(action) {
+  switch (action) {
+    case "start":
+      return "Starting";
+    case "stop":
+      return "Stopping";
+    case "restart":
+      return "Restarting";
+    default:
+      return "Working";
   }
 }
 
@@ -2281,11 +2362,19 @@ async function runDiagnosis(question, output, options = {}) {
       );
       maybeOpenAgentApprovalDialog(result.agent_plan);
     } else {
+      const userPlanNodes = [];
+      if (result.agent_plan?.auto_repair_attempted) {
+        userPlanNodes.push(renderAgentPlanPrompt(result.agent_plan));
+        if (!result.agent_plan.auto_executed && result.agent_plan.can_request_repair) userPlanNodes.push(renderUserRepairRequestPrompt(result.agent_plan, result));
+      } else if (result.agent_plan?.can_request_repair) {
+        userPlanNodes.push(renderUserRepairRequestPrompt(result.agent_plan, result));
+      }
+      const autoFixed = !!(result.agent_plan?.auto_executed && result.agent_plan?.outcome?.recovered);
       output.replaceChildren(
         node("strong", { text: "Answer" }),
         node("p", { text: result.general_user_summary || result.diagnosis || "I could not find a clear answer." }),
-        result.agent_plan?.can_request_repair ? renderUserRepairRequestPrompt(result.agent_plan, result) : null,
-        result.should_notify_admin ? node("p", { class: "muted", text: "Tell the admin if you need this fixed." }) : null,
+        ...userPlanNodes,
+        result.should_notify_admin && !autoFixed ? node("p", { class: "muted", text: "Tell the admin if you need this fixed." }) : null,
       );
     }
     showNotice("Diagnosis completed.");
@@ -2329,12 +2418,12 @@ function renderAgentPlanPrompt(plan) {
 
 function agentPlanStatusText(plan) {
   if (plan?.auto_executed && plan?.outcome?.recovered) return "Fixed";
-  if (plan?.auto_executed) return "Restart sent";
+  if (plan?.auto_executed) return `${userAppActionLabel(plan?.outcome?.action || plan?.direct_action || "restart")} sent`;
   switch (plan?.status) {
     case "approval_ready":
       return "Ready";
     case "approval_needs_arm":
-      return "Arm first";
+      return "Enable session";
     case "approval_rate_limited":
       return "Limited";
     case "auto_review_refused":
@@ -2359,26 +2448,28 @@ function renderUserRepairRequestPrompt(plan, diagnosis = {}) {
   const target = plan?.target || {};
   if (!plan?.can_request_repair || !target.id) return null;
   const label = target.label || target.id;
-  const directRestart = !!plan.can_execute;
+  const directAction = String(plan.direct_action || "restart").trim().toLowerCase();
+  const directActionLabel = userAppActionLabel(directAction);
+  const directActionAvailable = !!plan.can_execute;
   return node("section", { class: "agent-plan-prompt user-repair-prompt" },
     node("div", { class: "agent-plan-head" },
       node("span", {},
-        node("strong", { text: directRestart ? "Restart this app" : "Ask admin to fix this" }),
-        node("small", { text: directRestart ? `${label} can be restarted from here.` : `${label} can be sent to an admin for review.` }),
+        node("strong", { text: directActionAvailable ? `${directActionLabel} this app` : "Ask admin to fix this" }),
+        node("small", { text: directActionAvailable ? `${label} can be ${directActionPastTense(directAction)} from here.` : `${label} can be sent to an admin for review.` }),
       ),
-      node("span", { class: `settings-state-pill ${directRestart ? "state-ok" : "state-warn"}`, text: directRestart ? "Ready" : "Admin review" }),
+      node("span", { class: `settings-state-pill ${directActionAvailable ? "state-ok" : "state-warn"}`, text: directActionAvailable ? "Ready" : "Admin review" }),
     ),
     node("div", { class: "agent-plan-actions" },
-      directRestart ? node("button", {
+      directActionAvailable ? node("button", {
         type: "button",
         class: "primary command",
-        "data-glyph": "r",
-        onclick: (event) => runUserAppRestart({ app_id: target.id, display_name: label }, event.currentTarget),
-        text: "Restart now",
+        "data-glyph": directAction === "start" ? ">" : "r",
+        onclick: (event) => runUserAppAction({ app_id: target.id, display_name: label }, directAction, event.currentTarget),
+        text: `${directActionLabel} now`,
       }) : null,
       node("button", {
         type: "button",
-        class: directRestart ? "command" : "primary command",
+        class: directActionAvailable ? "command" : "primary command",
         "data-glyph": "!",
         onclick: (event) => requestAdminRepair(plan, diagnosis, event.currentTarget),
         text: "Ask admin",
@@ -2499,7 +2590,7 @@ function normalizeAgentApprovalOptions(plan) {
       description: "Permit this single fix attempt.",
       enabled: !!plan?.can_execute,
       selected: false,
-      reason: plan?.can_execute ? "" : "Arm this session and enable automatic repair for the target app first.",
+      reason: plan?.can_execute ? "" : "Enable fixes for this session and turn on admin/AI restart for the target app first.",
     },
   ];
 }
@@ -2541,7 +2632,7 @@ function openAgentApprovalDialog(plan) {
     class: "openai-auth-status",
     "aria-live": "polite",
     "data-tone": plan.can_execute ? "info" : "bad",
-    text: plan.can_execute ? "Approval will run one restart for the selected app." : "Automatic fixes require per-app opt-in and an armed admin session.",
+    text: plan.can_execute ? "Approval will run one restart for the selected app." : "Automatic fixes require per-app opt-in and this admin session to be enabled for fixes.",
   });
   const updateSelection = () => {
     const selectedOption = approvalOptions.find((option) => option.id === selectedChoice);
@@ -2595,7 +2686,7 @@ function openAgentApprovalDialog(plan) {
       node("div", { class: "openai-auth-title-group" },
         node("span", { class: "openai-auth-mark", "aria-hidden": "true", text: "AI" }),
         node("div", {},
-          node("p", { class: "eyebrow", text: "Agent approval" }),
+          node("p", { class: "eyebrow", text: "Fix approval" }),
           node("h2", { id: "agent-approval-title", text: "Allow automatic fix?" }),
         ),
       ),
@@ -3583,7 +3674,8 @@ function renderBlacklistSettings(item, data) {
 function renderAppImageSettings(item, data) {
   const overrides = { ...(data?.icon_overrides || {}) };
   const repairAllowed = { ...(data?.agent_repair_allowed || {}) };
-  const userRestartEnabled = settingToggle("Allow standard-user restart buttons", !!data?.general_user_restarts_enabled);
+  const userRestartEnabled = settingToggle("Allow standard-user app controls", !!data?.general_user_restarts_enabled);
+  const userAutoRepairEnabled = settingToggle("Allow standard-user automatic fixes", !!data?.general_user_auto_repair_enabled);
   const userRestartAllowed = { ...(data?.restart_allowed_general_user || {}) };
   const apps = state.snapshot?.apps || [];
   const appRows = [];
@@ -3596,8 +3688,8 @@ function renderAppImageSettings(item, data) {
       placeholder: app.icon_url && app.icon_source !== "built-in" ? app.icon_url : "https://example.local/icon.png",
       inputmode: "url",
     });
-    const repairToggle = settingToggle("Allow automatic repair", key ? !!repairAllowed[key] : false);
-    const userRestartToggle = settingToggle("Allow user restart", key ? !!userRestartAllowed[key] : false);
+    const repairToggle = settingToggle("Allow admin/AI restart", key ? !!repairAllowed[key] : false);
+    const userRestartToggle = settingToggle("Allow user controls", key ? !!userRestartAllowed[key] : false);
     appRows.push({ key, input, repairInput: repairToggle.input, userRestartInput: userRestartToggle.input });
     return node("div", { class: "settings-app-image-row" },
       renderAppLogo(app),
@@ -3640,9 +3732,9 @@ function renderAppImageSettings(item, data) {
   extras.forEach(([key, url]) => addExtra(key, url));
   const body = node("div", { class: "settings-form" },
     node("section", { class: "settings-subsection" },
-      node("h4", { text: "Standard-user restarts" }),
-      userRestartEnabled.element,
-      node("p", { class: "muted", text: "When enabled, only apps with the per-app user restart toggle can show a compact-view restart button." }),
+      node("h4", { text: "Standard-user app controls" }),
+      node("div", { class: "settings-toggle-grid" }, userRestartEnabled.element, userAutoRepairEnabled.element),
+      node("p", { class: "muted", text: "When app controls are enabled, only apps with the per-app user-control toggle can show compact-view Start, Restart, and Stop buttons. Automatic fixes let standard-user diagnosis start or restart an opted-in app without an admin session." }),
     ),
     node("section", { class: "settings-subsection" },
       node("h4", { text: "Known apps" }),
@@ -3681,6 +3773,7 @@ function renderAppImageSettings(item, data) {
       icon_overrides,
       agent_repair_allowed,
       general_user_restarts_enabled: userRestartEnabled.input.checked,
+      general_user_auto_repair_enabled: userAutoRepairEnabled.input.checked,
       restart_allowed_general_user,
     }, status);
   });
@@ -3719,15 +3812,15 @@ function renderLLMSettings(item, data) {
     settingChoice(authMethodName, "api_key", "API key", "Uses a saved OpenAI API key.", selectedAuthMethod === "api_key"),
   ];
   const openAIModel = settingSelectField("OpenAI API model", knownModelValue(OPENAI_MODEL_OPTIONS, settings.openai_model, "gpt-5.5"), OPENAI_MODEL_OPTIONS);
-  const chatGPTModel = settingSelectField("ChatGPT model", knownModelValue(CHATGPT_MODEL_OPTIONS, settings.openai_model, "gpt-5.5"), CHATGPT_MODEL_OPTIONS);
+  const chatGPTModel = settingSelectField("ChatGPT account model", knownModelValue(CHATGPT_MODEL_OPTIONS, settings.openai_model, "gpt-5.5"), CHATGPT_MODEL_OPTIONS);
   const anthropicModel = settingSelectField("Anthropic model", knownModelValue(ANTHROPIC_MODEL_OPTIONS, settings.anthropic_model, "claude-sonnet-4-5"), ANTHROPIC_MODEL_OPTIONS);
   const timeout = durationSecondsField("Timeout", settings.timeout || 45000000000);
-  const agentControlEnabled = settingToggle("Enable action approval gate", !!settings.agent_control_enabled);
-  const agentAutoRepairEnabled = settingToggle("Enable autonomous app restart", !!settings.agent_auto_repair_enabled);
-  const agentArmDuration = durationSecondsField("Arm window", settings.agent_arm_duration || settings.agent_readiness?.agent_arm_duration || 600000000000);
-  const actionAutoReviewEnabled = settingToggle("Require auto-review before fixes", !!settings.action_auto_review_enabled);
-  const actionAutoReviewModel = settingSelectField("Auto-review model", settings.action_auto_review_model || "same", actionReviewModelOptions(settings));
-  const actionAutoReviewReasoning = settingSelectField("Auto-review reasoning", settings.action_auto_review_reasoning || "", [
+  const agentControlEnabled = settingToggle("Allow admin-approved app fixes", !!settings.agent_control_enabled);
+  const agentAutoRepairEnabled = settingToggle("Allow automatic admin restart after diagnosis", !!settings.agent_auto_repair_enabled);
+  const agentArmDuration = durationSecondsField("Temporary fix access duration", settings.agent_arm_duration || settings.agent_readiness?.agent_arm_duration || 600000000000);
+  const actionAutoReviewEnabled = settingToggle("Require reviewer before fixes", !!settings.action_auto_review_enabled);
+  const actionAutoReviewModel = settingSelectField("Reviewer model", settings.action_auto_review_model || "same", actionReviewModelOptions(settings));
+  const actionAutoReviewReasoning = settingSelectField("Reviewer reasoning", settings.action_auto_review_reasoning || "", [
     { value: "", label: "Provider default" },
     { value: "low", label: "Low" },
     { value: "medium", label: "Medium" },
@@ -3765,7 +3858,7 @@ function renderLLMSettings(item, data) {
     node("div", { class: "settings-choice-list" }, authChoices.map((choice) => choice.element)),
     browserMessage,
     headlessMessage,
-    node("p", { class: "muted", text: "API-key mode uses OpenAI API models. ChatGPT login uses current GPT models through the ChatGPT account connector; unsupported saved values fall back before a request is sent." }),
+    node("p", { class: "muted", text: "API-key mode uses OpenAI API model access. ChatGPT login uses the ChatGPT account connector, which has different account-scoped model support; Codex-only model IDs are not offered here and unsupported saved values fall back before a request is sent." }),
     node("div", { class: "settings-field-grid" }, openAIModel.element, chatGPTModel.element),
     apiKeyBlock,
     clearChatGPT.element,
@@ -3800,16 +3893,16 @@ function renderLLMSettings(item, data) {
     ),
     openAISection,
     anthropicSection,
-    node("section", { class: "settings-subsection" },
-      node("h4", { text: "Action auto-review" }),
-      node("div", { class: "settings-toggle-grid" }, actionAutoReviewEnabled.element),
-      node("div", { class: "settings-field-grid" }, actionAutoReviewModel.element, actionAutoReviewReasoning.element),
-      actionAutoReviewReferences.element,
-      node("p", { class: "muted", text: "When enabled, NoobBoard asks the selected reviewer model to check the proposed fix against these local reference docs before any approved restart runs." }),
-    ),
     renderLLMAgentReadiness(settings.agent_readiness || {}, {
       controls: [agentControlEnabled.element, agentAutoRepairEnabled.element, agentArmDuration.element],
     }),
+    node("section", { class: "settings-subsection" },
+      node("h4", { text: "Safety reviewer" }),
+      node("div", { class: "settings-toggle-grid" }, actionAutoReviewEnabled.element),
+      node("div", { class: "settings-field-grid" }, actionAutoReviewModel.element, actionAutoReviewReasoning.element),
+      actionAutoReviewReferences.element,
+      node("p", { class: "muted", text: "When enabled, NoobBoard asks the selected reviewer model to check the proposed fix against these local reference docs before any approved app action runs." }),
+    ),
     node("section", { class: "settings-subsection" },
       node("h4", { text: "Who can ask" }),
       node("div", { class: "settings-policy-list" }, policyEditors.map((editor) => editor.element)),
@@ -3900,20 +3993,20 @@ function renderLLMAgentReadiness(readiness, options = {}) {
     "data-glyph": armed ? "x" : "v",
     disabled: !controlEnabled,
     onclick: () => setAgentArm(!armed, armSeconds, armAction),
-    text: armed ? "Disarm" : "Arm",
+    text: armed ? "Disable fixes" : "Enable fixes",
   });
   return node("section", { class: "settings-subsection agent-readiness" },
     node("div", { class: "settings-section-title-row" },
-      node("h4", { text: "Agent approval" }),
-      settingsStatePill(readiness.mutating_tools_available ? "available" : "locked", readiness.mutating_tools_available ? "Actions available" : "Actions locked"),
+      node("h4", { text: "Admin app fixes" }),
+      settingsStatePill(readiness.mutating_tools_available ? "available" : "locked", readiness.mutating_tools_available ? "Fix path available" : "Fix path locked"),
     ),
     options.controls?.length ? node("div", { class: "settings-field-grid" }, options.controls) : null,
     node("div", { class: "settings-status-list" },
       settingsStatusRow("Read-only live tools", activeText, readiness.admin_tools_enabled ? "available" : "locked", readOnlyNames || "No read-only tools are registered."),
-      settingsStatusRow("Action arm", agentArmStatusText(readiness), armed ? "armed" : controlEnabled ? "planned" : "locked", agentArmDetailText(readiness), armAction),
-      settingsStatusRow("Automatic fixes", readiness.mutating_tools_available ? "Restart approval available" : "Locked", readiness.mutating_tools_available ? "available" : "locked", readiness.mutating_tools_available ? agentRepairLimitDetail(readiness) : "Chat cannot start, stop, restart, or change infrastructure yet."),
-      settingsStatusRow("Auto-review", autoReview.enabled ? "Available" : agentModeStatusText(autoReview.status), autoReview.status || "locked", autoReviewDetail(reference)),
-      settingsStatusRow("Auto action", agentModeStatusText(autoAction.status), autoAction.status || "locked", autoActionDetail(autoAction, readiness)),
+      settingsStatusRow("Temporary fix access", agentArmStatusText(readiness), armed ? "armed" : controlEnabled ? "planned" : "locked", agentArmDetailText(readiness), armAction),
+      settingsStatusRow("Approval popup", readiness.agent_control_enabled ? "Ready after temporary access" : "Off", readiness.agent_control_enabled ? "planned" : "locked", readiness.agent_control_enabled ? agentRepairLimitDetail(readiness) : "Turn on admin-approved app fixes before chat can ask to change an app."),
+      settingsStatusRow("Safety reviewer", autoReview.enabled ? "Available" : agentModeStatusText(autoReview.status), autoReview.status || "locked", autoReviewDetail(reference)),
+      settingsStatusRow("Automatic admin restart", agentModeStatusText(autoAction.status), autoAction.status || "locked", autoActionDetail(autoAction, readiness)),
     ),
     node("p", { class: "muted agent-reference-note", text: reference.design_finding || "Future repair actions require schema validation, audit policy, and explicit approval." }),
   );
@@ -3921,11 +4014,11 @@ function renderLLMAgentReadiness(readiness, options = {}) {
 
 function autoActionDetail(autoAction, readiness) {
   if (!autoAction?.enabled) return "Off. Diagnosis will propose a fix and use the approval popup.";
-  if (!readiness?.agent_control_enabled) return "Enable the action approval gate first.";
+  if (!readiness?.agent_control_enabled) return "Turn on admin-approved fixes first.";
   const status = String(autoAction.status || "").toLowerCase();
-  if (status === "review_required") return "Requires action auto-review so a separate model can veto the restart.";
-  if (status === "armed") return "Armed for this session. Only non-online opted-in apps can be restarted automatically.";
-  return "Arm this admin session before diagnosis can run an autonomous restart.";
+  if (status === "review_required") return "Requires the safety reviewer so a separate model can veto the restart.";
+  if (status === "armed") return "Temporary access is enabled. Only non-online opted-in apps can be restarted automatically.";
+  return "Enable temporary fix access before diagnosis can run an automatic restart.";
 }
 
 function autoReviewDetail(reference) {
@@ -3934,25 +4027,25 @@ function autoReviewDetail(reference) {
   const count = Number(reference.reference_count || 0);
   const refText = count === 1 ? "1 reference" : `${count} references`;
   const reasoning = reference.reasoning ? `, ${reference.reasoning} reasoning` : "";
-  return `Reviewer: ${model}${reasoning}; ${refText} configured. Fails closed before any approved restart runs.`;
+  return `Reviewer: ${model}${reasoning}; ${refText} configured. Fails closed before any approved app action runs.`;
 }
 
 function agentRepairLimitDetail(readiness) {
   const cooldownSeconds = durationToSeconds(readiness.repair_cooldown) || 600;
   const windowSeconds = durationToSeconds(readiness.repair_rate_limit_window) || 3600;
   const max = Number(readiness.repair_rate_limit_max || 5);
-  return `Only opted-in apps can be restarted. Limit: 1 per app every ${formatSeconds(cooldownSeconds)}, ${max} total per ${formatSeconds(windowSeconds)}.`;
+  return `Only opted-in apps can be changed. Limit: 1 per app every ${formatSeconds(cooldownSeconds)}, ${max} total per ${formatSeconds(windowSeconds)}.`;
 }
 
 function agentArmStatusText(readiness) {
-  if (readiness.agent_armed) return "Armed";
-  return readiness.agent_control_enabled ? "Disarmed" : "Off";
+  if (readiness.agent_armed) return "Enabled";
+  return readiness.agent_control_enabled ? "Not enabled" : "Off";
 }
 
 function agentArmDetailText(readiness) {
-  if (!readiness.agent_control_enabled) return "Enable the action approval gate and save before this session can be armed.";
-  if (readiness.agent_armed && readiness.agent_armed_until) return `This admin session is armed until ${timeOnly(readiness.agent_armed_until)}.`;
-  return "Arm only when you are ready to approve a specific automatic fix.";
+  if (!readiness.agent_control_enabled) return "Turn on admin-approved app fixes and save before temporary access can be enabled.";
+  if (readiness.agent_armed && readiness.agent_armed_until) return `This admin session can run app fixes until ${timeOnly(readiness.agent_armed_until)}.`;
+  return "Enable only when you are ready to approve or supervise a specific app fix. It expires automatically.";
 }
 
 function timeOnly(value) {
@@ -3975,14 +4068,14 @@ async function setAgentArm(armed, durationSeconds, button) {
   const originalText = button?.textContent || "";
   if (button) {
     button.disabled = true;
-    button.textContent = armed ? "Arming" : "Disarming";
+    button.textContent = armed ? "Enabling fixes" : "Disabling fixes";
   }
   try {
     await api("/api/admin/agent/arm", {
       method: "POST",
       body: JSON.stringify({ armed: !!armed, duration_seconds: durationSeconds || 0 }),
     });
-    showNotice(armed ? "Agent approval armed for this admin session." : "Agent approval disarmed.");
+    showNotice(armed ? "Temporary app fix access enabled." : "Temporary app fix access disabled.");
     await loadSettings();
   } catch (error) {
     showNotice(error.message, "error");
@@ -4029,9 +4122,9 @@ function agentModeStatusText(status) {
     case "available":
       return "Available";
     case "planned":
-      return "Planned";
+      return "Not enabled";
     case "armed":
-      return "Armed";
+      return "Enabled";
     case "review_required":
       return "Needs review";
     case "blocked":

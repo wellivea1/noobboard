@@ -269,7 +269,7 @@ Settings destination: notifications + account), is specified in **`docs/ux-compa
 
 ## Workstream C — Customizable LLM access + optional full agent access
 
-**Status:** `in-progress` (read-only live API tools implemented; approval-gated restart v1 implemented; armed-autonomous restart repair implemented behind explicit admin settings, reviewer approval, per-app opt-in, cooldown/rate-limit, and verification)
+**Status:** `in-progress` (read-only live API tools implemented; approval-gated restart v1 implemented; session-enabled autonomous restart repair implemented behind explicit admin settings, reviewer approval, per-app opt-in, cooldown/rate-limit, and verification)
 **Goal:** (1) Make LLM access easy to customize per role/policy, and (2) add an **opt-in,
 manually enabled** "agent mode" where the LLM can *act* to resolve problems (e.g., restart
 a stuck container) rather than only producing an advisory report.
@@ -309,15 +309,19 @@ model call a small, vetted set of **tools** that map onto operations the app alr
 performs safely. Current baseline also requires a structured `recommended_action_target`;
 the server resolves app targets against the admin snapshot before showing an approval
 popup, and unresolved app targets stay non-actionable.
-The action-approval arm gate is also in place: it is disabled by default, requires
-`agent_control_enabled=true`, and arms only the current admin session for a bounded window.
+The app-fix session gate is also in place: it is disabled by default, requires
+`agent_control_enabled=true`, and enables fixes only for the current admin session for a bounded window.
 Restart execution is now available through the server-side approval endpoint and, when
-manually enabled, through armed-autonomous diagnosis repair. Both paths are restart-only,
+manually enabled, through session-enabled autonomous diagnosis repair. Both paths are restart-only,
 limited to apps explicitly opted in with `app_catalog.agent_repair_allowed`, and bounded
 by the per-app/global repair limits. The server verifies the target after restart and
 reports the outcome back to chat. Autonomous diagnosis repair additionally requires
-`agent_auto_repair_enabled=true`, `action_auto_review_enabled=true`, an armed admin
+`agent_auto_repair_enabled=true`, `action_auto_review_enabled=true`, an enabled admin
 session, a non-online app target, and reviewer approval before Docker is called.
+The standard-user side now has a separate permanent app setting: direct Start/Restart/Stop
+buttons and diagnosis auto-fix can run only for apps opted in with the standard-user
+app-control setting, with `general_user_auto_repair_enabled=true` required before diagnosis
+can auto-start or auto-restart anything.
 
 **Design, grounded in the references:**
 - **Read-only live API tools (implemented first).** Admin-requested diagnosis can opt into
@@ -326,7 +330,7 @@ session, a non-online app target, and reviewer approval before Docker is called.
   normal collectors and never expose raw API clients, credentials, shell, filesystem,
   Docker control, Unraid mutations, or UniFi configuration mutation. General-user policies
   never receive tools.
-- **Narrow mutation allowlist.** Current v1 executes only `docker_restart` for an opted-in app after a server-signed approval or through the armed-autonomous diagnosis path. Future tools wrap existing audited operations only:
+- **Narrow mutation allowlist.** Current v1 executes only `docker_restart` for an opted-in app after a server-signed approval or through the session-enabled autonomous diagnosis path. Future tools wrap existing audited operations only:
   `get_status`, `get_logs` (bounded + redacted), `docker_restart`, `docker_start`,
   `docker_stop` — all already admin-only, CSRF/audit-gated, and resolved from the
   server-side snapshot. **No shell, no filesystem, no arbitrary commands, no Unraid/UniFi
@@ -335,11 +339,11 @@ session, a non-online app target, and reviewer approval before Docker is called.
 - **Approval modes** (mirroring Codex's suggest / auto-edit / full-auto and OpenCode's
   per-tool permissions):
   - `propose` (default): agent emits a plan + tool calls; an admin confirms each action.
-  - `auto`: implemented for the admin-defined low-risk allowlist as armed-autonomous
+  - `auto`: implemented for the admin-defined low-risk allowlist as session-enabled autonomous
     restart of one non-online opted-in app, with reviewer veto, per-action rate limits,
     and a global kill switch.
 - **Hard gating.** Agent mode is disabled by default and requires (a) an explicit config
-  flag *and* (b) a separate per-session "arm" action in the admin UI. It is admin-port and
+  flag *and* (b) a separate per-session enable action in the admin UI. It is admin-port and
   admin-role only. Every tool call is audited with full transcript; every executed action
   notifies admins.
 - **Bounded agent loop.** incident facts → LLM with tool schema → validate tool call
@@ -373,19 +377,22 @@ the repair capability changes.
 ### Acceptance criteria
 - [ ] Part 1: roles/limits/provider/model are configurable from a structured UI; redaction
       and role scoping are provably unchanged.
-- [x] Part 1: LLM settings show an agent-readiness/approval section that distinguishes
-      active read-only tools, the approval popup, auto-review, and armed auto-action mode.
+- [x] Part 1: LLM settings show an app-fix readiness section that distinguishes
+      active read-only tools, the approval popup, safety review, and session-enabled automatic restart.
 - [x] Part 2 first slice: restart repair is off by default per app; enabling execution
-      requires both `agent_control_enabled` and an explicit in-app arm step.
+      requires both `agent_control_enabled` and an explicit in-app session-enable step.
 - [x] Restart approval is schema-validated, restricted to the restart allowlist, single-use,
       and audited.
 - [x] Add cooldown/rate-limit, post-action verification, and chat outcome reporting.
 - [x] Current `propose` mode requires per-action confirmation through the admin
       approval popup.
-- [x] `auto` mode honors the allowlist, reviewer gate, rate limits, session arm, and kill switch.
+- [x] `auto` mode honors the allowlist, reviewer gate, rate limits, session enablement, and kill switch.
+- [x] General-user diagnosis can auto-start or auto-restart an opted-in app through a permanent setting, without using the admin session gate.
 - [x] Redaction failures and invalid tool calls fail closed (no action taken).
 - [x] `docs/llm-policy.md` and `docs/security.md` updated to reflect the new capability.
-- [x] `go test ./...`, build, and `cmd/visualcheck` all pass for this repair slice.
+- [x] `go test ./...` and build pass for this repair slice.
+- [ ] `cmd/visualcheck` passes for the updated compact controls once Edge-based
+      visual verification is available in the local environment.
 
 ### Open questions
 - Which actions are safe enough for `auto` mode out of the box? Start with single-container

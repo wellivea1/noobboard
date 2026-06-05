@@ -28,10 +28,11 @@ func TestRuntimeSettingsPersistAndClone(t *testing.T) {
 			RedactEmails:         true,
 		},
 		AppCatalog: config.AppCatalogConfig{
-			IconOverrides:              map[string]string{"emby": "https://example.invalid/emby.png"},
-			AgentRepairAllowed:         map[string]bool{"emby": true},
-			GeneralUserRestartsEnabled: true,
-			RestartAllowedGeneralUser:  map[string]bool{"emby": true},
+			IconOverrides:                map[string]string{"emby": "https://example.invalid/emby.png"},
+			AgentRepairAllowed:           map[string]bool{"emby": true},
+			GeneralUserRestartsEnabled:   true,
+			GeneralUserAutoRepairEnabled: true,
+			RestartAllowedGeneralUser:    map[string]bool{"emby": true},
 		},
 		LLM:           cfg.LLM,
 		Notifications: cfg.Notifications,
@@ -45,6 +46,7 @@ func TestRuntimeSettingsPersistAndClone(t *testing.T) {
 	settings.AppCatalog.AgentRepairAllowed["emby"] = false
 	settings.AppCatalog.RestartAllowedGeneralUser["emby"] = false
 	settings.AppCatalog.GeneralUserRestartsEnabled = false
+	settings.AppCatalog.GeneralUserAutoRepairEnabled = false
 	settings.LLM.Policies["admin_requested"] = models.LLMPolicy{}
 
 	got, ok, err := store.RuntimeSettings()
@@ -66,7 +68,7 @@ func TestRuntimeSettingsPersistAndClone(t *testing.T) {
 	if !got.AppCatalog.AgentRepairAllowed["emby"] {
 		t.Fatalf("saved app repair settings shared caller map: %#v", got.AppCatalog.AgentRepairAllowed)
 	}
-	if !got.AppCatalog.GeneralUserRestartsEnabled || !got.AppCatalog.RestartAllowedGeneralUser["emby"] {
+	if !got.AppCatalog.GeneralUserRestartsEnabled || !got.AppCatalog.GeneralUserAutoRepairEnabled || !got.AppCatalog.RestartAllowedGeneralUser["emby"] {
 		t.Fatalf("saved app user restart settings shared caller map: %#v", got.AppCatalog)
 	}
 
@@ -75,6 +77,7 @@ func TestRuntimeSettingsPersistAndClone(t *testing.T) {
 	got.AppCatalog.AgentRepairAllowed["emby"] = false
 	got.AppCatalog.RestartAllowedGeneralUser["emby"] = false
 	got.AppCatalog.GeneralUserRestartsEnabled = false
+	got.AppCatalog.GeneralUserAutoRepairEnabled = false
 	got.LLM.Policies["admin_requested"] = models.LLMPolicy{}
 	gotAgain, _, err := store.RuntimeSettings()
 	if err != nil {
@@ -92,7 +95,7 @@ func TestRuntimeSettingsPersistAndClone(t *testing.T) {
 	if !gotAgain.AppCatalog.AgentRepairAllowed["emby"] {
 		t.Fatalf("loaded app repair settings shared returned map: %#v", gotAgain.AppCatalog.AgentRepairAllowed)
 	}
-	if !gotAgain.AppCatalog.GeneralUserRestartsEnabled || !gotAgain.AppCatalog.RestartAllowedGeneralUser["emby"] {
+	if !gotAgain.AppCatalog.GeneralUserRestartsEnabled || !gotAgain.AppCatalog.GeneralUserAutoRepairEnabled || !gotAgain.AppCatalog.RestartAllowedGeneralUser["emby"] {
 		t.Fatalf("loaded app user restart settings shared returned map: %#v", gotAgain.AppCatalog)
 	}
 
@@ -116,7 +119,7 @@ func TestRuntimeSettingsPersistAndClone(t *testing.T) {
 	if !persisted.AppCatalog.AgentRepairAllowed["emby"] {
 		t.Fatalf("persisted app repair setting = %#v", persisted.AppCatalog.AgentRepairAllowed)
 	}
-	if !persisted.AppCatalog.GeneralUserRestartsEnabled || !persisted.AppCatalog.RestartAllowedGeneralUser["emby"] {
+	if !persisted.AppCatalog.GeneralUserRestartsEnabled || !persisted.AppCatalog.GeneralUserAutoRepairEnabled || !persisted.AppCatalog.RestartAllowedGeneralUser["emby"] {
 		t.Fatalf("persisted app user restart setting = %#v", persisted.AppCatalog)
 	}
 }
