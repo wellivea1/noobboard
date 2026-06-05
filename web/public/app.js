@@ -1453,6 +1453,7 @@ function userAppControlDisabledReason(action, app) {
   const dockerState = String(app?.docker_state || "").toLowerCase();
   if (action === "start" && (dockerState === "running" || status === "online" || status === "degraded")) return "Already running";
   if (action === "stop" && (dockerState === "exited" || (status === "offline" && dockerState !== "running"))) return "Already stopped";
+  if (action === "restart" && dockerState === "exited") return "Stopped; use Start";
   if (action === "restart" && status === "online") return "Working now";
   return "";
 }

@@ -390,7 +390,9 @@ the repair capability changes.
 - [x] General-user diagnosis can auto-start or auto-restart an opted-in app through a permanent setting, without using the admin session gate.
 - [x] Redaction failures and invalid tool calls fail closed (no action taken).
 - [x] `docs/llm-policy.md` and `docs/security.md` updated to reflect the new capability.
-- [x] `go test ./...`, build, and `cmd/visualcheck` all pass for this repair slice.
+- [x] `go test ./...` and build pass for this repair slice.
+- [ ] `cmd/visualcheck` passes for the updated compact controls once Edge-based
+      visual verification is available in the local environment.
 
 ### Open questions
 - Which actions are safe enough for `auto` mode out of the box? Start with single-container

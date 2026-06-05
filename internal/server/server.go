@@ -2838,6 +2838,9 @@ func validateGeneralUserAppActionState(action docker.ContainerAction, app models
 			return errors.New("this app is already stopped")
 		}
 	case docker.ActionRestart:
+		if app.DockerState == models.DockerExited {
+			return errors.New("this app is stopped; use Start")
+		}
 		if status == models.StatusOnline {
 			return errors.New("this app is currently working")
 		}

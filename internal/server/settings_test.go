@@ -1618,13 +1618,13 @@ func TestGeneralUserRepairRequestCanBeApprovedByArmedAdmin(t *testing.T) {
 	}
 }
 
-func TestGeneralUserDirectRestartCanRestartOptedInApp(t *testing.T) {
+func TestGeneralUserDirectRestartCanRestartDegradedOptedInApp(t *testing.T) {
 	oldDelay := agentRepairVerificationDelay
 	agentRepairVerificationDelay = 0
 	t.Cleanup(func() { agentRepairVerificationDelay = oldDelay })
 
 	cfg := config.Defaults()
-	cfg.Database.Path = serverCacheTestPath(t, "general-user-direct-restart")
+	cfg.Database.Path = serverCacheTestPath(t, "general-user-direct-restart-degraded")
 	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
 	cfg.AppCatalog.GeneralUserRestartsEnabled = true
 	cfg.AppCatalog.RestartAllowedGeneralUser = map[string]bool{"emby": true}
@@ -1636,8 +1636,8 @@ func TestGeneralUserDirectRestartCanRestartOptedInApp(t *testing.T) {
 		ContainerID:           "container:Emby",
 		ContainerName:         "Emby",
 		Category:              "docker",
-		DockerState:           models.DockerExited,
-		CurrentStatus:         models.StatusOffline,
+		DockerState:           models.DockerRunning,
+		CurrentStatus:         models.StatusDegraded,
 		VisibleToGeneralUsers: true,
 	}},
 		afterControlApps: []models.AppStatus{{
@@ -1824,8 +1824,8 @@ func TestGeneralUserDirectRestartAutoReviewDenialBlocksDocker(t *testing.T) {
 		ContainerID:           "container:Emby",
 		ContainerName:         "Emby",
 		Category:              "docker",
-		DockerState:           models.DockerExited,
-		CurrentStatus:         models.StatusOffline,
+		DockerState:           models.DockerRunning,
+		CurrentStatus:         models.StatusDegraded,
 		VisibleToGeneralUsers: true,
 	}}}
 	app.deps.Collectors.Docker = collector
@@ -1961,6 +1961,26 @@ func TestGeneralUserDirectRestartRefusesUnsafeTargets(t *testing.T) {
 				VisibleToGeneralUsers: true,
 			},
 			wantStatus:  http.StatusNotFound,
+			wantNoCalls: true,
+		},
+		{
+			name: "stopped app should use start",
+			cfg: func(cfg config.Config) config.Config {
+				cfg.AppCatalog.GeneralUserRestartsEnabled = true
+				cfg.AppCatalog.RestartAllowedGeneralUser = map[string]bool{"emby": true}
+				return cfg
+			},
+			app: models.AppStatus{
+				AppID:                 "emby",
+				DisplayName:           "Emby",
+				ContainerID:           "container:Emby",
+				ContainerName:         "Emby",
+				Category:              "docker",
+				DockerState:           models.DockerExited,
+				CurrentStatus:         models.StatusOffline,
+				VisibleToGeneralUsers: true,
+			},
+			wantStatus:  http.StatusConflict,
 			wantNoCalls: true,
 		},
 		{

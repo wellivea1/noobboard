@@ -518,29 +518,23 @@ weakening it.
 
 # General-user repair + admin-side fixes (follow-up, reviewed 2026-06-04)
 
-The approval-gated **admin** restart repair shipped in PR #27 and is solid (build,
-tests, harness green; every gate enforced; my earlier infra-history banned-term
-finding was fixed). The gaps below are what remain incomplete — concentrated on
-the **general-user side**, which today has no working repair path at all.
+The approval-gated **admin** restart repair shipped in PR #27. Later repair work
+added the general-user request path, the per-app standard-user direct-control path,
+and the standard-user diagnosis auto-fix path. The notes below are historical gap
+analysis plus the resolved design; keep the implementation notes at the bottom of
+this section authoritative when planning follow-up work.
 
 ## Confirmed gaps
 
-**General-user side (the main gap):**
-- `diagnose` attaches `agent_plan` only when `mode == AdminRequested && role ==
-  Admin` (`server.go` ~1351). A general user's diagnosis carries no plan, so the
-  compact chat — which already renders `result.agent_plan` (`app.js` ~2170) —
-  never shows a repair affordance. The model's `recommended_action_id` + target
-  are computed for general users and then discarded.
-- The only general-user action, `POST /api/user/notify-admin`, is a **stub**: it
-  records an audit entry and returns `"queued"` but delivers nothing and carries
-  no fix context (just free text). Nothing bridges a user report to the admin
-  approval flow.
-- `models.AppStatus.RestartAllowedGeneralUser` exists but is referenced **nowhere
-  else** (no general-user control route; only `/api/user/{diagnose,notify-admin,
-  notification-preferences}`). A latent capability the original design implied but
-  never wired.
-- No outcome feedback: even when an admin repairs, the reporting user is never
-  told the app recovered.
+**General-user side (resolved in later repair PRs):**
+- General-user diagnosis now carries a role-scoped `agent_plan` and can expose a
+  request affordance, direct app-control affordance, or auto-fix outcome.
+- General-user repair requests are persisted, shown to admins, and store outcomes
+  for the requester.
+- `RestartAllowedGeneralUser` is wired through app-catalog settings, snapshot
+  projection, compact detail controls, and the general-user action endpoints.
+- Direct controls now cover Start, Restart, and Stop. Stopped apps use Start;
+  Restart is for non-online running apps.
 
 **Admin-side quality:**
 - **Verification window too short.** `agentRepairVerificationDelay = 2s` + a single
@@ -616,8 +610,8 @@ executed as a command.
   `general_user_auto_repair_enabled` switch lets standard-user diagnosis auto-start
   or auto-restart that same opted-in app through the shared server-side safety path.
 - **GR3 - Tests, `/security-review`, docs, harness:** backend tests now cover
-  general-user repair requests, direct restart success, and refusal for
-  non-opted-in/hidden/blacklisted/online apps; `security.md` and
+  general-user repair requests, direct start/stop/restart success, and refusal for
+  non-opted-in/hidden/blacklisted/online/stopped-restart apps; `security.md` and
   `api-config.md` describe the gates. Remaining harness work: add visual flags
   for the new compact affordances (plain language, >=44px, no overflow) and
   update `/security-review` output when that endpoint includes feature-specific

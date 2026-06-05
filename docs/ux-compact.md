@@ -75,6 +75,8 @@ acceptable for the owner — **leave it as-is** apart from shared components.
    list cards themselves.
    Exception: the app detail page may show compact Start, Restart, and Stop controls when
    an admin has enabled standard-user app controls and opted that app in.
+   Stopped apps should present Start as the usable fix; Restart should be disabled for an
+   exited/stopped container because the server expects Start for that state.
    The "Ask what's wrong" diagnosis may also auto-start or auto-restart that same opted-in
    app when the separate standard-user automatic-fixes setting is enabled; it must render the
    outcome plainly and still offer admin escalation on refusal/failure.
