@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/wellivea1/noobboard/internal/models"
 )
@@ -32,8 +33,42 @@ func ValidateDiagnosis(data []byte) (Diagnosis, error) {
 	if err := json.Unmarshal(data, &diagnosis); err != nil {
 		return Diagnosis{}, err
 	}
+	diagnosis.normalize()
 	diagnosis.inferMissingActionTarget()
 	return diagnosis, diagnosis.Validate()
+}
+
+func (d *Diagnosis) normalize() {
+	d.Diagnosis = cleanModelText(d.Diagnosis)
+	d.GeneralUserSummary = cleanModelText(d.GeneralUserSummary)
+	d.AdminMessage = cleanModelText(d.AdminMessage)
+	d.RecommendedActionID = cleanModelText(d.RecommendedActionID)
+	d.RecommendedTarget.Kind = cleanModelText(d.RecommendedTarget.Kind)
+	d.RecommendedTarget.IDOrName = cleanModelText(d.RecommendedTarget.IDOrName)
+	d.AffectedServices = cleanModelTextSlice(d.AffectedServices)
+	d.Evidence = cleanModelTextSlice(d.Evidence)
+}
+
+func cleanModelText(value string) string {
+	text := strings.TrimSpace(value)
+	if strings.EqualFold(text, "null") {
+		return ""
+	}
+	return text
+}
+
+func cleanModelTextSlice(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		text := cleanModelText(value)
+		if text != "" {
+			out = append(out, text)
+		}
+	}
+	return out
 }
 
 func (d *Diagnosis) inferMissingActionTarget() {

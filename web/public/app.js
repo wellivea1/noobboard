@@ -562,7 +562,7 @@ function node(tag, attrs = {}, ...children) {
   const element = document.createElement(tag);
   for (const [key, value] of Object.entries(attrs)) {
     if (key === "class") element.className = value;
-    else if (key === "text") element.textContent = value;
+    else if (key === "text") element.textContent = value === null || value === undefined ? "" : value;
     else if (key.startsWith("on") && typeof value === "function") element.addEventListener(key.slice(2), value);
     else if (value !== false && value !== null && value !== undefined) element.setAttribute(key, value === true ? "" : value);
   }
@@ -1511,6 +1511,26 @@ function setChatError(output, message) {
   output.classList.remove("chat-empty", "chat-unavailable", "chat-result", "chat-pending", "muted");
   output.classList.add("chat-error");
   output.textContent = message;
+}
+
+function cleanChatText(value) {
+  if (value === null || value === undefined) return "";
+  const text = String(value).trim();
+  if (!text || text.toLowerCase() === "null") return "";
+  return text;
+}
+
+function firstChatText(...values) {
+  for (const value of values) {
+    const text = cleanChatText(value);
+    if (text) return text;
+  }
+  return "";
+}
+
+function cleanChatList(values) {
+  if (!Array.isArray(values)) return [];
+  return values.map(cleanChatText).filter(Boolean);
 }
 
 function setChatControlsBusy(input, button, busy) {
@@ -2666,11 +2686,14 @@ async function runDiagnosis(question, output, options = {}) {
     output.classList.remove("chat-empty", "muted", "chat-pending", "chat-error");
     output.classList.add("chat-result");
     if (adminSurface) {
+      const evidence = cleanChatList(result.evidence);
+      const diagnosisText = firstChatText(result.diagnosis, result.general_user_summary, "No diagnosis returned.");
+      const adminMessage = cleanChatText(result.admin_message);
       output.replaceChildren(
         node("strong", { text: `${result.severity} confidence ${Math.round((result.confidence || 0) * 100)}%` }),
-        node("p", { text: result.diagnosis || result.general_user_summary || "No diagnosis returned." }),
-        result.evidence?.length ? node("p", { class: "muted", text: `Evidence: ${result.evidence.join("; ")}` }) : null,
-        result.admin_message ? node("p", { class: "muted", text: result.admin_message }) : null,
+        node("p", { text: diagnosisText }),
+        evidence.length ? node("p", { class: "muted", text: `Evidence: ${evidence.join("; ")}` }) : null,
+        adminMessage ? node("p", { class: "muted", text: adminMessage }) : null,
         result.agent_plan ? renderAgentPlanPrompt(result.agent_plan) : null,
       );
       maybeOpenAgentApprovalDialog(result.agent_plan);
@@ -2683,9 +2706,10 @@ async function runDiagnosis(question, output, options = {}) {
         userPlanNodes.push(renderUserRepairRequestPrompt(result.agent_plan, result));
       }
       const autoFixed = !!(result.agent_plan?.auto_executed && result.agent_plan?.outcome?.recovered);
+      const answerText = firstChatText(result.general_user_summary, result.diagnosis, "I could not find a clear answer.");
       output.replaceChildren(
         node("strong", { text: "Answer" }),
-        node("p", { text: result.general_user_summary || result.diagnosis || "I could not find a clear answer." }),
+        node("p", { text: answerText }),
         ...userPlanNodes,
         result.should_notify_admin && !autoFixed ? node("p", { class: "muted", text: "Tell the admin if you need this fixed." }) : null,
       );
@@ -2707,16 +2731,19 @@ function renderAgentPlanPrompt(plan) {
   const statusText = agentPlanStatusText(plan);
   const statusTone = agentPlanStatusTone(plan);
   const targetText = agentPlanTargetText(plan);
-  return node("section", { class: "agent-plan-prompt" },
+  const title = firstChatText(plan.title, "Agent fix plan");
+  const summary = firstChatText(plan.summary, "Review the model recommendation before allowing any action.");
+  const autoRepairMessage = cleanChatText(plan.auto_repair_message);
+  return node("section", { class: "agent-plan-prompt", "data-plan-id": plan.id || "" },
     node("div", { class: "agent-plan-head" },
       node("span", {},
-        node("strong", { text: plan.title || "Agent fix plan" }),
-        node("small", { text: plan.summary || "Review the model recommendation before allowing any action." }),
+        node("strong", { text: title }),
+        node("small", { text: summary }),
         targetText ? node("small", { text: targetText }) : null,
       ),
       node("span", { class: `settings-state-pill ${statusTone}`, text: statusText }),
     ),
-    plan.auto_repair_message ? node("p", { class: "muted", text: plan.auto_repair_message }) : null,
+    autoRepairMessage ? node("p", { class: "muted", text: autoRepairMessage }) : null,
     plan.outcome ? renderAgentRepairOutcome(plan.outcome) : null,
     requiresApproval ? node("div", { class: "agent-plan-actions" },
       node("button", {
@@ -2798,7 +2825,7 @@ async function requestAdminRepair(plan, diagnosis = {}, button = null) {
     button.textContent = "Sending";
   }
   try {
-    const summary = diagnosis.general_user_summary || diagnosis.diagnosis || plan.summary || "A user asked for help with this app.";
+    const summary = firstChatText(diagnosis.general_user_summary, diagnosis.diagnosis, plan.summary, "A user asked for help with this app.");
     const result = await api("/api/user/repair-request", {
       method: "POST",
       body: JSON.stringify({
@@ -2923,6 +2950,8 @@ function openAgentApprovalDialog(plan) {
   closeAgentApprovalDialog({ returnFocus: false });
   const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const approvalOptions = normalizeAgentApprovalOptions(plan);
+  const approvalSummary = firstChatText(plan.summary, "The model suggested a fix. Approve or deny before allowing any automatic action.");
+  const requestedFix = firstChatText(plan.title, plan.recommended_action_id, "Unknown action");
   let selectedChoice = initialAgentApprovalChoice(approvalOptions);
   const optionRows = [];
   const closeButton = node("button", {
@@ -3005,10 +3034,10 @@ function openAgentApprovalDialog(plan) {
       closeButton,
     ),
     node("div", { class: "openai-auth-content agent-approval-content" },
-      node("p", { class: "openai-auth-copy", text: plan.summary || "The model suggested a fix. Approve or deny before allowing any automatic action." }),
+      node("p", { class: "openai-auth-copy", text: approvalSummary }),
       node("div", { class: "agent-approval-request" },
         node("span", { class: "openai-auth-label", text: "Requested fix" }),
-        node("strong", { text: plan.title || plan.recommended_action_id || "Unknown action" }),
+        node("strong", { text: requestedFix }),
         agentPlanTargetText(plan) ? node("small", { text: agentPlanTargetText(plan) }) : null,
       ),
       node("fieldset", { class: "agent-approval-options" },
@@ -3029,7 +3058,7 @@ function openAgentApprovalDialog(plan) {
   backdrop.addEventListener("keydown", handleAgentApprovalDialogKeydown);
   document.body.append(backdrop);
   document.body.classList.add("agent-approval-open");
-  state.agentApprovalDialog = { backdrop, dialog, previousFocus };
+  state.agentApprovalDialog = { backdrop, dialog, previousFocus, statusNode, submitButton };
   updateSelection();
   const selectedInput = optionRows.find((item) => item.option.id === selectedChoice && !item.input.disabled)?.input;
   (selectedInput || closeButton).focus({ preventScroll: true });
@@ -3037,10 +3066,21 @@ function openAgentApprovalDialog(plan) {
 
 async function submitAgentApproval(plan, choice, button) {
   const selectedChoice = String(choice || "deny").trim();
+  const allowed = selectedChoice === "allow_once";
   const originalText = button?.textContent || "";
   if (button) {
     button.disabled = true;
-    button.textContent = "Recording";
+    button.textContent = allowed ? "Starting" : "Recording";
+  }
+  const dialog = state.agentApprovalDialog;
+  if (dialog?.statusNode) {
+    dialog.statusNode.dataset.tone = "info";
+    dialog.statusNode.textContent = allowed ? "Approval recorded. Starting the app fix..." : "Recording denial...";
+  }
+  if (allowed) {
+    const prompt = markAgentRepairProgress(plan, "pending", "Approval recorded. Restarting the app and checking whether it recovers...");
+    closeAgentApprovalDialog({ returnFocus: false });
+    focusAgentPlanPrompt(prompt);
   }
   try {
     const response = await api("/api/admin/agent/approval", {
@@ -3050,14 +3090,18 @@ async function submitAgentApproval(plan, choice, button) {
         choice: selectedChoice,
       }),
     });
-    if (selectedChoice === "allow_once" && response.outcome) {
-      appendAgentRepairOutcome(response.outcome);
+    if (allowed && response.outcome) {
+      appendAgentRepairOutcome(response.outcome, plan);
       showNotice(agentRepairOutcomeNotice(response.outcome), response.outcome.recovered ? "info" : "error");
+    } else if (allowed) {
+      markAgentRepairProgress(plan, "failed", "The fix request completed, but NoobBoard did not return a verification outcome.");
+      showNotice("Fix request completed without a verification outcome.", "error");
     } else {
       showNotice("Automatic fix was not allowed.");
+      closeAgentApprovalDialog();
     }
-    closeAgentApprovalDialog();
   } catch (error) {
+    if (allowed) markAgentRepairProgress(plan, "failed", error.message || "NoobBoard could not run the approved fix.");
     showNotice(error.message, "error");
   } finally {
     if (button?.isConnected) {
@@ -3067,11 +3111,72 @@ async function submitAgentApproval(plan, choice, button) {
   }
 }
 
-function appendAgentRepairOutcome(outcome) {
-  const prompt = document.querySelector(".agent-plan-prompt");
-  if (!prompt) return;
+function cssEscapeValue(value) {
+  const text = String(value || "");
+  if (window.CSS?.escape) return window.CSS.escape(text);
+  return text.replace(/["\\]/g, "\\$&");
+}
+
+function agentPlanPromptFor(plan) {
+  const planID = String(plan?.id || "").trim();
+  if (planID) {
+    const matched = document.querySelector(`.agent-plan-prompt[data-plan-id="${cssEscapeValue(planID)}"]`);
+    if (matched) return matched;
+  }
+  return document.querySelector(".agent-plan-prompt");
+}
+
+function setAgentPlanPromptStatus(prompt, text, tone = "state-muted") {
+  const pill = prompt?.querySelector(".agent-plan-head .settings-state-pill");
+  if (!pill) return;
+  pill.className = `settings-state-pill ${tone}`;
+  pill.textContent = text;
+}
+
+function setAgentPlanActionsDisabled(prompt, disabled) {
+  for (const button of prompt?.querySelectorAll(".agent-plan-actions button") || []) {
+    button.disabled = !!disabled;
+    button.setAttribute("aria-disabled", String(!!disabled));
+  }
+}
+
+function markAgentRepairProgress(plan, stateName, message) {
+  const prompt = agentPlanPromptFor(plan);
+  if (!prompt) return null;
+  const state = String(stateName || "pending").trim() || "pending";
+  const text = cleanChatText(message) || (state === "failed" ? "NoobBoard could not run the approved fix." : "NoobBoard is running the approved fix.");
+  prompt.classList.add("agent-plan-active");
   prompt.querySelector(".agent-repair-outcome")?.remove();
+  prompt.querySelector(".agent-repair-progress")?.remove();
+  const progress = node("div", { class: `agent-repair-progress ${state}`, "aria-live": "polite" },
+    node("strong", { text: state === "failed" ? "Fix did not run" : "Fix running" }),
+    node("small", { text }),
+  );
+  const actions = prompt.querySelector(".agent-plan-actions");
+  if (actions) prompt.insertBefore(progress, actions);
+  else prompt.append(progress);
+  setAgentPlanActionsDisabled(prompt, true);
+  setAgentPlanPromptStatus(prompt, state === "failed" ? "Fix failed" : "Running", state === "failed" ? "state-bad" : "state-warn");
+  return prompt;
+}
+
+function appendAgentRepairOutcome(outcome, plan = null) {
+  const prompt = agentPlanPromptFor(plan);
+  if (!prompt) return;
+  prompt.classList.add("agent-plan-active");
+  prompt.querySelector(".agent-repair-progress")?.remove();
+  prompt.querySelector(".agent-repair-outcome")?.remove();
+  setAgentPlanActionsDisabled(prompt, true);
+  setAgentPlanPromptStatus(prompt, outcome?.recovered ? "Fixed" : outcome?.verified ? "Still down" : "Sent", outcome?.recovered ? "state-ok" : "state-warn");
   prompt.append(renderAgentRepairOutcome(outcome));
+  focusAgentPlanPrompt(prompt);
+}
+
+function focusAgentPlanPrompt(prompt) {
+  if (!(prompt instanceof HTMLElement)) return;
+  prompt.setAttribute("tabindex", "-1");
+  prompt.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
+  prompt.focus({ preventScroll: true });
 }
 
 function renderAgentRepairOutcome(outcome) {
@@ -3079,7 +3184,7 @@ function renderAgentRepairOutcome(outcome) {
   const verified = !!outcome?.verified;
   const before = repairStatusText(outcome?.before_status);
   const after = repairStatusText(outcome?.after_status);
-  const message = String(outcome?.message || "").trim() || (verified ? "Repair verification completed." : "Repair was sent, but verification did not complete.");
+  const message = cleanChatText(outcome?.message) || (verified ? "Repair verification completed." : "Repair was sent, but verification did not complete.");
   return node("div", { class: `agent-repair-outcome ${recovered ? "recovered" : verified ? "unresolved" : "unverified"}` },
     node("strong", { text: recovered ? "Recovered" : verified ? "Still needs attention" : "Verification incomplete" }),
     node("span", { text: `${before} -> ${after}` }),

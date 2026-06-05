@@ -81,6 +81,56 @@ func TestValidateDiagnosisInfersSingleAffectedAppTarget(t *testing.T) {
 	}
 }
 
+func TestValidateDiagnosisRejectsLiteralNullRequiredText(t *testing.T) {
+	_, err := ValidateDiagnosis([]byte(`{
+		"severity":"medium",
+		"confidence":0.7,
+		"incident_type":"app_down",
+		"affected_services":["emby"],
+		"diagnosis":"null",
+		"evidence":["container exited"],
+		"general_user_summary":"Emby is offline.",
+		"admin_message":"Incident: Emby is offline.",
+		"recommended_action_id":"ask_admin_to_check",
+		"recommended_action_target":{"kind":"manual","id_or_name":""},
+		"should_notify_admin":true
+	}`))
+	if err == nil {
+		t.Fatal("expected literal null diagnosis text to be rejected")
+	}
+}
+
+func TestValidateDiagnosisCleansOptionalLiteralNullText(t *testing.T) {
+	diagnosis, err := ValidateDiagnosis([]byte(`{
+		"severity":"medium",
+		"confidence":0.7,
+		"incident_type":"app_down",
+		"affected_services":[" null "," emby "],
+		"diagnosis":" Emby is offline. ",
+		"evidence":[" null "," container exited "],
+		"general_user_summary":" Emby is offline. ",
+		"admin_message":" Incident: Emby is offline. ",
+		"recommended_action_id":" ask_admin_to_restart_container ",
+		"recommended_action_target":{"kind":" app ","id_or_name":" emby "},
+		"should_notify_admin":true
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diagnosis.Diagnosis != "Emby is offline." || diagnosis.GeneralUserSummary != "Emby is offline." || diagnosis.AdminMessage != "Incident: Emby is offline." {
+		t.Fatalf("required text was not normalized: %#v", diagnosis)
+	}
+	if got := strings.Join(diagnosis.Evidence, "|"); got != "container exited" {
+		t.Fatalf("evidence was not cleaned: %q", got)
+	}
+	if got := strings.Join(diagnosis.AffectedServices, "|"); got != "emby" {
+		t.Fatalf("affected services were not cleaned: %q", got)
+	}
+	if diagnosis.RecommendedTarget.Kind != "app" || diagnosis.RecommendedTarget.IDOrName != "emby" {
+		t.Fatalf("target was not cleaned: %#v", diagnosis.RecommendedTarget)
+	}
+}
+
 func TestValidateActionReviewDecisionAcceptsStrictSchemaShape(t *testing.T) {
 	decision, err := ValidateActionReviewDecision([]byte(`{
 		"allow":false,

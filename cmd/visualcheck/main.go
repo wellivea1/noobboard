@@ -90,6 +90,9 @@ type flags struct {
 	AgentRepairToggleCount      int      `json:"agentRepairToggleCount,omitempty"`
 	AgentReadinessLimitVisible  bool     `json:"agentReadinessLimitVisible,omitempty"`
 	AgentApprovalDialogVisible  bool     `json:"agentApprovalDialogVisible,omitempty"`
+	AgentApprovalClosedAfterRun bool     `json:"agentApprovalClosedAfterRun,omitempty"`
+	AgentRepairProgressVisible  bool     `json:"agentRepairProgressVisible,omitempty"`
+	AgentRepairStatusText       string   `json:"agentRepairStatusText,omitempty"`
 	AgentRepairOutcomeVisible   bool     `json:"agentRepairOutcomeVisible,omitempty"`
 	AgentRepairOutcomeRecovered bool     `json:"agentRepairOutcomeRecovered,omitempty"`
 	UserHomeVisible             bool     `json:"userHomeVisible,omitempty"`
@@ -868,6 +871,12 @@ func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, a
 	}
 	if !agentRepair.AgentApprovalDialogVisible {
 		failures = append(failures, "agent approval dialog did not render")
+	}
+	if !agentRepair.AgentApprovalClosedAfterRun {
+		failures = append(failures, "agent approval dialog did not close after allow")
+	}
+	if !agentRepair.AgentRepairProgressVisible || !strings.Contains(agentRepair.AgentRepairStatusText, "Running") {
+		failures = append(failures, "agent repair progress did not render while fix was running")
 	}
 	if !agentRepair.AgentRepairOutcomeVisible || !agentRepair.AgentRepairOutcomeRecovered {
 		failures = append(failures, "agent repair outcome did not render as recovered")
@@ -1812,6 +1821,15 @@ const settingsExpression = `(async () => {
 })()`
 
 const agentRepairExpression = `(async () => {
+  const waitFor = async (predicate, timeout = 2500) => {
+    const started = Date.now();
+    let value = predicate();
+    while (!value && Date.now() - started < timeout) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      value = predicate();
+    }
+    return value;
+  };
   document.querySelector('[data-tab="diagnostics"]')?.click();
   const started = Date.now();
   while (document.querySelector('#tab-diagnostics')?.hidden && Date.now() - started < 5000) {
@@ -1821,7 +1839,7 @@ const agentRepairExpression = `(async () => {
   const plan = {
     id: 'visual-repair-plan',
     title: 'Restart recommendation',
-    summary: 'The model suggested restarting one app. NoobBoard can run one restart only after admin approval, an armed session, and per-app opt-in.',
+    summary: 'The model suggested restarting one app. NoobBoard can run one restart only after admin approval and per-app opt-in.',
     recommended_action_id: 'ask_admin_to_restart_container',
     requires_admin_approval: true,
     can_execute: true,
@@ -1838,30 +1856,60 @@ const agentRepairExpression = `(async () => {
     output.classList.add('chat-result');
     output.replaceChildren(renderAgentPlanPrompt(plan));
   }
-  if (typeof openAgentApprovalDialog === 'function') {
-    openAgentApprovalDialog(plan);
-  }
-  const dialogVisible = !!document.querySelector('.agent-approval-dialog') && visibleElement(document.querySelector('.agent-approval-dialog'));
-  if (typeof closeAgentApprovalDialog === 'function') {
-    closeAgentApprovalDialog({ returnFocus: false });
-  }
-  if (typeof appendAgentRepairOutcome === 'function') {
-    appendAgentRepairOutcome({
-      action: 'restart',
-      target_id: 'emby',
-      target_label: 'Emby',
-      before_status: 'offline',
-      after_status: 'online',
-      recovered: true,
-      verified: true,
-      message: 'Auto-repair: restarted - recovered.'
-    });
+  const originalApi = window.api;
+  const mockApi = async (path) => {
+    if (path !== '/api/admin/agent/approval') return originalApi(path);
+    await new Promise((resolve) => setTimeout(resolve, 160));
+    return {
+      status: 'executed',
+      outcome: {
+        action: 'restart',
+        target_id: 'emby',
+        target_label: 'Emby',
+        before_status: 'offline',
+        after_status: 'online',
+        recovered: true,
+        verified: true,
+        message: 'Auto-repair: restarted - recovered.'
+      }
+    };
+  };
+  window.api = mockApi;
+  try {
+    api = mockApi;
+  } catch (error) {}
+  let dialogVisible = false;
+  let closedAfterRun = false;
+  let progressVisible = false;
+  let statusText = '';
+  try {
+    if (typeof openAgentApprovalDialog === 'function') {
+      openAgentApprovalDialog(plan);
+    }
+    const dialog = document.querySelector('.agent-approval-dialog');
+    dialogVisible = !!dialog && visibleElement(dialog);
+    document.querySelector('input[name="agent-approval-choice"][value="allow_once"]')?.click();
+    document.querySelector('.agent-approval-dialog .openai-auth-actions .primary')?.click();
+    await waitFor(() => document.querySelector('.agent-repair-progress.pending'));
+    const progress = document.querySelector('.agent-repair-progress.pending');
+    progressVisible = !!progress && visibleElement(progress);
+    closedAfterRun = !document.querySelector('.agent-approval-dialog');
+    statusText = document.querySelector('.agent-plan-head .settings-state-pill')?.textContent || '';
+    await waitFor(() => document.querySelector('.agent-repair-outcome'), 3000);
+  } finally {
+    window.api = originalApi;
+    try {
+      api = originalApi;
+    } catch (error) {}
   }
   const outcome = document.querySelector('.agent-repair-outcome');
   const mobileAudit = await auditMobileShell();
   return {
     pageTitle: document.querySelector('#page-title')?.textContent || '',
     agentApprovalDialogVisible: dialogVisible,
+    agentApprovalClosedAfterRun: closedAfterRun,
+    agentRepairProgressVisible: progressVisible,
+    agentRepairStatusText: statusText,
     agentRepairOutcomeVisible: !!outcome && visibleElement(outcome),
     agentRepairOutcomeRecovered: !!outcome && outcome.classList.contains('recovered') && (outcome.textContent || '').includes('offline -> online'),
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
