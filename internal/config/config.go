@@ -716,6 +716,9 @@ func applyEnv(cfg *Config) {
 	if v := envValue("NOOBBOARD_ACTION_AUTO_REVIEW_ENABLED", "HSD_ACTION_AUTO_REVIEW_ENABLED"); v != "" {
 		cfg.LLM.ActionAutoReviewEnabled = parseBool(v)
 	}
+	if v := envValue("NOOBBOARD_AGENT_CONTROL_ENABLED", "HSD_AGENT_CONTROL_ENABLED"); v != "" {
+		cfg.LLM.AgentControlEnabled = parseBool(v)
+	}
 	if v := envValue("NOOBBOARD_AGENT_AUTO_REPAIR_ENABLED", "HSD_AGENT_AUTO_REPAIR_ENABLED"); v != "" {
 		cfg.LLM.AgentAutoRepairEnabled = parseBool(v)
 	}
@@ -984,6 +987,8 @@ func applyConfigKey(cfg *Config, section, key, value string) {
 		cfg.LLM.AnthropicModel = value
 	case "llm.action_auto_review_enabled":
 		cfg.LLM.ActionAutoReviewEnabled = parseBool(value)
+	case "llm.agent_control_enabled":
+		cfg.LLM.AgentControlEnabled = parseBool(value)
 	case "llm.agent_auto_repair_enabled":
 		cfg.LLM.AgentAutoRepairEnabled = parseBool(value)
 	case "llm.action_auto_review_model":

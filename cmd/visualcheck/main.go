@@ -105,6 +105,7 @@ type flags struct {
 	UserDetailBackReturned      bool     `json:"userDetailBackReturned,omitempty"`
 	UserDetailFocusReturned     bool     `json:"userDetailFocusReturned,omitempty"`
 	UserRepairActionVisible     bool     `json:"userRepairActionVisible,omitempty"`
+	UserRepairDirectActionCount int      `json:"userRepairDirectActionCount,omitempty"`
 	UserRepairActionLabel       string   `json:"userRepairActionLabel,omitempty"`
 	UserMenuToggleVisible       bool     `json:"userMenuToggleVisible,omitempty"`
 	UserDrawerOpen              bool     `json:"userDrawerOpen,omitempty"`
@@ -187,9 +188,21 @@ func run(opts options) (visualResult, error) {
 		Scenario: opts.scenario,
 		Artifacts: map[string]string{
 			"database":  filepath.Join(cache, "visual-check-"+runID+".db.json"),
+			"config":    filepath.Join(cache, "visual-check-"+runID+".config.yaml"),
 			"serverLog": filepath.Join(cache, "visual-check-"+runID+".server.log"),
 			"edgeLog":   filepath.Join(cache, "visual-check-"+runID+".edge.log"),
 		},
+	}
+	if err := os.WriteFile(result.Artifacts["config"], []byte(strings.Join([]string{
+		"llm:",
+		"  agent_control_enabled: true",
+		"app_catalog:",
+		"  general_user_restarts_enabled: true",
+		"  general_user_auto_repair_enabled: true",
+		"  restart_allowed_general_user: emby",
+		"",
+	}, "\n")), 0o600); err != nil {
+		return result, err
 	}
 
 	binary := filepath.Join(dist, "visual-check-dashboard.exe")
@@ -203,7 +216,7 @@ func run(opts options) (visualResult, error) {
 	}
 	defer serverLog.Close()
 
-	server := exec.Command(binary, "serve")
+	server := exec.Command(binary, "serve", "-config", result.Artifacts["config"])
 	server.Dir = root
 	server.Env = append(os.Environ(),
 		fmt.Sprintf("NOOBBOARD_PORT=%d", opts.port),
@@ -1004,6 +1017,9 @@ func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, a
 	if !desktopUserAppDetail.UserRepairActionVisible || !mobileUserAppDetail.UserRepairActionVisible {
 		failures = append(failures, "compact app detail repair affordance did not render")
 	}
+	if desktopUserAppDetail.UserRepairDirectActionCount < 3 || mobileUserAppDetail.UserRepairDirectActionCount < 3 {
+		failures = append(failures, "compact app detail did not render Start, Restart, and Stop controls")
+	}
 	if !mobileUserDrawer.UserDrawerOpen {
 		failures = append(failures, "general user settings drawer did not open")
 	}
@@ -1452,6 +1468,8 @@ const userAppDetailExpression = `(async () => {
   const historyVisible = !!panel?.querySelector('.history-list, .detail-history .detail-empty');
   const repairActions = panel ? [...panel.querySelectorAll('.user-repair-actions button')].filter((element) => visibleElement(element)) : [];
   const repairActionLabel = repairActions.map((element) => (element.textContent || element.getAttribute('aria-label') || '').trim()).filter(Boolean).join('|');
+  const directActionNames = new Set(repairActions.map((element) => (element.textContent || element.getAttribute('aria-label') || '').trim().toLowerCase())
+    .filter((text) => ['start', 'restart', 'stop'].includes(text)));
   const emptyNodes = panel ? [...panel.querySelectorAll('.detail-empty')] : [];
   const emptyStateVisible = emptyNodes
     .some((element) => visibleElement(element) && /no changes recorded yet/i.test(element.textContent || ''));
@@ -1463,6 +1481,7 @@ const userAppDetailExpression = `(async () => {
     userDetailHistoryVisible: historyVisible,
     userDetailEmptyStateVisible: emptyStateVisible,
     userRepairActionVisible: /\b(ask admin|restart now|start|restart|stop)\b/i.test(repairActionLabel),
+    userRepairDirectActionCount: directActionNames.size,
     userRepairActionLabel: repairActionLabel,
     bannedTermCount: bannedMatches.length,
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,

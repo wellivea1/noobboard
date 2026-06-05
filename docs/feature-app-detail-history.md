@@ -610,17 +610,19 @@ executed as a command.
   `general_user_auto_repair_enabled` switch lets standard-user diagnosis auto-start
   or auto-restart that same opted-in app through the shared server-side safety path.
 - **GR3 - Tests, `/security-review`, docs, harness:** backend tests now cover
-  general-user repair requests, direct start/stop/restart success, and refusal for
-  non-opted-in/hidden/blacklisted/online/stopped-restart apps; `security.md` and
-  `api-config.md` describe the gates. Remaining harness work: add visual flags
-  for the new compact affordances (plain language, >=44px, no overflow) and
-  update `/security-review` output when that endpoint includes feature-specific
-  assertions.
+  general-user repair requests, direct start/stop/restart success, diagnosis
+  auto-start/auto-restart, and refusal for non-opted-in/hidden/blacklisted/online/
+  stopped-restart apps. `security.md` and `api-config.md` describe the gates.
+  The visual harness enables the fixture app-control opt-in and asserts that
+  compact app detail renders Start, Restart, and Stop controls with the existing
+  mobile touch-target, plain-language, and overflow checks.
 
 ## Open choices for the general-user work
-- **Direct path & the LLM:** Path B is a plain button on a resolved app (no model
-  actuation) — recommended. (Letting a general-user *chat* trigger a direct fix
-  would put the model in the loop and is not recommended for v1.)
+- **Direct path & the LLM:** Manual compact Start/Restart/Stop remains a plain
+  user button on a resolved app. Diagnosis auto-fix is now allowed only behind the
+  permanent `general_user_auto_repair_enabled` switch and still runs through the
+  same server-selected Start/Restart safety path; the model does not choose shell
+  commands or arbitrary Docker actions.
 - **Admin delivery for Path A:** in-app pending queue only (simplest) vs. also the
   notification backend (email/push) — depends on what notification transport you
   want wired.
