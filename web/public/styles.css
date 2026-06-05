@@ -190,6 +190,11 @@ button.command[data-glyph="v"]::before {
   content: "\2713";
 }
 
+button.command[data-glyph="r"]::before {
+  content: "\21bb";
+  font-size: 1.08rem;
+}
+
 /* Spin the glyph while a refresh/reload is in flight; stops when the class is removed. */
 @keyframes nb-spin {
   to { transform: rotate(360deg); }
@@ -1139,6 +1144,27 @@ label {
   gap: 8px;
 }
 
+.agent-plan-actions .command {
+  min-height: 46px;
+  gap: 8px;
+  border-radius: 6px;
+  padding-inline: 14px;
+  font-weight: 760;
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+
+.agent-plan-actions .command::before {
+  width: 1.12rem;
+  height: 1.12rem;
+}
+
+.agent-plan-actions .primary.command::before {
+  color: #101214;
+  font-size: 1.16rem;
+  font-weight: 900;
+}
+
 .user-repair-prompt {
   margin-top: 10px;
 }
@@ -1431,6 +1457,28 @@ label {
 
 .agent-approval-option-reason {
   color: var(--warn-text) !important;
+}
+
+.agent-approval-dialog .openai-auth-actions .command {
+  min-height: 48px;
+  gap: 9px;
+  justify-content: center;
+  border-radius: 6px;
+  padding-inline: 16px;
+  font-weight: 780;
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+
+.agent-approval-dialog .openai-auth-actions .command::before {
+  width: 1.15rem;
+  height: 1.15rem;
+  font-size: 1.06rem;
+  font-weight: 900;
+}
+
+.agent-approval-dialog .openai-auth-actions .primary.command::before {
+  color: #101214;
 }
 
 .overview-card {
@@ -5639,7 +5687,7 @@ body.compact-view[data-compact-view="chat"] .user-view-tabs {
 body.compact-view[data-compact-view="chat"] .panel.user-chat {
   display: grid;
   flex: 1 1 auto;
-  grid-template-columns: minmax(0, 1fr) 64px;
+  grid-template-columns: minmax(0, 1fr) 80px;
   grid-template-rows: auto minmax(0, 1fr) auto auto;
   gap: 0;
   min-height: 0;
@@ -5694,6 +5742,17 @@ body.compact-view[data-compact-view="chat"] .panel.user-chat .chat-output p:last
   margin-bottom: 0;
 }
 
+body.compact-view[data-compact-view="chat"] .agent-plan-actions {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+body.compact-view[data-compact-view="chat"] .agent-plan-actions .command {
+  width: 100%;
+  min-height: 48px;
+}
+
 body.compact-view[data-compact-view="chat"] .panel.user-chat .chat-auto-repair {
   grid-column: 1 / -1;
   grid-row: 3;
@@ -5707,11 +5766,11 @@ body.compact-view[data-compact-view="chat"] .panel.user-chat .chat-auto-repair {
 body.compact-view[data-compact-view="chat"] .panel.user-chat textarea {
   grid-column: 1;
   grid-row: 4;
-  min-height: 52px;
-  height: 52px;
+  min-height: 56px;
+  height: 56px;
   max-height: 108px;
   margin: 10px 0 10px 10px;
-  padding: 9px 10px;
+  padding: 10px 11px;
   border-color: var(--border);
   border-radius: 6px;
   background: var(--surface-alt);
@@ -5724,7 +5783,7 @@ body.compact-view[data-compact-view="chat"] .panel.user-chat .button-row {
   grid-column: 2;
   grid-row: 4;
   align-self: end;
-  margin: 10px 10px 10px 8px;
+  margin: 10px 12px 10px 12px;
 }
 
 /* Icon-only send key: a square arrow button aligned to the textarea, no text label. */
@@ -5734,9 +5793,9 @@ body.compact-view[data-compact-view="chat"] #user-chat-send {
   align-items: center;
   justify-content: center;
   width: 100%;
-  min-width: 44px;
-  height: 52px;
-  min-height: 52px;
+  min-width: 56px;
+  height: 56px;
+  min-height: 56px;
   padding: 0;
   border-radius: 6px;
   font-size: 0;
@@ -5744,9 +5803,12 @@ body.compact-view[data-compact-view="chat"] #user-chat-send {
 
 body.compact-view[data-compact-view="chat"] #user-chat-send::before {
   margin: 0;
-  width: auto;
-  height: auto;
-  font-size: 1.3rem;
+  width: 1.7rem;
+  height: 1.7rem;
+  color: #101214;
+  font-size: 1.78rem;
+  font-weight: 900;
+  line-height: 1;
 }
 
 body.compact-view[data-compact-view="chat"] .panel.user-chat[data-chat-available="false"] {
