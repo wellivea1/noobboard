@@ -68,6 +68,7 @@ func FilterSnapshotForRole(snapshot models.Snapshot, role models.Role, redactor 
 	snapshot.AdminSummary = ""
 	snapshot.AuditTail = nil
 	snapshot.LLMPolicies = nil
+	snapshot.RepairAutomation.AdminAutoRepairAvailable = false
 	snapshot.Infrastructure.UnraidUptimeSeconds = 0
 	snapshot.Infrastructure.UnraidCPUBrand = ""
 	snapshot.Infrastructure.UnraidCPUCores = 0

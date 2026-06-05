@@ -78,9 +78,9 @@ func (b ContextBuilder) Build(req Request) (string, error) {
 		}
 	}
 
-	instruction := "Diagnose the server status data. Do not request tools, do not execute actions, and recommend only one allowlisted next action."
+	instruction := "Diagnose the server status data. Do not request tools, do not execute actions, and recommend only one allowlisted next action. Do not recommend checking logs as a repair action; NoobBoard cannot execute log-based repairs. Use ask_admin_to_check for manual investigation."
 	if req.Policy.AgentToolsEnabled && req.Policy.RecipientRole == models.RoleAdmin {
-		instruction = "Diagnose the server status data. You may call the provided read-only NoobBoard status tools to refresh live status. Do not request or execute mutations, repairs, shell commands, filesystem access, Docker control, Unraid mutations, or UniFi configuration changes. Recommend only one allowlisted next action."
+		instruction = "Diagnose the server status data. You may call the provided read-only NoobBoard status tools to refresh live status. Do not request or execute mutations, repairs, shell commands, filesystem access, Docker control, Unraid mutations, or UniFi configuration changes. Recommend only one allowlisted next action. Do not recommend checking logs as a repair action; NoobBoard cannot execute log-based repairs. Use ask_admin_to_check for manual investigation."
 	}
 	if req.Policy.RecipientRole != models.RoleAdmin {
 		return b.buildGeneralUserContext(snapshot, req)

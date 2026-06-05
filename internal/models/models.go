@@ -198,10 +198,17 @@ type Snapshot struct {
 	LLMPolicies          map[string]LLMPolicy `json:"llm_policies,omitempty"`
 	DiagnosticsAvailable bool                 `json:"diagnostics_available"`
 	DiagnosticsProvider  string               `json:"diagnostics_provider,omitempty"`
+	RepairAutomation     RepairAutomationInfo `json:"repair_automation"`
 	NotificationInfo     NotificationRollup   `json:"notification_info"`
 	AuditTail            []AuditEntry         `json:"audit_tail,omitempty"`
 	IntegrationMode      string               `json:"integration_mode,omitempty"`
 	FixtureScenario      string               `json:"fixture_scenario,omitempty"`
+}
+
+type RepairAutomationInfo struct {
+	AdminAutoRepairAvailable bool   `json:"admin_auto_repair_available"`
+	UserAutoRepairAvailable  bool   `json:"user_auto_repair_available"`
+	Reason                   string `json:"reason,omitempty"`
 }
 
 type VisibilitySettings struct {

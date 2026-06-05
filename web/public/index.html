@@ -62,7 +62,7 @@
       <section id="user-home" class="user-home" hidden>
         <div id="user-view-tabs" class="user-view-tabs" role="tablist" aria-label="Compact views">
           <button id="user-status-open" type="button" role="tab" aria-selected="true" class="active">Status</button>
-          <button id="user-chat-open" type="button" role="tab" aria-selected="false">Ask what's wrong</button>
+          <button id="user-chat-open" type="button" role="tab" aria-selected="false">Ask</button>
         </div>
 
         <section id="user-hero" class="user-hero" aria-live="polite" data-user-status-view></section>
@@ -92,9 +92,13 @@
         <section class="panel user-chat">
           <h2>Ask what's wrong</h2>
           <div id="user-chat-output" class="chat-output muted chat-empty">Ask what's wrong or whether an app is working.</div>
+          <label id="user-chat-auto-repair-wrap" class="chat-auto-repair">
+            <input id="user-chat-auto-repair" type="checkbox">
+            <span>Auto-fix if safe</span>
+          </label>
           <textarea id="user-chat-input" rows="3">What is wrong right now?</textarea>
           <div class="button-row">
-            <button id="user-chat-send" type="button" class="primary command" data-glyph=">" aria-label="Ask">Ask</button>
+            <button id="user-chat-send" type="button" class="primary command" data-glyph="&#8629;" aria-label="Send"></button>
           </div>
         </section>
 
@@ -192,6 +196,10 @@
           <section class="panel">
             <h2>Ask For A Diagnosis</h2>
             <textarea id="diagnostic-question" rows="4">What is wrong right now?</textarea>
+            <label id="diagnostic-auto-repair-wrap" class="chat-auto-repair">
+              <input id="diagnostic-auto-repair" type="checkbox">
+              <span>Auto-fix if safe</span>
+            </label>
             <div class="button-row">
               <button id="diagnose" type="button" class="primary command" data-glyph="?">Run diagnosis</button>
               <button id="notify-admin" type="button" class="command" data-glyph="!">Notify admin</button>
@@ -269,6 +277,10 @@
         <div id="assistant-panel" class="assistant-panel" hidden>
           <div id="assistant-output" class="chat-output muted chat-empty">Ask me for help!</div>
           <textarea id="assistant-input" rows="2">What is wrong right now?</textarea>
+          <label id="assistant-auto-repair-wrap" class="chat-auto-repair">
+            <input id="assistant-auto-repair" type="checkbox">
+            <span>Auto-fix if safe</span>
+          </label>
           <div class="button-row inline-actions">
             <button id="assistant-send" type="button" class="primary command" data-glyph=">">Ask</button>
             <button id="assistant-notify" type="button" class="command" data-glyph="!">Notify admin</button>

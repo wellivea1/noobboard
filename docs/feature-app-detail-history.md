@@ -45,8 +45,8 @@ repair. Verified on this machine: `go build ./...` ✓, `go test ./...` ✓,
 - **Approval-gated repair v1:** the diagnosis schema returns a closed-set
   `recommended_action_id` + `recommended_action_target`; the server builds an
   `llmAgentPlanView` with an HMAC-signed, 5-min, actor/action/target/nonce-bound
-  approval token; chat renders a normal approval popup; admin can enable fixes for the current
-  session (`AgentControlEnabled` gate, `AgentArmDuration` ≤1h). `allow_once`
+  approval token; chat renders a normal approval popup; admin can enable fixes through the
+  saved `AgentControlEnabled` gate. `allow_once`
   now executes only `ask_admin_to_restart_container`, only for a currently
   resolved, opted-in, non-blacklisted app, and only once per token. Non-restart
   recommendations remain non-executing.
@@ -64,11 +64,11 @@ repair. Verified on this machine: `go build ./...` ✓, `go test ./...` ✓,
 - The approval-gated repair path now includes per-app `agent_repair_allowed`
   settings, restart-only server-side execution, single-use approval tokens,
   cooldown/rate-limit enforcement, post-restart verification, inline chat
-  outcome reporting, history notes, and lifecycle audit coverage. Session-enabled
+  outcome reporting, history notes, and lifecycle audit coverage. Request-scoped
   autonomous restart repair is now implemented behind explicit admin enablement,
-  session fix enablement, per-app opt-in, auto-review, and the same repair limits.
+  per-chat auto-fix request, per-app opt-in, auto-review, and the same repair limits.
 - The visual harness now includes the LLM settings limit copy plus a rendered
-  approval dialog/outcome state, so regressions in the session-enabled/approved chat UI are
+  approval dialog/outcome state, so regressions in the approved chat UI are
   caught without live LLM credentials.
 - **Still optional:** the 24-hour status bar remains a nice-to-have.
 
@@ -404,7 +404,7 @@ Each PR is independently shippable and leaves the app working.
 
 # Automatic server repair — path to deployable quality
 
-The chat agent can already *diagnose* and *recommend* a fix, and the approval/temporary-access
+The chat agent can already *diagnose* and *recommend* a fix, and the approval/safety-review
 plumbing exists, but execution is hard-locked. This section plans the remaining
 work to let an admin let the agent actually perform a repair (initially: restart
 a crashed container) from chat, safely.
@@ -422,7 +422,7 @@ weakening it.
 ## Defense-in-depth gates (all must hold to execute)
 
 1. `LLM.AgentControlEnabled` is **on** (admin setting, default **off**).
-2. The admin enabled temporary fix access for this session (`AgentArmDuration` <= 1h, auto-expires).
+2. Saved admin app-fix settings allow the action (`AgentControlEnabled=true`).
 3. A valid, **single-use**, unexpired approval token bound to actor + action +
    target.
 4. The action is in the **executable allowlist** (v1: `restart` only).
@@ -440,11 +440,11 @@ weakening it.
   the current full snapshot (`findAppByID`), apply the stop/restart confirmation
   rule, and audit `app.container.action` with `actor` = approving admin +
   `via:"agent_plan"`, `plan_id`, `recommended_action_id`.
-- In `recordAgentApproval`, when `choice=allow_once` + token valid + session enabled +
+- In `recordAgentApproval`, when `choice=allow_once` + token valid +
   action executable + target resolved: call the executor and return the result,
   replacing today's `409 "locked"`. Compute `CanExecute` from
   (`AgentControlEnabled` && action∈allowlist && target resolved && app opted-in);
-  enable the chat "Allow fix" button only when the session is enabled.
+  enable the chat "Allow fix" button only when the saved gates allow execution.
 
 ## R2 — Safety envelope
 - **Per-app opt-in:** add `AgentRepairAllowed bool` to the app catalog entry
@@ -457,8 +457,7 @@ weakening it.
 - **Cooldown + rate limit:** at most 1 agent restart per app per 10 min and 5
   agent actions per hour globally; over-limit is an audited refusal surfaced in
   chat.
-- **Kill switch:** disable the session or set `AgentControlEnabled=off` to stop fixes instantly;
-  session enablement auto-expires. One target per approval (no bulk).
+- **Kill switch:** set `AgentControlEnabled=off` to stop admin fixes instantly. One target per approval (no bulk).
 
 ## R3 — Outcome verification & reporting
 - After executing, force a `refreshSnapshot` after a short delay, compare the
@@ -469,18 +468,18 @@ weakening it.
 - Audit the full lifecycle: proposed → approved (by whom) → executed → verified.
 
 ## R4 — UI completion
-- Enable "Allow fix" only when `can_execute` && session enabled; show the resolved app +
+- Enable "Allow fix" only when `can_execute`; show the resolved app +
   action and a confirm affordance consistent with `controlApp`.
 - Show the execution outcome inline in the chat thread.
 - Admin settings: expose the `AgentControlEnabled` switch and per-app
-  "Allow admin/AI restart" toggles alongside the session enable control; show
-  cooldown/rate-limit + enabled-until state.
+  "Allow admin/AI restart" toggles alongside the reviewer gate; show
+  cooldown/rate-limit state.
 
 ## R5 — Tests, security review, docs
 - Unit: action→op mapping; rejects non-allowlisted actions; single-use token;
-  cooldown/rate-limit; per-app opt-in; session-disabled/disabled/non-admin paths refuse
+  cooldown/rate-limit; per-app opt-in; disabled/non-admin paths refuse
   **without** calling the Docker client.
-- Integration: session enabled + approved + eligible restart calls a mock `ControlContainer`
+- Integration: approved + eligible restart calls a mock `ControlContainer`
   exactly once; replay blocked; cooldown blocks the second; verification re-poll
   records the outcome event.
 - Run `/security-review` on the actuation path (trust boundary, no model→command
@@ -497,16 +496,16 @@ weakening it.
   **Landed for restart-only approval-gated v1.**
 - **AR3:** cooldown/rate-limit + outcome verification re-poll + chat outcome UI.
   **Landed for approval-gated restart v1.**
-- **AR4:** security review + docs + harness coverage for the session-enabled/approved flow.
+- **AR4:** security review + docs + harness coverage for the approved repair flow.
   **Landed for approval-gated restart v1.**
-- **AR5:** session-enabled autonomous restart repair using the same server-side restart path,
+- **AR5:** request-scoped autonomous restart repair using the same server-side restart path,
   plus mandatory auto-review and no popup after execution/refusal.
   **Landed for restart-only autonomous repair.**
 
 ## Repair-specific open choices
-- **Autonomy level (key decision).** v1 shipped as **approval-gated with current-session
-  fix enablement**. Session-enabled autonomous restart repair is now available for one non-online
-  opted-in app during the enabled session window, with mandatory auto-review and the same
+- **Autonomy level (key decision).** v1 shipped as **approval-gated with saved
+  app-fix enablement**. Request-scoped autonomous restart repair is now available for one non-online
+  opted-in app when the chat request includes auto-fix, with mandatory auto-review and the same
   cooldown/rate-limit checks.
 - **Executable action scope for v1:** restart-only (recommended) vs. also
   start/stop.
@@ -542,7 +541,7 @@ this section authoritative when planning follow-up work.
   responding" on a *successful* restart, because containers rarely return to
   `online` within 2s. Fix: poll a few times over ~30–60s (stop early on
   recovery), or phrase the interim outcome as "restart sent, still coming up."
-- Non-executable recommendations (`ask_admin_to_check_logs/unifi/storage`) are
+- Non-executable recommendations (`ask_admin_to_check/unifi/storage`) are
   `ApprovalEligible` but not `Executable`, so they render an approval popup with a
   permanently disabled "Allow fix." Render them as informational instead.
 
@@ -567,8 +566,8 @@ executed as a command.
 - Admin UI: a pending-requests view (admin chat / settings / notifications) with
   approve/deny that runs through the **existing** approval+execution path
   (`recordAgentApproval` generalized to accept a request-originated approval, or a
-  sibling endpoint). Approving still requires the admin gates (`AgentControlEnabled`,
-  temporary fix access) so nothing changes the execution trust model.
+  sibling endpoint). Approving still requires the saved admin gate
+  (`AgentControlEnabled`) so nothing changes the execution trust model.
 - Feed the outcome back to the requester (notification + history note).
 
 ### Path B — Direct general-user restart (per-app opt-in)
@@ -579,7 +578,7 @@ executed as a command.
   executes a restart **only** when the app is visible to the role, has
   `RestartAllowedGeneralUser`, is not blacklisted, and passes the shared
   cooldown/rate-limit; audited with `actor = general user`, `via:"user_direct"`;
-  same verification + outcome. **No admin temporary access required** (the admin pre-authorized
+  same verification + outcome. **No admin approval required** (the admin pre-authorized
   it via the per-app opt-in); the LLM is not in the loop (the user taps a button
   on a resolved app).
 - Compact UI: a confirm-gated **"Restart now"** on directly-repairable apps

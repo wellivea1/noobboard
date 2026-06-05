@@ -376,6 +376,7 @@ func (a *App) collectSnapshot(ctx context.Context, processNotifications bool) (m
 		LLMPolicies:          cfg.LLM.Policies,
 		DiagnosticsAvailable: llm.ProviderAvailable(cfg.LLM),
 		DiagnosticsProvider:  cfg.LLM.Provider,
+		RepairAutomation:     repairAutomationInfo(cfg),
 		IntegrationMode:      cfg.Integrations.Mode,
 	}
 	if cfg.Integrations.Mode == "fixture" {
@@ -533,6 +534,29 @@ func applyAppCatalog(apps []models.AppStatus, catalog config.AppCatalogConfig) {
 				apps[i].IconSource = "built-in"
 			}
 		}
+	}
+}
+
+func repairAutomationInfo(cfg config.Config) models.RepairAutomationInfo {
+	adminAvailable := cfg.LLM.AgentControlEnabled && cfg.LLM.ActionAutoReviewEnabled
+	userAvailable := cfg.AppCatalog.GeneralUserRestartsEnabled && cfg.AppCatalog.GeneralUserAutoRepairEnabled
+	reason := ""
+	switch {
+	case adminAvailable && userAvailable:
+		reason = "Auto-fix is available where the target app is opted in."
+	case !adminAvailable && !userAvailable:
+		reason = "Auto-fix is disabled until the admin enables the relevant app-fix settings."
+	case !adminAvailable:
+		reason = "Admin chat auto-fix needs admin app fixes and the safety reviewer enabled."
+	case !userAvailable:
+		reason = "Compact chat auto-fix needs standard-user app controls and auto-fix enabled."
+	default:
+		reason = "Auto-fix is available only on enabled surfaces and opted-in apps."
+	}
+	return models.RepairAutomationInfo{
+		AdminAutoRepairAvailable: adminAvailable,
+		UserAutoRepairAvailable:  userAvailable,
+		Reason:                   reason,
 	}
 }
 
@@ -1390,7 +1414,8 @@ func (a *App) diagnose(w http.ResponseWriter, r *http.Request, mode llm.Mode, ro
 		return
 	}
 	var body struct {
-		Question string `json:"question"`
+		Question   string `json:"question"`
+		AutoRepair bool   `json:"auto_repair"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -1441,17 +1466,21 @@ func (a *App) diagnose(w http.ResponseWriter, r *http.Request, mode llm.Mode, ro
 	a.deps.Audit.Record(mustUser(r).ID, "llm.diagnosis", map[string]interface{}{"mode": string(mode), "incident_type": string(diagnosis.IncidentType), "admin_message": diagnosis.AdminMessage})
 	response := diagnosisResponse{Diagnosis: diagnosis}
 	if mode == llm.ModeAdminRequested && role == models.RoleAdmin {
-		response.AgentPlan = a.llmAgentPlanResponse(diagnosis, full, mustUser(r).ID, mustSession(r))
-		a.maybeExecuteAgentAutoRepair(r.Context(), mustUser(r), mustSession(r), full, response.AgentPlan)
+		response.AgentPlan = a.llmAgentPlanResponse(diagnosis, full, mustUser(r).ID)
+		if body.AutoRepair {
+			a.maybeExecuteAgentAutoRepair(r.Context(), mustUser(r), full, response.AgentPlan)
+		}
 	} else if mode == llm.ModeGeneralUserRequested {
 		filtered := privacy.FilterSnapshotForRole(full, role, a.redactorSnapshot())
 		response.AgentPlan = a.llmUserRepairPlanResponse(diagnosis, filtered)
-		a.maybeExecuteGeneralUserAutoRepair(r.Context(), mustUser(r), response.AgentPlan)
+		if body.AutoRepair {
+			a.maybeExecuteGeneralUserAutoRepair(r.Context(), mustUser(r), response.AgentPlan)
+		}
 	}
 	writeJSON(w, http.StatusOK, response)
 }
 
-func (a *App) llmAgentPlanResponse(diagnosis llm.Diagnosis, snapshot models.Snapshot, actorID string, sess session) *llmAgentPlanView {
+func (a *App) llmAgentPlanResponse(diagnosis llm.Diagnosis, snapshot models.Snapshot, actorID string) *llmAgentPlanView {
 	action, known := agentActionDefinition(diagnosis.RecommendedActionID)
 	target := resolveAgentPlanTarget(action, diagnosis, snapshot)
 	requiresApproval := known && action.ApprovalEligible && (!action.RequiresAppTarget || target.Resolved)
@@ -1459,8 +1488,7 @@ func (a *App) llmAgentPlanResponse(diagnosis llm.Diagnosis, snapshot models.Snap
 	llmCfg := a.deps.Config.LLM
 	redactor := a.deps.Redactor
 	a.settingsMu.RUnlock()
-	armed, _ := agentSessionArmed(llmCfg, sess)
-	status, canExecute, allowReason := a.agentPlanExecutionState(action, target, snapshot, llmCfg, redactor, armed)
+	status, canExecute, allowReason := a.agentPlanExecutionState(action, target, snapshot, llmCfg, redactor)
 	expiresAt := time.Now().UTC().Add(5 * time.Minute)
 	approvalToken := ""
 	if requiresApproval {
@@ -1521,7 +1549,7 @@ func (a *App) llmAgentPlanResponse(diagnosis llm.Diagnosis, snapshot models.Snap
 	return response
 }
 
-func (a *App) maybeExecuteAgentAutoRepair(ctx context.Context, actor users.User, sess session, snapshot models.Snapshot, plan *llmAgentPlanView) {
+func (a *App) maybeExecuteAgentAutoRepair(ctx context.Context, actor users.User, snapshot models.Snapshot, plan *llmAgentPlanView) {
 	if plan == nil || !plan.RequiresAdminApproval || !plan.CanExecute {
 		return
 	}
@@ -1529,15 +1557,14 @@ func (a *App) maybeExecuteAgentAutoRepair(ctx context.Context, actor users.User,
 	cfg := a.deps.Config.LLM
 	redactor := a.deps.Redactor
 	a.settingsMu.RUnlock()
-	if !cfg.AgentAutoRepairEnabled || !cfg.ActionAutoReviewEnabled {
+	if !cfg.AgentControlEnabled || !cfg.ActionAutoReviewEnabled {
 		return
 	}
-	armed, armedUntil := agentSessionArmed(cfg, sess)
 	action, ok := agentActionDefinition(plan.RecommendedActionID)
 	if !ok || !action.Executable || action.DockerAction != docker.ActionRestart || plan.Target.Kind != "app" || !plan.Target.Resolved {
 		return
 	}
-	status, canExecute, reason := a.agentPlanExecutionState(action, plan.Target, snapshot, cfg, redactor, armed)
+	status, canExecute, reason := a.agentPlanExecutionState(action, plan.Target, snapshot, cfg, redactor)
 	if !canExecute {
 		return
 	}
@@ -1556,8 +1583,6 @@ func (a *App) maybeExecuteAgentAutoRepair(ctx context.Context, actor users.User,
 		"app_id":                  app.AppID,
 		"container_name":          app.ContainerName,
 		"docker_action":           string(action.DockerAction),
-		"agent_armed":             armed,
-		"agent_armed_until":       armedUntil,
 		"can_execute":             canExecute,
 		"pre_execution_status":    status,
 		"pre_execution_reason":    reason,
@@ -1778,17 +1803,11 @@ var llmAgentActionRegistry = map[string]llmAgentActionDefinition{
 	"ask_admin_to_restart_container": {
 		ID:                "ask_admin_to_restart_container",
 		Title:             "Restart recommendation",
-		Summary:           "The model suggested restarting one app. NoobBoard can run one restart only after admin approval, session enablement, and per-app opt-in.",
+		Summary:           "The model suggested restarting one app. NoobBoard can run one restart only after admin approval, safety review, and per-app opt-in.",
 		ApprovalEligible:  true,
 		RequiresAppTarget: true,
 		Executable:        true,
 		DockerAction:      docker.ActionRestart,
-	},
-	"ask_admin_to_check_logs": {
-		ID:                "ask_admin_to_check_logs",
-		Title:             "Log check recommendation",
-		Summary:           "The model suggested checking logs. NoobBoard does not execute log-based repair actions.",
-		RequiresAppTarget: true,
 	},
 	"ask_admin_to_check_unifi": {
 		ID:      "ask_admin_to_check_unifi",
@@ -1877,7 +1896,7 @@ func resolveAgentPlanTarget(action llmAgentActionDefinition, diagnosis llm.Diagn
 	return target
 }
 
-func (a *App) agentPlanExecutionState(action llmAgentActionDefinition, target llmAgentPlanTargetView, snapshot models.Snapshot, cfg config.LLMConfig, redactor *privacy.Redactor, armed bool) (string, bool, string) {
+func (a *App) agentPlanExecutionState(action llmAgentActionDefinition, target llmAgentPlanTargetView, snapshot models.Snapshot, cfg config.LLMConfig, redactor *privacy.Redactor) (string, bool, string) {
 	if !action.ApprovalEligible {
 		return "not_actionable", false, ""
 	}
@@ -1899,9 +1918,6 @@ func (a *App) agentPlanExecutionState(action llmAgentActionDefinition, target ll
 	}
 	if !app.AgentRepairAllowed {
 		return "approval_locked", false, "Turn on admin/AI restart for this app in app settings before a fix can run."
-	}
-	if !armed {
-		return "approval_needs_arm", false, "Enable fixes for this admin session before allowing this restart."
 	}
 	if limit := a.agentRepairLimitState(app.AppID, time.Now().UTC(), false); !limit.Allowed {
 		return "approval_rate_limited", false, limit.Message
@@ -2174,15 +2190,12 @@ func (a *App) recordAgentApproval(w http.ResponseWriter, r *http.Request) {
 	a.settingsMu.RLock()
 	llmCfg := a.deps.Config.LLM
 	a.settingsMu.RUnlock()
-	agentArmed, agentArmedUntil := agentSessionArmed(llmCfg, mustSession(r))
 	details := map[string]interface{}{
 		"plan_id":               payload.PlanID,
 		"choice":                choice,
 		"recommended_action_id": action.ID,
 		"target_kind":           payload.TargetKind,
 		"target_id":             payload.TargetID,
-		"agent_armed":           agentArmed,
-		"agent_armed_until":     agentArmedUntil,
 		"can_execute":           false,
 	}
 	if choice == "deny" {
@@ -2190,9 +2203,9 @@ func (a *App) recordAgentApproval(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusAccepted, map[string]string{"status": "denied"})
 		return
 	}
-	if !agentArmed {
-		a.deps.Audit.Record(mustUser(r).ID, "llm.agent_plan.not_armed", details)
-		writeError(w, http.StatusConflict, errors.New("fix approval must be enabled in this admin session before a fix can run"))
+	if !llmCfg.AgentControlEnabled {
+		a.deps.Audit.Record(mustUser(r).ID, "llm.agent_plan.control_disabled", details)
+		writeError(w, http.StatusConflict, errors.New("admin-approved app fixes are disabled in LLM settings"))
 		return
 	}
 	if !action.Executable || action.DockerAction != docker.ActionRestart {
@@ -3088,7 +3101,6 @@ func (a *App) approveRepairRequest(w http.ResponseWriter, r *http.Request, reque
 	a.settingsMu.RLock()
 	llmCfg := a.deps.Config.LLM
 	a.settingsMu.RUnlock()
-	agentArmed, agentArmedUntil := agentSessionArmed(llmCfg, mustSession(r))
 	details := map[string]interface{}{
 		"request_id":            request.ID,
 		"requester_id":          request.RequesterID,
@@ -3096,13 +3108,11 @@ func (a *App) approveRepairRequest(w http.ResponseWriter, r *http.Request, reque
 		"recommended_action_id": action.ID,
 		"target_kind":           "app",
 		"target_id":             request.AppID,
-		"agent_armed":           agentArmed,
-		"agent_armed_until":     agentArmedUntil,
 		"can_execute":           false,
 	}
-	if !agentArmed {
-		a.deps.Audit.Record(mustUser(r).ID, "repair_request.not_armed", details)
-		writeError(w, http.StatusConflict, errors.New("repair request approval requires fixes to be enabled in this admin session before a fix can run"))
+	if !llmCfg.AgentControlEnabled {
+		a.deps.Audit.Record(mustUser(r).ID, "repair_request.control_disabled", details)
+		writeError(w, http.StatusConflict, errors.New("admin-approved app fixes are disabled in LLM settings"))
 		return
 	}
 	snapshot, err := a.readOnlySnapshot(r.Context())
@@ -3849,7 +3859,7 @@ func llmAgentReadinessResponse(cfg config.LLMConfig, sess session) llmAgentReadi
 		ReadOnlyToolsAvailable: true,
 		MutatingToolsAvailable: true,
 		AgentControlEnabled:    cfg.AgentControlEnabled,
-		AgentAutoRepairEnabled: cfg.AgentAutoRepairEnabled,
+		AgentAutoRepairEnabled: cfg.ActionAutoReviewEnabled,
 		AgentArmed:             armed,
 		AgentArmedUntil:        armedUntil,
 		AgentArmDuration:       cfg.AgentArmDuration,
@@ -3870,9 +3880,9 @@ func llmAgentReadinessResponse(cfg config.LLMConfig, sess session) llmAgentReadi
 			{
 				ID:          "propose",
 				Label:       "Approval popup",
-				Status:      agentProposeModeStatus(cfg.AgentControlEnabled, armed),
+				Status:      agentProposeModeStatus(cfg.AgentControlEnabled),
 				Enabled:     cfg.AgentControlEnabled,
-				Description: "The model can propose one allowlisted app restart; NoobBoard executes it only after per-app opt-in, session enablement, and approval.",
+				Description: "The model can propose one allowlisted app restart; NoobBoard executes it only after per-app opt-in and admin approval.",
 			},
 			{
 				ID:          "auto_review",
@@ -3884,9 +3894,9 @@ func llmAgentReadinessResponse(cfg config.LLMConfig, sess session) llmAgentReadi
 			{
 				ID:          "auto_action",
 				Label:       "Auto action",
-				Status:      agentAutoActionStatus(cfg, armed),
-				Enabled:     cfg.AgentAutoRepairEnabled,
-				Description: "When enabled for this session, NoobBoard may run one reviewer-approved restart for a non-online opted-in app without opening the approval popup.",
+				Status:      agentAutoActionStatus(cfg),
+				Enabled:     cfg.AgentControlEnabled && cfg.ActionAutoReviewEnabled,
+				Description: "When a chat auto-fix toggle is enabled, NoobBoard may run one reviewer-approved restart for a non-online opted-in app without opening the approval popup.",
 			},
 		},
 		OpenCodeAutoReview: llmOpenCodeAutoReviewSummary{
@@ -3897,25 +3907,19 @@ func llmAgentReadinessResponse(cfg config.LLMConfig, sess session) llmAgentReadi
 			Reasoning:           strings.TrimSpace(cfg.ActionAutoReviewReasoning),
 			ReferenceCount:      len(cfg.ActionAutoReviewReferencePaths),
 			ModelFinding:        "The OpenCode reference uses a configurable reviewer model and prefers cross-model review when auto-selecting.",
-			DesignFinding:       "NoobBoard uses the same idea as a fail-closed action gate for approval and manually enabled autonomous restart repair.",
+			DesignFinding:       "NoobBoard uses the same idea as a fail-closed action gate for approval and explicitly requested autonomous restart repair.",
 		},
 	}
 }
 
-func agentAutoActionStatus(cfg config.LLMConfig, armed bool) string {
-	if !cfg.AgentAutoRepairEnabled {
-		return "locked"
-	}
+func agentAutoActionStatus(cfg config.LLMConfig) string {
 	if !cfg.AgentControlEnabled {
 		return "locked"
 	}
 	if !cfg.ActionAutoReviewEnabled {
 		return "review_required"
 	}
-	if armed {
-		return "armed"
-	}
-	return "planned"
+	return "available"
 }
 
 func actionAutoReviewStatus(cfg config.LLMConfig) string {
@@ -3934,14 +3938,11 @@ func agentSessionArmed(cfg config.LLMConfig, sess session) (bool, time.Time) {
 	return true, armedUntil
 }
 
-func agentProposeModeStatus(controlEnabled, armed bool) string {
+func agentProposeModeStatus(controlEnabled bool) string {
 	if !controlEnabled {
 		return "locked"
 	}
-	if armed {
-		return "armed"
-	}
-	return "planned"
+	return "available"
 }
 
 func llmAgentToolLabel(name string) string {
@@ -4014,6 +4015,9 @@ func decodeLLMSettingsUpdate(r *http.Request, current config.LLMConfig) (config.
 	}
 	if update.ActionAutoReviewEnabled != nil {
 		settings.ActionAutoReviewEnabled = *update.ActionAutoReviewEnabled
+		if update.AgentAutoRepairEnabled == nil {
+			settings.AgentAutoRepairEnabled = *update.ActionAutoReviewEnabled
+		}
 	}
 	if update.ActionAutoReviewModel != nil {
 		settings.ActionAutoReviewModel = *update.ActionAutoReviewModel
