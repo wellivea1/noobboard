@@ -203,6 +203,10 @@ button.command.is-refreshing[data-glyph]::before {
   button.command.is-refreshing[data-glyph]::before {
     animation: none;
   }
+
+  .agent-repair-progress::before {
+    animation: none;
+  }
 }
 
 .nav-toggle {
@@ -1197,6 +1201,59 @@ label {
 .agent-repair-outcome small {
   color: var(--muted);
   line-height: 1.35;
+}
+
+.agent-repair-progress {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px 10px;
+  align-items: start;
+  padding: 10px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  background: var(--surface-alt);
+}
+
+.agent-repair-progress::before {
+  content: "";
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  border: 2px solid color-mix(in srgb, var(--accent-strong) 26%, transparent);
+  border-top-color: var(--accent-strong);
+  border-radius: 999px;
+  animation: agent-progress-spin 800ms linear infinite;
+}
+
+.agent-repair-progress.failed {
+  border-color: rgba(226, 95, 95, 0.62);
+  background: rgba(226, 95, 95, 0.1);
+}
+
+.agent-repair-progress.failed::before {
+  content: "!";
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  color: var(--bad-text);
+  font-weight: 900;
+  animation: none;
+}
+
+.agent-repair-progress strong,
+.agent-repair-progress small {
+  grid-column: 2;
+}
+
+.agent-repair-progress small {
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+@keyframes agent-progress-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .agent-approval-content {
