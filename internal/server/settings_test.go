@@ -250,6 +250,71 @@ func TestAdminDiagnoseIncludesLockedAgentApprovalPlan(t *testing.T) {
 	}
 }
 
+func TestAdminDiagnoseSuggestsRestartWhenModelMissesSingleEligibleDownApp(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "diagnose-agent-restart-backstop")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+	cfg.LLM.Provider = "openai"
+	cfg.LLM.OpenAIAuthMethod = config.OpenAIAuthMethodAPIKey
+	cfg.LLM.OpenAIAPIKey = "sk-test-local"
+	cfg.LLM.AgentControlEnabled = true
+	cfg.AppCatalog.AgentRepairAllowed = map[string]bool{"emby": true}
+
+	app := newTestApp(t, cfg)
+	app.deps.Collectors.Docker = &recordingDockerCollector{apps: []models.AppStatus{{
+		AppID:         "emby",
+		DisplayName:   "Emby",
+		ContainerID:   "container-emby",
+		ContainerName: "EmbyServer",
+		DockerState:   models.DockerExited,
+		CurrentStatus: models.StatusOffline,
+		Severity:      models.SeverityHigh,
+	}}}
+	app.settingsMu.Lock()
+	app.deps.LLM = &recordingLLMClient{
+		diagnosis: llm.Diagnosis{
+			Severity:            models.SeverityHigh,
+			Confidence:          0.81,
+			IncidentType:        models.IncidentAppDown,
+			AffectedServices:    []string{"Emby"},
+			Diagnosis:           "Emby is down.",
+			Evidence:            []string{"App is offline."},
+			GeneralUserSummary:  "Emby is not working.",
+			AdminMessage:        "Review Emby.",
+			RecommendedActionID: "none",
+			RecommendedTarget:   llm.ActionTarget{Kind: "none", IDOrName: ""},
+			ShouldNotifyAdmin:   true,
+		},
+	}
+	app.settingsMu.Unlock()
+
+	router := app.Router()
+	cookie, csrf := loginAdmin(t, router)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/diagnose", strings.NewReader(`{"question":"what is wrong?"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/admin/diagnose status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var response diagnosisResponse
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.AgentPlan == nil || response.AgentPlan.RecommendedActionID != "ask_admin_to_restart_container" {
+		t.Fatalf("agent restart backstop did not produce restart plan: %#v", response.AgentPlan)
+	}
+	if response.AgentPlan.Title != "Suggested restart" || !strings.Contains(response.AgentPlan.Summary, "suggested") {
+		t.Fatalf("agent restart backstop was not clearly labeled suggested: %#v", response.AgentPlan)
+	}
+	if !response.AgentPlan.Target.Resolved || response.AgentPlan.Target.ID != "emby" {
+		t.Fatalf("agent restart backstop did not resolve Emby: %#v", response.AgentPlan.Target)
+	}
+}
+
 func TestAdminDiagnoseDoesNotOpenApprovalForUnresolvedAppTarget(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Database.Path = serverCacheTestPath(t, "diagnose-agent-unresolved-target")
@@ -2057,6 +2122,31 @@ func TestGeneralUserDirectRestartRefusesUnsafeTargets(t *testing.T) {
 	}
 }
 
+func TestNormalizeLLMSettingsEnablesAdminToolsWhenAgentControlEnabled(t *testing.T) {
+	settings := config.Defaults().LLM
+	adminPolicy := settings.Policies["admin_requested"]
+	adminPolicy.AgentToolsEnabled = false
+	adminPolicy.AgentMaxToolCalls = 0
+	adminPolicy.AgentToolRules = nil
+	settings.Policies["admin_requested"] = adminPolicy
+	settings.AgentControlEnabled = true
+
+	normalized := normalizeLLMSettings(settings)
+	adminPolicy = normalized.Policies["admin_requested"]
+	if !adminPolicy.AgentToolsEnabled {
+		t.Fatalf("admin tools were not enabled with agent control: %#v", adminPolicy)
+	}
+	if adminPolicy.AgentMaxToolCalls != 2 {
+		t.Fatalf("admin max tool calls = %d, want 2", adminPolicy.AgentMaxToolCalls)
+	}
+	if len(adminPolicy.AgentToolRules) == 0 {
+		t.Fatalf("admin tool allowlist was not restored: %#v", adminPolicy)
+	}
+	if normalized.Policies["general_user_requested"].AgentToolsEnabled {
+		t.Fatal("normalization should not enable tools for general-user policy")
+	}
+}
+
 func TestLLMSettingsKeysAreWriteOnly(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Database.Path = serverCacheTestPath(t, "llm-settings-keys")
@@ -2406,6 +2496,74 @@ func TestUserDiagnoseAsAdminUsesCompactLLMRecipientRole(t *testing.T) {
 	}
 	if strings.Contains(client.contextText, `"snapshot"`) {
 		t.Fatalf("compact diagnosis used admin snapshot payload: %s", client.contextText)
+	}
+}
+
+func TestUserDiagnoseSuggestsRepairWhenModelMissesSingleVisibleDownApp(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "compact-diagnose-repair-backstop")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+	cfg.LLM.Provider = "openai"
+	cfg.LLM.OpenAIAuthMethod = config.OpenAIAuthMethodAPIKey
+	cfg.LLM.OpenAIAPIKey = "sk-test-local"
+	cfg.Visibility.DefaultRole = models.RoleGeneralUser
+	cfg.Visibility.GeneralUserCanUseLLM = true
+	cfg.AppCatalog.GeneralUserRestartsEnabled = true
+	cfg.AppCatalog.RestartAllowedGeneralUser = map[string]bool{"emby": true}
+
+	app := newTestApp(t, cfg)
+	app.deps.Collectors.Docker = &recordingDockerCollector{apps: []models.AppStatus{{
+		AppID:                 "emby",
+		DisplayName:           "Emby",
+		ContainerID:           "container-emby",
+		ContainerName:         "EmbyServer",
+		VisibleToGeneralUsers: true,
+		DockerState:           models.DockerExited,
+		CurrentStatus:         models.StatusOffline,
+		Severity:              models.SeverityHigh,
+	}}}
+	app.settingsMu.Lock()
+	app.deps.LLM = &recordingLLMClient{
+		diagnosis: llm.Diagnosis{
+			Severity:            models.SeverityHigh,
+			Confidence:          0.81,
+			IncidentType:        models.IncidentAppDown,
+			AffectedServices:    []string{"Emby"},
+			Diagnosis:           "Emby is down.",
+			Evidence:            []string{"App is offline."},
+			GeneralUserSummary:  "Emby is not working.",
+			AdminMessage:        "Review Emby.",
+			RecommendedActionID: "none",
+			RecommendedTarget:   llm.ActionTarget{Kind: "none", IDOrName: ""},
+			ShouldNotifyAdmin:   true,
+		},
+	}
+	app.settingsMu.Unlock()
+
+	router := app.Router()
+	cookie, csrf := loginAdmin(t, router)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/user/diagnose", strings.NewReader(`{"question":"What is wrong with Emby?"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/user/diagnose status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var response diagnosisResponse
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.AgentPlan == nil || response.AgentPlan.RecommendedActionID != "ask_admin_to_restart_container" {
+		t.Fatalf("compact repair backstop did not produce restart plan: %#v", response.AgentPlan)
+	}
+	if !response.AgentPlan.CanRequestRepair || !response.AgentPlan.Target.Resolved || response.AgentPlan.Target.ID != "emby" {
+		t.Fatalf("compact repair backstop did not expose the Emby repair affordance: %#v", response.AgentPlan)
+	}
+	if response.AgentPlan.Title != "Suggested restart" || !strings.Contains(response.AgentPlan.Summary, "suggested") {
+		t.Fatalf("compact repair backstop was not clearly labeled suggested: %#v", response.AgentPlan)
 	}
 }
 

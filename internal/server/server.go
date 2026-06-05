@@ -1466,13 +1466,23 @@ func (a *App) diagnose(w http.ResponseWriter, r *http.Request, mode llm.Mode, ro
 	a.deps.Audit.Record(mustUser(r).ID, "llm.diagnosis", map[string]interface{}{"mode": string(mode), "incident_type": string(diagnosis.IncidentType), "admin_message": diagnosis.AdminMessage})
 	response := diagnosisResponse{Diagnosis: diagnosis}
 	if mode == llm.ModeAdminRequested && role == models.RoleAdmin {
-		response.AgentPlan = a.llmAgentPlanResponse(diagnosis, full, mustUser(r).ID)
+		planDiagnosis, suggested := adminRestartBackstopDiagnosis(diagnosis, full)
+		response.AgentPlan = a.llmAgentPlanResponse(planDiagnosis, full, mustUser(r).ID)
+		if suggested {
+			markSuggestedRestartPlan(response.AgentPlan, "NoobBoard found one repair-eligible app that is down, so this restart affordance is suggested even though the model did not request it. Existing approval and safety gates still apply.")
+			a.auditSuggestedRestartPlan(mustUser(r).ID, string(mode), response.AgentPlan)
+		}
 		if body.AutoRepair {
 			a.maybeExecuteAgentAutoRepair(r.Context(), mustUser(r), full, response.AgentPlan)
 		}
 	} else if mode == llm.ModeGeneralUserRequested {
 		filtered := privacy.FilterSnapshotForRole(full, role, a.redactorSnapshot())
-		response.AgentPlan = a.llmUserRepairPlanResponse(diagnosis, filtered)
+		planDiagnosis, suggested := generalUserRestartBackstopDiagnosis(diagnosis, filtered)
+		response.AgentPlan = a.llmUserRepairPlanResponse(planDiagnosis, filtered)
+		if suggested {
+			markSuggestedRestartPlan(response.AgentPlan, "NoobBoard found one visible app that is not working, so this fix option is suggested even though the model did not request it.")
+			a.auditSuggestedRestartPlan(mustUser(r).ID, string(mode), response.AgentPlan)
+		}
 		if body.AutoRepair {
 			a.maybeExecuteGeneralUserAutoRepair(r.Context(), mustUser(r), response.AgentPlan)
 		}
@@ -1735,6 +1745,91 @@ func (a *App) llmUserRepairPlanResponse(diagnosis llm.Diagnosis, snapshot models
 			},
 		},
 	}
+}
+
+func adminRestartBackstopDiagnosis(diagnosis llm.Diagnosis, snapshot models.Snapshot) (llm.Diagnosis, bool) {
+	if !canBackstopRestartAction(diagnosis.RecommendedActionID) {
+		return diagnosis, false
+	}
+	app, ok := exactlyOneRestartBackstopCandidate(snapshot.Apps, func(app models.AppStatus) bool {
+		return app.AgentRepairAllowed
+	})
+	if !ok {
+		return diagnosis, false
+	}
+	return restartBackstopDiagnosis(diagnosis, app), true
+}
+
+func generalUserRestartBackstopDiagnosis(diagnosis llm.Diagnosis, snapshot models.Snapshot) (llm.Diagnosis, bool) {
+	if !canBackstopRestartAction(diagnosis.RecommendedActionID) {
+		return diagnosis, false
+	}
+	app, ok := exactlyOneRestartBackstopCandidate(snapshot.Apps, func(app models.AppStatus) bool {
+		return true
+	})
+	if !ok {
+		return diagnosis, false
+	}
+	return restartBackstopDiagnosis(diagnosis, app), true
+}
+
+func canBackstopRestartAction(actionID string) bool {
+	switch strings.TrimSpace(actionID) {
+	case "", "none", "unknown", "ask_admin_to_check":
+		return true
+	default:
+		return false
+	}
+}
+
+func exactlyOneRestartBackstopCandidate(apps []models.AppStatus, eligible func(models.AppStatus) bool) (models.AppStatus, bool) {
+	var found models.AppStatus
+	count := 0
+	for _, app := range apps {
+		if !models.IsAppRestartCandidate(app) || !eligible(app) {
+			continue
+		}
+		found = app
+		count++
+		if count > 1 {
+			return models.AppStatus{}, false
+		}
+	}
+	return found, count == 1
+}
+
+func restartBackstopDiagnosis(diagnosis llm.Diagnosis, app models.AppStatus) llm.Diagnosis {
+	diagnosis.RecommendedActionID = "ask_admin_to_restart_container"
+	diagnosis.RecommendedTarget = llm.ActionTarget{Kind: "app", IDOrName: app.AppID}
+	if len(diagnosis.AffectedServices) == 0 {
+		diagnosis.AffectedServices = []string{firstNonEmpty(app.DisplayName, app.AppID)}
+	}
+	return diagnosis
+}
+
+func markSuggestedRestartPlan(plan *llmAgentPlanView, summary string) {
+	if plan == nil || plan.RecommendedActionID != "ask_admin_to_restart_container" {
+		return
+	}
+	plan.Title = "Suggested restart"
+	plan.Summary = summary
+}
+
+func (a *App) auditSuggestedRestartPlan(actorID, mode string, plan *llmAgentPlanView) {
+	if plan == nil {
+		return
+	}
+	a.deps.Audit.Record(actorID, "llm.agent_plan.suggested", map[string]interface{}{
+		"mode":                  mode,
+		"plan_id":               plan.ID,
+		"recommended_action_id": plan.RecommendedActionID,
+		"target_kind":           plan.Target.Kind,
+		"target_id":             plan.Target.ID,
+		"target_resolved":       plan.Target.Resolved,
+		"status":                plan.Status,
+		"can_execute":           plan.CanExecute,
+		"can_request_repair":    plan.CanRequestRepair,
+	})
 }
 
 func (a *App) maybeExecuteGeneralUserAutoRepair(ctx context.Context, actor users.User, plan *llmAgentPlanView) {
@@ -4478,6 +4573,9 @@ func normalizeLLMSettings(settings config.LLMConfig) config.LLMConfig {
 	settings.ActionAutoReviewReasoning = strings.TrimSpace(settings.ActionAutoReviewReasoning)
 	settings.ActionAutoReviewReferencePaths = compactStrings(settings.ActionAutoReviewReferencePaths)
 	settings.Policies = normalizeLLMPolicies(settings.Policies, defaults.Policies)
+	if settings.AgentControlEnabled {
+		settings.Policies = enableAdminReadOnlyTools(settings.Policies, defaults.Policies)
+	}
 	return settings
 }
 
@@ -4524,6 +4622,32 @@ func normalizeLLMPolicy(policy, fallback models.LLMPolicy) models.LLMPolicy {
 		policy.AgentToolsEnabled = false
 	}
 	return policy
+}
+
+func enableAdminReadOnlyTools(policies, defaults map[string]models.LLMPolicy) map[string]models.LLMPolicy {
+	if policies == nil {
+		policies = map[string]models.LLMPolicy{}
+	}
+	fallback := defaults["admin_requested"]
+	policy := policies["admin_requested"]
+	if policy.Name == "" {
+		policy.Name = fallback.Name
+	}
+	if policy.RecipientRole == "" {
+		policy.RecipientRole = models.RoleAdmin
+	}
+	if policy.RecipientRole != models.RoleAdmin {
+		return policies
+	}
+	policy.AgentToolsEnabled = true
+	if policy.AgentMaxToolCalls <= 0 {
+		policy.AgentMaxToolCalls = fallback.AgentMaxToolCalls
+	}
+	if len(policy.AgentToolRules) == 0 && len(fallback.AgentToolRules) > 0 {
+		policy.AgentToolRules = append([]models.LLMAgentToolRule(nil), fallback.AgentToolRules...)
+	}
+	policies["admin_requested"] = policy
+	return policies
 }
 
 func chatGPTAuthPresent(settings config.LLMConfig) bool {

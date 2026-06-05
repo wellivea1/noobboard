@@ -181,6 +181,84 @@ func TestBuildActionReviewPromptIncludesReferencesAndCurrentEvidence(t *testing.
 	}
 }
 
+func TestJSONSchemaDescribesRestartActionSelection(t *testing.T) {
+	schema := JSONSchema()
+	properties := requireObject(t, schema, "properties")
+	action := requireObject(t, properties, "recommended_action_id")
+	description, ok := action["description"].(string)
+	if !ok || !strings.Contains(description, "ask_admin_to_restart_container") || !strings.Contains(description, "specific app") {
+		t.Fatalf("recommended_action_id description does not guide restart selection: %#v", action["description"])
+	}
+	target := requireObject(t, properties, "recommended_action_target")
+	targetDescription, ok := target["description"].(string)
+	if !ok || !strings.Contains(targetDescription, "kind=app") {
+		t.Fatalf("recommended_action_target description does not guide app target selection: %#v", target["description"])
+	}
+}
+
+func TestAdminLLMContextIncludesRestartGuidanceAndRepairSignals(t *testing.T) {
+	now := time.Now().UTC()
+	snapshot := models.Snapshot{
+		GeneratedAt:   now,
+		OverallStatus: models.StatusOffline,
+		ServerSummary: "Emby is offline.",
+		AdminSummary:  "Emby container exited.",
+		Infrastructure: models.InfrastructureStatus{
+			DockerServiceAvailable: true,
+			LastCheckedAt:          now,
+			SourceHealth:           models.SourceHealth{Docker: "live"},
+		},
+		Apps: []models.AppStatus{{
+			AppID:              "emby",
+			DisplayName:        "Emby",
+			ContainerName:      "emby",
+			DockerState:        models.DockerExited,
+			CurrentStatus:      models.StatusOffline,
+			Severity:           models.SeverityHigh,
+			AgentRepairAllowed: true,
+			ServerSummary:      "Emby is offline.",
+		}},
+	}
+	builder := NewContextBuilder(privacy.NewRedactor(config.PrivacyConfig{}))
+	contextText, err := builder.Build(Request{
+		Mode: ModeAdminRequested,
+		Policy: models.LLMPolicy{
+			Name:                  "admin_requested",
+			Enabled:               true,
+			IncludeLogs:           false,
+			PreferIncidentFacts:   true,
+			AllowHiddenAppNames:   true,
+			AllowBlacklistedNames: false,
+			MaxContextBytes:       32000,
+			MaxLogLines:           0,
+			FailClosedOnRedaction: true,
+			RecipientRole:         models.RoleAdmin,
+			AgentToolsEnabled:     true,
+			AgentMaxToolCalls:     2,
+			AgentToolRules:        []models.LLMAgentToolRule{{Tool: "noobboard_current_status", Action: "allow"}},
+		},
+		Snapshot: snapshot,
+		Question: "What is wrong with Emby?",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(contextText, "ask_admin_to_restart_container") || !strings.Contains(contextText, "read-only NoobBoard status tools") {
+		t.Fatalf("admin context missing restart/tool guidance: %s", contextText)
+	}
+	payload := decodeContextPayload(t, contextText)
+	apiReport := requireObject(t, payload, "api_report")
+	docker := requireObject(t, apiReport, "docker")
+	apps := requireArray(t, docker, "apps")
+	if len(apps) != 1 {
+		t.Fatalf("admin api report app count = %d, want 1", len(apps))
+	}
+	app := apps[0].(map[string]interface{})
+	if app["agent_repair_allowed"] != true || app["restart_candidate"] != true {
+		t.Fatalf("admin app report missing repair signals: %#v", app)
+	}
+}
+
 func TestGeneralUserLLMContextDoesNotLeakHiddenAppsOrLogs(t *testing.T) {
 	snapshot, err := fixture.LoadSnapshot("../../fixtures", "llm_context_general_restricted")
 	if err != nil {
@@ -230,6 +308,11 @@ func TestGeneralUserLLMContextDoesNotLeakHiddenAppsOrLogs(t *testing.T) {
 	app := apps[0].(map[string]interface{})
 	if app["display_name"] != "Emby" {
 		t.Fatalf("general api report app = %#v, want Emby", app["display_name"])
+	}
+	for _, key := range []string{"restart_candidate", "restart_allowed_general_user", "repair_requestable"} {
+		if _, ok := app[key]; !ok {
+			t.Fatalf("general api report omitted repair signal %q: %#v", key, app)
+		}
 	}
 	for _, hiddenKey := range []string{"admin_summary", "container_id", "container_name", "target", "recent_logs", "last_incident_ids"} {
 		if _, ok := app[hiddenKey]; ok {
