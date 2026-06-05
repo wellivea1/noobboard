@@ -207,6 +207,11 @@ button.command.is-refreshing[data-glyph]::before {
   .agent-repair-progress::before {
     animation: none;
   }
+
+  .synapse-node,
+  .synapse-line::after {
+    animation: none;
+  }
 }
 
 .nav-toggle {
@@ -1289,6 +1294,34 @@ label {
   text-transform: uppercase;
 }
 
+.agent-approval-cooldown {
+  display: grid;
+  gap: 3px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: var(--surface-alt);
+}
+
+.agent-approval-cooldown strong {
+  font-size: 0.82rem;
+}
+
+.agent-approval-cooldown small {
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.agent-approval-cooldown.is-waiting {
+  border-color: var(--warn-border);
+  background: var(--warn-bg);
+}
+
+.agent-approval-cooldown.is-ready {
+  border-color: var(--ok-border);
+  background: var(--ok-bg);
+}
+
 .agent-approval-steps {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1728,6 +1761,27 @@ button.command.monitor-hide {
 
 .section-head {
   justify-content: space-between;
+}
+
+.section-head-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.section-head-copy h2,
+.section-head-copy p {
+  margin: 0;
+}
+
+.section-head-copy p {
+  max-width: 760px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.review-queue-panel {
+  align-content: start;
 }
 
 .stack {
@@ -3456,6 +3510,97 @@ button.command.app-control:focus-visible {
 .diagnostic-output strong {
   display: block;
   margin-bottom: 6px;
+}
+
+.thinking-container {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 0;
+}
+
+.synapse-network {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 48px;
+}
+
+.synapse-node {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--border);
+  animation: synapse-glow 1.6s infinite ease-in-out;
+}
+
+.synapse-line {
+  position: relative;
+  width: 14px;
+  height: 2px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--border-soft);
+}
+
+.synapse-line::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  left: -100%;
+  background: linear-gradient(90deg, transparent, var(--accent-strong), transparent);
+  animation: synapse-line-pulse 1.6s infinite linear;
+}
+
+.synapse-node.n1 {
+  animation-delay: 0s;
+}
+
+.synapse-line.l1::after {
+  animation-delay: 0.2s;
+}
+
+.synapse-node.n2 {
+  animation-delay: 0.4s;
+}
+
+.synapse-line.l2::after {
+  animation-delay: 0.6s;
+}
+
+.synapse-node.n3 {
+  animation-delay: 0.8s;
+}
+
+.thinking-label {
+  color: var(--muted);
+  font-size: 0.86rem;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+@keyframes synapse-glow {
+  0%,
+  100% {
+    background: var(--border);
+    box-shadow: none;
+  }
+
+  30% {
+    background: var(--accent-strong);
+    box-shadow: 0 0 10px var(--accent-strong);
+  }
+}
+
+@keyframes synapse-line-pulse {
+  0% {
+    left: -100%;
+  }
+
+  50%,
+  100% {
+    left: 100%;
+  }
 }
 
 .chat-auto-repair {

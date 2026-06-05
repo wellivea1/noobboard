@@ -46,6 +46,7 @@ type screenshots struct {
 	DesktopApps            string `json:"desktopApps"`
 	DesktopIncidents       string `json:"desktopIncidents"`
 	DesktopDiagnostics     string `json:"desktopDiagnostics"`
+	DesktopQueue           string `json:"desktopQueue"`
 	DesktopAdmin           string `json:"desktopAdmin"`
 	DesktopSettings        string `json:"desktopSettings"`
 	DesktopAgentRepair     string `json:"desktopAgentRepair"`
@@ -56,6 +57,7 @@ type screenshots struct {
 	MobileApps             string `json:"mobileApps"`
 	MobileIncidents        string `json:"mobileIncidents"`
 	MobileDiagnostics      string `json:"mobileDiagnostics"`
+	MobileQueue            string `json:"mobileQueue"`
 	MobileAdmin            string `json:"mobileAdmin"`
 	MobileSettings         string `json:"mobileSettings"`
 	MobileUserHome         string `json:"mobileUserHome"`
@@ -80,6 +82,9 @@ type flags struct {
 	AppLogoCount                int      `json:"appLogoCount,omitempty"`
 	IncidentCardCount           int      `json:"incidentCardCount,omitempty"`
 	DiagnosticPanelCount        int      `json:"diagnosticPanelCount,omitempty"`
+	ReviewQueueVisible          bool     `json:"reviewQueueVisible,omitempty"`
+	ReviewQueueOutputVisible    bool     `json:"reviewQueueOutputVisible,omitempty"`
+	ReviewQueueCopyAuditOnly    bool     `json:"reviewQueueCopyAuditOnly,omitempty"`
 	AuditTableRowCount          int      `json:"auditTableRowCount,omitempty"`
 	RawSnapshotCollapsed        bool     `json:"rawSnapshotCollapsed,omitempty"`
 	AssistantOverlapCount       int      `json:"assistantOverlapCount,omitempty"`
@@ -376,6 +381,15 @@ func run(opts options) (visualResult, error) {
 		return result, err
 	}
 
+	queue, err := evalFlags(cdp, queueExpression)
+	if err != nil {
+		return result, err
+	}
+	result.Screenshots.DesktopQueue = filepath.Join(cache, "visual-desktop-queue-"+runID+".png")
+	if err := captureScreenshot(cdp, result.Screenshots.DesktopQueue); err != nil {
+		return result, err
+	}
+
 	admin, err := evalFlags(cdp, adminExpression)
 	if err != nil {
 		return result, err
@@ -473,6 +487,14 @@ func run(opts options) (visualResult, error) {
 	}
 	result.Screenshots.MobileDiagnostics = filepath.Join(cache, "visual-mobile-diagnostics-"+runID+".png")
 	if err := captureScreenshot(cdp, result.Screenshots.MobileDiagnostics); err != nil {
+		return result, err
+	}
+	mobileQueue, err := evalFlags(cdp, queueExpression)
+	if err != nil {
+		return result, err
+	}
+	result.Screenshots.MobileQueue = filepath.Join(cache, "visual-mobile-queue-"+runID+".png")
+	if err := captureScreenshot(cdp, result.Screenshots.MobileQueue); err != nil {
 		return result, err
 	}
 	mobileAdmin, err := evalFlags(cdp, adminExpression)
@@ -645,6 +667,7 @@ func run(opts options) (visualResult, error) {
 		"apps":                   apps,
 		"incidents":              incidents,
 		"diagnostics":            diagnostics,
+		"queue":                  queue,
 		"admin":                  admin,
 		"settings":               settings,
 		"agentRepair":            agentRepair,
@@ -654,6 +677,7 @@ func run(opts options) (visualResult, error) {
 		"mobileApps":             mobileApps,
 		"mobileIncidents":        mobileIncidents,
 		"mobileDiagnostics":      mobileDiagnostics,
+		"mobileQueue":            mobileQueue,
 		"mobileAdmin":            mobileAdmin,
 		"mobileSettings":         mobileSettings,
 		"desktopUserAppDetail":   desktopUserAppDetail,
@@ -664,7 +688,7 @@ func run(opts options) (visualResult, error) {
 		"mobileUserDrawer":       mobileUserDrawer,
 		"mobileDrawerClose":      mobileUserDrawerClose,
 	}
-	if err := assertVisualFlags(overview, serverFlags, router, apps, incidents, diagnostics, admin, settings, agentRepair, monitorCustomization, mobileOverview, mobileRouter, mobileApps, mobileIncidents, mobileDiagnostics, mobileAdmin, mobileSettings, desktopUserAppDetail, desktopUserInfraDetail, mobileUserHome, mobileUserAppDetail, mobileUserInfraDetail, mobileUserDrawer, mobileUserDrawerClose); err != nil {
+	if err := assertVisualFlags(overview, serverFlags, router, apps, incidents, diagnostics, queue, admin, settings, agentRepair, monitorCustomization, mobileOverview, mobileRouter, mobileApps, mobileIncidents, mobileDiagnostics, mobileQueue, mobileAdmin, mobileSettings, desktopUserAppDetail, desktopUserInfraDetail, mobileUserHome, mobileUserAppDetail, mobileUserInfraDetail, mobileUserDrawer, mobileUserDrawerClose); err != nil {
 		return result, err
 	}
 
@@ -795,7 +819,7 @@ func captureScreenshot(cdp *cdpClient, path string) error {
 	return os.WriteFile(path, data, 0o644)
 }
 
-func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, admin, settings, agentRepair, customization, mobileOverview, mobileRouter, mobileApps, mobileIncidents, mobileDiagnostics, mobileAdmin, mobileSettings, desktopUserAppDetail, desktopUserInfraDetail, mobileUserHome, mobileUserAppDetail, mobileUserInfraDetail, mobileUserDrawer, mobileUserDrawerClose flags) error {
+func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, queue, admin, settings, agentRepair, customization, mobileOverview, mobileRouter, mobileApps, mobileIncidents, mobileDiagnostics, mobileQueue, mobileAdmin, mobileSettings, desktopUserAppDetail, desktopUserInfraDetail, mobileUserHome, mobileUserAppDetail, mobileUserInfraDetail, mobileUserDrawer, mobileUserDrawerClose flags) error {
 	var failures []string
 	if !overview.DashboardVisible {
 		failures = append(failures, "dashboard was not visible after login")
@@ -830,6 +854,15 @@ func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, a
 	if diagnostics.DiagnosticPanelCount < 2 || mobileDiagnostics.DiagnosticPanelCount < 2 {
 		failures = append(failures, "diagnostics tab did not render diagnosis panels")
 	}
+	if !queue.ReviewQueueVisible || !mobileQueue.ReviewQueueVisible {
+		failures = append(failures, "review queue tab did not render")
+	}
+	if !queue.ReviewQueueOutputVisible || !mobileQueue.ReviewQueueOutputVisible {
+		failures = append(failures, "review queue output did not render")
+	}
+	if !queue.ReviewQueueCopyAuditOnly || !mobileQueue.ReviewQueueCopyAuditOnly {
+		failures = append(failures, "review queue did not explain direct actions are audit-only")
+	}
 	if admin.AuditTableRowCount < 1 || mobileAdmin.AuditTableRowCount < 1 {
 		failures = append(failures, "admin audit log did not render as a table")
 	}
@@ -848,8 +881,8 @@ func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, a
 	if apps.ButtonTextOverflow {
 		failures = append(failures, "apps tab button text overflow detected")
 	}
-	if overview.ElementBoundsOverflow || server.ElementBoundsOverflow || router.ElementBoundsOverflow || apps.ElementBoundsOverflow || incidents.ElementBoundsOverflow || diagnostics.ElementBoundsOverflow || admin.ElementBoundsOverflow || settings.ElementBoundsOverflow {
-		failures = append(failures, "desktop component bounds overflow detected: "+firstNonEmpty(overview.ElementBoundsOffender, server.ElementBoundsOffender, router.ElementBoundsOffender, apps.ElementBoundsOffender, incidents.ElementBoundsOffender, diagnostics.ElementBoundsOffender, admin.ElementBoundsOffender, settings.ElementBoundsOffender))
+	if overview.ElementBoundsOverflow || server.ElementBoundsOverflow || router.ElementBoundsOverflow || apps.ElementBoundsOverflow || incidents.ElementBoundsOverflow || diagnostics.ElementBoundsOverflow || queue.ElementBoundsOverflow || admin.ElementBoundsOverflow || settings.ElementBoundsOverflow {
+		failures = append(failures, "desktop component bounds overflow detected: "+firstNonEmpty(overview.ElementBoundsOffender, server.ElementBoundsOffender, router.ElementBoundsOffender, apps.ElementBoundsOffender, incidents.ElementBoundsOffender, diagnostics.ElementBoundsOffender, queue.ElementBoundsOffender, admin.ElementBoundsOffender, settings.ElementBoundsOffender))
 	}
 	if settings.SettingsControlCount < 12 {
 		failures = append(failures, "structured settings controls did not render")
@@ -893,7 +926,7 @@ func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, a
 	if !mobileSettings.AgentReadinessLimitVisible {
 		failures = append(failures, "mobile agent readiness cooldown/rate limit text did not render")
 	}
-	if mobileOverview.UserMenuToggleVisible || mobileAdmin.UserMenuToggleVisible || mobileSettings.UserMenuToggleVisible {
+	if mobileOverview.UserMenuToggleVisible || mobileQueue.UserMenuToggleVisible || mobileAdmin.UserMenuToggleVisible || mobileSettings.UserMenuToggleVisible {
 		failures = append(failures, "compact user menu was visible on admin mobile screens")
 	}
 	if mobileSettings.BodyHorizontalOverflow || mobileSettings.ButtonTextOverflow {
@@ -932,8 +965,8 @@ func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, a
 	if mobileOverview.ButtonTextOverflow || mobileRouter.ButtonTextOverflow {
 		failures = append(failures, "mobile button text overflow detected")
 	}
-	if mobileOverview.ElementBoundsOverflow || mobileRouter.ElementBoundsOverflow || mobileApps.ElementBoundsOverflow || mobileIncidents.ElementBoundsOverflow || mobileDiagnostics.ElementBoundsOverflow || mobileAdmin.ElementBoundsOverflow || mobileSettings.ElementBoundsOverflow {
-		failures = append(failures, "mobile component bounds overflow detected: "+firstNonEmpty(mobileOverview.ElementBoundsOffender, mobileRouter.ElementBoundsOffender, mobileApps.ElementBoundsOffender, mobileIncidents.ElementBoundsOffender, mobileDiagnostics.ElementBoundsOffender, mobileAdmin.ElementBoundsOffender, mobileSettings.ElementBoundsOffender))
+	if mobileOverview.ElementBoundsOverflow || mobileRouter.ElementBoundsOverflow || mobileApps.ElementBoundsOverflow || mobileIncidents.ElementBoundsOverflow || mobileDiagnostics.ElementBoundsOverflow || mobileQueue.ElementBoundsOverflow || mobileAdmin.ElementBoundsOverflow || mobileSettings.ElementBoundsOverflow {
+		failures = append(failures, "mobile component bounds overflow detected: "+firstNonEmpty(mobileOverview.ElementBoundsOffender, mobileRouter.ElementBoundsOffender, mobileApps.ElementBoundsOffender, mobileIncidents.ElementBoundsOffender, mobileDiagnostics.ElementBoundsOffender, mobileQueue.ElementBoundsOffender, mobileAdmin.ElementBoundsOffender, mobileSettings.ElementBoundsOffender))
 	}
 	if !mobileOverview.ViewportFitCover || !mobileUserHome.ViewportFitCover {
 		failures = append(failures, "mobile viewport-fit=cover metadata missing")
@@ -1340,6 +1373,28 @@ const diagnosticsExpression = `(async () => {
     pageTitle: document.querySelector('#page-title')?.textContent || '',
     pageSubtitle: document.querySelector('#summary')?.textContent || '',
     diagnosticPanelCount: document.querySelectorAll('#tab-diagnostics .panel').length,
+    bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
+    buttonTextOverflow: hasButtonTextOverflow(),
+    ...mobileAudit
+  };
+})()`
+
+const queueExpression = `(async () => {
+  document.querySelector('[data-tab="queue"]')?.click();
+  const started = Date.now();
+  while (document.querySelector('#tab-queue')?.hidden && Date.now() - started < 5000) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  const panel = document.querySelector('#tab-queue .review-queue-panel');
+  const output = document.querySelector('#repair-requests-output');
+  const copy = document.querySelector('#tab-queue .section-head-copy')?.textContent || '';
+  const mobileAudit = await auditMobileShell();
+  return {
+    pageTitle: document.querySelector('#page-title')?.textContent || '',
+    pageSubtitle: document.querySelector('#summary')?.textContent || '',
+    reviewQueueVisible: !!panel && visibleElement(panel),
+    reviewQueueOutputVisible: !!output && visibleElement(output),
+    reviewQueueCopyAuditOnly: copy.includes('Direct admin or LLM app actions') && copy.includes('audit log'),
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow: hasButtonTextOverflow(),
     ...mobileAudit

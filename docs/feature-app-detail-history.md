@@ -454,7 +454,7 @@ weakening it.
   expiry) so an approval executes at most once; reject replays.
 - **Action allowlist:** hardcode `{restart}` for v1. Explicitly reject stop/start/
   delete/exec/anything else. Never expose shell/exec.
-- **Cooldown + rate limit:** at most 1 agent restart per app per 10 min and 5
+- **Cooldown + rate limit:** at most 1 agent repair per app per minute and 5
   agent actions per hour globally; over-limit is an audited refusal surfaced in
   chat.
 - **Kill switch:** set `AgentControlEnabled=off` to stop admin fixes instantly. One target per approval (no bulk).
@@ -509,7 +509,7 @@ weakening it.
   cooldown/rate-limit checks.
 - **Executable action scope for v1:** restart-only (recommended) vs. also
   start/stop.
-- **Cooldown/rate-limit defaults:** current v1 uses 1/app/10min, 5/hour global.
+- **Cooldown/rate-limit defaults:** current v1 uses 1/app/minute, 5/hour global.
 - **Per-app flag:** new `AgentRepairAllowed` (recommended) vs. reusing an existing
   restart-permission flag.
 
@@ -549,7 +549,7 @@ this section authoritative when planning follow-up work.
 
 Two complementary paths, both reusing the existing restart safety envelope
 (restart-only allowlist, server-side target re-resolution, not-blacklisted,
-shared cooldown 1/app/10min + global 5/hr, single-use, full audit, post-restart
+shared cooldown 1/app/minute + global 5/hr, single-use, full audit, post-restart
 verification). The trust boundary is unchanged: the server only ever runs a fixed
 restart against a server-resolved, opted-in app; no model or client input is
 executed as a command.
