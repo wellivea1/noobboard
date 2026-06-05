@@ -1,4 +1,4 @@
-const CACHE = "noobboard-v48";
+const CACHE = "noobboard-v49";
 const ASSETS = [
   "/",
   "/site-config.js",
@@ -14,6 +14,7 @@ const ASSETS = [
   "/app-icons/media-server.svg",
   "/app-icons/network.svg",
   "/app-icons/smart-home.svg",
+  "/icons/noobboard-logo.svg",
   "/icons/apple-touch-icon.png",
   "/icons/icon-192.png",
   "/icons/icon-512.png",
