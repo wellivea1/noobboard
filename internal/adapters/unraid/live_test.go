@@ -121,16 +121,6 @@ func TestLiveStatusCollectsArrayCapacityAndWarnings(t *testing.T) {
 			}`))
 			return
 		}
-		if strings.Contains(body.Query, "ArrayRuntimeState") {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{
-				"data": {
-					"array": {"state": "STARTED"},
-					"vars": {"mdState": "STARTED", "fsState": "Started"}
-				}
-			}`))
-			return
-		}
 		if !strings.Contains(body.Query, "capacity") {
 			t.Fatalf("query did not request capacity: %s", body.Query)
 		}
@@ -383,87 +373,6 @@ func TestLiveStatusIgnoresParityQueryErrors(t *testing.T) {
 	}
 	if infra.ParityCheckState != "" {
 		t.Fatalf("optional parity state should stay empty on query error, got %q", infra.ParityCheckState)
-	}
-}
-
-func TestLiveStatusTreatsFilesystemStartingAsStorageNotReady(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body struct {
-			Query string `json:"query"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Fatal(err)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		if strings.Contains(body.Query, "ParityStatus") || optionalSystemDetailsQuery(body.Query) {
-			_, _ = w.Write([]byte(`{"data":{}}`))
-			return
-		}
-		_, _ = w.Write([]byte(`{
-			"data": {
-				"info": {"os": {"distro": "Unraid", "release": "7.3.0"}},
-				"vars": {"mdState": "STARTED", "fsState": "Starting"},
-				"array": {
-					"state": "STARTED",
-					"capacity": {"disks": {"free": "100", "used": "100", "total": "200"}},
-					"disks": [{"name": "disk1", "status": "DISK_OK", "temp": 30, "size": "1000"}]
-				}
-			}
-		}`))
-	}))
-	defer server.Close()
-
-	client := NewLiveClient(server.URL, "test-key")
-	client.http = server.Client()
-	infra, _, err := client.Status(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if infra.UnraidArrayState != "started" || infra.UnraidArrayFSState != "starting" || infra.UnraidArrayMDState != "started" {
-		t.Fatalf("array runtime states = state %q fs %q md %q", infra.UnraidArrayState, infra.UnraidArrayFSState, infra.UnraidArrayMDState)
-	}
-	if infra.UnraidArrayHealthy {
-		t.Fatalf("array should not be healthy while fsState is starting: %#v", infra)
-	}
-	if !strings.Contains(strings.Join(infra.StorageWarnings, " "), "filesystem state starting") {
-		t.Fatalf("storage warning did not explain fsState mismatch: %#v", infra.StorageWarnings)
-	}
-}
-
-func TestLiveStatusFallsBackToMinimalArrayRuntimeStateWhenDashboardQueryFails(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/graphql" {
-			t.Fatalf("unexpected path %s", r.URL.Path)
-		}
-		var body struct {
-			Query string `json:"query"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Fatal(err)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		if strings.Contains(body.Query, "ArrayRuntimeState") {
-			_, _ = w.Write([]byte(`{"data":{"array":{"state":"STARTED"},"vars":{"mdState":"STARTED","fsState":"Starting"}}}`))
-			return
-		}
-		_, _ = w.Write([]byte(`{"errors":[{"message":"Cannot query field \"capacity\" on type \"Array\""}]}`))
-	}))
-	defer server.Close()
-
-	client := NewLiveClient(server.URL, "test-key")
-	client.http = server.Client()
-	infra, _, err := client.Status(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !infra.NASReachable || !infra.UnraidAPIReachable {
-		t.Fatalf("minimal array-state fallback should keep API reachable: %#v", infra)
-	}
-	if infra.UnraidArrayState != "started" || infra.UnraidArrayFSState != "starting" || infra.UnraidArrayHealthy {
-		t.Fatalf("array fallback state = %q fs=%q healthy=%v, want started/starting/false", infra.UnraidArrayState, infra.UnraidArrayFSState, infra.UnraidArrayHealthy)
-	}
-	if !strings.Contains(infra.SourceHealth.Unraid, "array runtime state available") {
-		t.Fatalf("source health did not record array-runtime fallback: %#v", infra.SourceHealth)
 	}
 }
 

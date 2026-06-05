@@ -298,7 +298,7 @@ func (b ContextBuilder) buildGeneralUserContext(snapshot models.Snapshot, req Re
 			"mode":        req.Mode,
 			"question":    compactText(req.Question, 500),
 			"api_report":  buildGeneralUserAPIReport(snapshot, req.Question, limits),
-			"instruction": "Explain the visible home status in plain English. Do not use technical vocabulary, request tools, execute actions, or claim that you personally fixed anything. If a visible app is not working and the report marks it repair_requestable or restart_allowed_general_user, you may recommend asking an admin to fix it or using the offered restart/start control in plain, non-technical language. For that one visible app, return recommended_action_id=ask_admin_to_restart_container and recommended_action_target.kind=app with the exact app_id so NoobBoard can show the existing repair affordance. If api_report.storage_action is present and needed=true, say the server storage is stopped, follow its user_guidance, and return its recommended_action_id with recommended_action_target.kind=storage and id_or_name=unraid_array. If the visible Unraid array state is stopped/offline, say the server storage is stopped. Tell the user to contact the admin first to make sure it was not stopped on purpose, but if the admin is unavailable or asleep and service needs to be restored, it is okay to start the array. Return recommended_action_id=ask_admin_to_start_array and recommended_action_target.kind=storage with id_or_name=unraid_array.",
+			"instruction": "Explain the visible home status in plain English. Do not use technical vocabulary, request tools, execute actions, or claim that you personally fixed anything. If a visible app is not working and the report marks it repair_requestable or restart_allowed_general_user, you may recommend asking an admin to fix it or using the offered restart/start control in plain, non-technical language. For that one visible app, return recommended_action_id=ask_admin_to_restart_container and recommended_action_target.kind=app with the exact app_id so NoobBoard can show the existing repair affordance. If the visible Unraid array state is stopped/offline, say the server storage is stopped. Tell the user to contact the admin first to make sure it was not stopped on purpose, but if the admin is unavailable or asleep and service needs to be restored, it is okay to start the array. Return recommended_action_id=ask_admin_to_start_array and recommended_action_target.kind=storage with id_or_name=unraid_array.",
 		}
 		generic, err := genericPayload(payload)
 		if err != nil {
@@ -367,8 +367,6 @@ type unraidAPIReport struct {
 	UnraidShareCount        int       `json:"unraid_share_count,omitempty"`
 	UnraidShareNames        []string  `json:"unraid_share_names,omitempty"`
 	UnraidArrayState        string    `json:"unraid_array_state"`
-	UnraidArrayFSState      string    `json:"unraid_array_fs_state,omitempty"`
-	UnraidArrayMDState      string    `json:"unraid_array_md_state,omitempty"`
 	UnraidArrayHealthy      bool      `json:"unraid_array_healthy"`
 	ArrayDiskCount          int       `json:"array_disk_count,omitempty"`
 	ArrayDiskWarningCount   int       `json:"array_disk_warning_count,omitempty"`
@@ -444,7 +442,6 @@ type generalUserAPIReport struct {
 	ServerSummary   string                `json:"server_summary"`
 	IntegrationMode string                `json:"integration_mode,omitempty"`
 	SourceHealth    models.SourceHealth   `json:"source_health"`
-	StorageAction   *generalStorageAction `json:"storage_action,omitempty"`
 	Unraid          generalUnraidReport   `json:"unraid"`
 	Docker          generalDockerReport   `json:"docker"`
 	UniFi           generalUniFiReport    `json:"unifi"`
@@ -453,22 +450,10 @@ type generalUserAPIReport struct {
 	Facts           []generalIncidentFact `json:"facts,omitempty"`
 }
 
-type generalStorageAction struct {
-	Needed              bool   `json:"needed"`
-	VisibleState        string `json:"visible_state"`
-	RecommendedActionID string `json:"recommended_action_id"`
-	TargetKind          string `json:"target_kind"`
-	TargetID            string `json:"target_id"`
-	PlainReason         string `json:"plain_reason"`
-	UserGuidance        string `json:"user_guidance"`
-}
-
 type generalUnraidReport struct {
 	NASReachable       bool   `json:"nas_reachable"`
 	UnraidAPIReachable bool   `json:"unraid_api_reachable"`
 	UnraidArrayState   string `json:"unraid_array_state"`
-	UnraidArrayFSState string `json:"unraid_array_fs_state,omitempty"`
-	UnraidArrayMDState string `json:"unraid_array_md_state,omitempty"`
 	UnraidArrayHealthy bool   `json:"unraid_array_healthy"`
 	StorageWarning     bool   `json:"storage_warning"`
 	SourceHealth       string `json:"source_health,omitempty"`
@@ -584,8 +569,6 @@ func buildAPIReport(snapshot models.Snapshot) apiReport {
 			UnraidShareCount:        infra.UnraidShareCount,
 			UnraidShareNames:        append([]string(nil), infra.UnraidShareNames...),
 			UnraidArrayState:        infra.UnraidArrayState,
-			UnraidArrayFSState:      infra.UnraidArrayFSState,
-			UnraidArrayMDState:      infra.UnraidArrayMDState,
 			UnraidArrayHealthy:      infra.UnraidArrayHealthy,
 			ArrayDiskCount:          infra.ArrayDiskCount,
 			ArrayDiskWarningCount:   infra.ArrayDiskWarningCount,
@@ -676,8 +659,6 @@ func buildGeneralUserAPIReport(snapshot models.Snapshot, question string, limits
 			NASReachable:       infra.NASReachable,
 			UnraidAPIReachable: infra.UnraidAPIReachable,
 			UnraidArrayState:   infra.UnraidArrayState,
-			UnraidArrayFSState: infra.UnraidArrayFSState,
-			UnraidArrayMDState: infra.UnraidArrayMDState,
 			UnraidArrayHealthy: infra.UnraidArrayHealthy,
 			StorageWarning:     len(infra.StorageWarnings) > 0 || infra.ArrayDiskWarningCount > 0,
 			SourceHealth:       infra.SourceHealth.Unraid,
@@ -710,17 +691,6 @@ func buildGeneralUserAPIReport(snapshot models.Snapshot, question string, limits
 		},
 		Incidents: make([]generalIncident, 0, len(snapshot.Incidents)),
 		Facts:     make([]generalIncidentFact, 0, len(snapshot.Facts)),
-	}
-	if models.UnraidStorageNeedsStart(infra) {
-		report.StorageAction = &generalStorageAction{
-			Needed:              true,
-			VisibleState:        models.UnraidStorageDisplayState(infra),
-			RecommendedActionID: "ask_admin_to_start_array",
-			TargetKind:          "storage",
-			TargetID:            "unraid_array",
-			PlainReason:         "Server storage is not ready, so apps that depend on it may be unavailable.",
-			UserGuidance:        "Contact the admin first to confirm it was not stopped on purpose. If the admin is unavailable or asleep and service needs to be restored, starting server storage is okay.",
-		}
 	}
 	for _, app := range snapshot.Apps {
 		switch app.CurrentStatus {
