@@ -97,7 +97,7 @@ const (
 	maxLogLimit         = 200
 	agentApprovalPlanID = "current_recommendation"
 
-	agentRepairPerAppCooldown      = 10 * time.Minute
+	agentRepairPerAppCooldown      = time.Minute
 	agentRepairGlobalWindow        = time.Hour
 	agentRepairGlobalLimit         = 5
 	actionReviewReferenceLimit     = 6
@@ -1500,9 +1500,11 @@ func (a *App) llmAgentPlanResponse(diagnosis llm.Diagnosis, snapshot models.Snap
 	a.settingsMu.RUnlock()
 	status, canExecute, allowReason := a.agentPlanExecutionState(action, target, snapshot, llmCfg, redactor)
 	planAction := action
+	var limit agentRepairLimitDecision
 	if action.Executable && target.Resolved {
 		if app, ok := findAppByID(snapshot.Apps, target.ID); ok {
 			planAction = agentRepairActionForApp(action, app)
+			limit = a.agentRepairLimitState(app.AppID, time.Now().UTC(), false)
 		}
 	}
 	expiresAt := time.Now().UTC().Add(5 * time.Minute)
@@ -1541,6 +1543,9 @@ func (a *App) llmAgentPlanResponse(diagnosis llm.Diagnosis, snapshot models.Snap
 		RequiresAdminApproval: requiresApproval,
 		CanExecute:            canExecute,
 		Status:                status,
+		RepairCooldownSeconds: int(agentRepairPerAppCooldown / time.Second),
+		RetryAfterSeconds:     limit.RetryAfterSeconds,
+		RateLimitReason:       limit.Reason,
 		Target:                target,
 		Options: []llmAgentPlanOptionView{
 			{
@@ -1560,6 +1565,10 @@ func (a *App) llmAgentPlanResponse(diagnosis llm.Diagnosis, snapshot models.Snap
 		},
 	}
 	if requiresApproval {
+		if !limit.Allowed && limit.RetryAfterSeconds > 0 {
+			retryAt := time.Now().UTC().Add(limit.RetryAfter)
+			response.RetryAt = &retryAt
+		}
 		a.deps.Audit.Record(actorID, "llm.agent_plan.proposed", map[string]interface{}{
 			"plan_id":               response.ID,
 			"recommended_action_id": action.ID,
@@ -3821,6 +3830,10 @@ type llmAgentPlanView struct {
 	RequiresAdminApproval bool                       `json:"requires_admin_approval"`
 	CanExecute            bool                       `json:"can_execute"`
 	CanRequestRepair      bool                       `json:"can_request_repair"`
+	RepairCooldownSeconds int                        `json:"repair_cooldown_seconds,omitempty"`
+	RetryAfterSeconds     int                        `json:"retry_after_seconds,omitempty"`
+	RetryAt               *time.Time                 `json:"retry_at,omitempty"`
+	RateLimitReason       string                     `json:"rate_limit_reason,omitempty"`
 	AutoRepairAttempted   bool                       `json:"auto_repair_attempted,omitempty"`
 	AutoExecuted          bool                       `json:"auto_executed,omitempty"`
 	AutoRepairMessage     string                     `json:"auto_repair_message,omitempty"`

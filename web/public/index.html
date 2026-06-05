@@ -121,6 +121,7 @@
         <button type="button" data-tab="apps">Apps</button>
         <button type="button" data-tab="incidents">Incidents</button>
         <button type="button" data-tab="diagnostics">Diagnostics</button>
+        <button type="button" data-tab="queue" data-admin-only>Review Queue</button>
         <button type="button" data-tab="admin" data-admin-only>Admin</button>
         <button type="button" data-tab="settings" data-admin-only>Settings</button>
       </nav>
@@ -213,6 +214,19 @@
         </div>
       </section>
 
+      <section id="tab-queue" class="tab-panel" hidden data-admin-detail>
+        <section class="panel review-queue-panel">
+          <div class="section-head">
+            <div class="section-head-copy">
+              <h2>Actions Needing Review</h2>
+              <p>Standard-user repair requests wait here for an admin decision. Direct admin or LLM app actions are logged in the audit log instead of queued.</p>
+            </div>
+            <button id="repair-requests-refresh" type="button" class="command" data-glyph="&#8635;">Reload</button>
+          </div>
+          <div id="repair-requests-output" class="repair-request-list"></div>
+        </section>
+      </section>
+
       <section id="tab-admin" class="tab-panel" hidden data-admin-detail>
         <div class="admin-grid">
           <section class="panel">
@@ -228,13 +242,6 @@
               <span id="audit-row-count" class="muted">0 events</span>
             </div>
             <div id="audit-output" class="audit-table-wrap"></div>
-          </section>
-          <section class="panel">
-            <div class="section-head">
-              <h2>Repair Requests</h2>
-              <button id="repair-requests-refresh" type="button" class="command" data-glyph="&#8635;">Reload</button>
-            </div>
-            <div id="repair-requests-output" class="repair-request-list"></div>
           </section>
           <section class="panel">
             <details class="debug-disclosure">

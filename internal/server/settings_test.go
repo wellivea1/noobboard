@@ -726,6 +726,9 @@ func TestAgentApprovalStartsStoppedAppOnce(t *testing.T) {
 	if diagnosis.AgentPlan.DirectAction != string(docker.ActionStart) {
 		t.Fatalf("stopped app approval plan direct_action = %q, want start", diagnosis.AgentPlan.DirectAction)
 	}
+	if diagnosis.AgentPlan.RepairCooldownSeconds != 60 {
+		t.Fatalf("repair cooldown seconds = %d, want 60", diagnosis.AgentPlan.RepairCooldownSeconds)
+	}
 	tokenPayload, err := app.verifyAgentApprovalToken(diagnosis.AgentPlan.ApprovalToken, "admin-1")
 	if err != nil {
 		t.Fatal(err)
@@ -833,6 +836,9 @@ func TestAgentApprovalStartsStoppedAppOnce(t *testing.T) {
 	}
 	if secondDiagnosis.AgentPlan == nil || secondDiagnosis.AgentPlan.Status != "approval_rate_limited" || secondDiagnosis.AgentPlan.CanExecute {
 		t.Fatalf("second plan was not rate-limited by cooldown: %#v", secondDiagnosis.AgentPlan)
+	}
+	if secondDiagnosis.AgentPlan.RetryAfterSeconds <= 0 || secondDiagnosis.AgentPlan.RetryAfterSeconds > 60 || secondDiagnosis.AgentPlan.RetryAt == nil {
+		t.Fatalf("second plan did not expose a live retry countdown: %#v", secondDiagnosis.AgentPlan)
 	}
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/api/admin/agent/approval", strings.NewReader(fmt.Sprintf(`{"approval_token":%q,"choice":"allow_once"}`, secondDiagnosis.AgentPlan.ApprovalToken)))
@@ -2261,6 +2267,9 @@ func TestLLMSettingsIncludesAgentReadinessMetadata(t *testing.T) {
 	}
 	if !response.AgentReadiness.AdminToolsEnabled || response.AgentReadiness.AdminToolCallLimit != 4 {
 		t.Fatalf("admin tool readiness = %#v", response.AgentReadiness)
+	}
+	if response.AgentReadiness.RepairCooldown != time.Minute {
+		t.Fatalf("repair cooldown = %s, want 1m", response.AgentReadiness.RepairCooldown)
 	}
 	if len(response.AgentReadiness.ReadOnlyTools) != 4 {
 		t.Fatalf("read-only tool count = %d", len(response.AgentReadiness.ReadOnlyTools))

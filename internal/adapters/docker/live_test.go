@@ -12,6 +12,8 @@ import (
 	"github.com/wellivea1/noobboard/internal/models"
 )
 
+const testUnraidDockerObjectID = "bfcd62805c42d4c95f3ec13f28d7d1c4dcd4913d8c93531268e78c98391577d9:968ab6836d4469c5ab1b37c6d6f0bc078dd53bc3b99239cf1cfcd1a6ee3e1fc4"
+
 func TestUnraidDockerNameAndStatusMapping(t *testing.T) {
 	if got := displayName([]string{"/EmbyServer"}); got != "EmbyServer" {
 		t.Fatalf("displayName = %q", got)
@@ -69,6 +71,27 @@ func TestUnraidDockerUsesDocumentedDockerContainersQuery(t *testing.T) {
 	}
 	if apps[0].ContainerID != "container:1" {
 		t.Fatalf("container id was not normalized: %#v", apps[0])
+	}
+}
+
+func TestUnraidDockerPreservesRawGraphQLContainerID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"dockerContainers":[{"id":"` + testUnraidDockerObjectID + `","names":["/EmbyServer"],"state":"exited","status":"Exited (137)","autoStart":false}]}}`))
+	}))
+	defer server.Close()
+
+	client := NewUnraidLiveClient(server.URL, "test-key")
+	client.http = server.Client()
+	apps, err := client.Apps(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(apps) != 1 {
+		t.Fatalf("apps len = %d", len(apps))
+	}
+	if apps[0].ContainerID != testUnraidDockerObjectID {
+		t.Fatalf("raw GraphQL container id was not preserved: %#v", apps[0])
 	}
 }
 
@@ -164,6 +187,34 @@ func TestUnraidDockerControlUsesGraphQLVariables(t *testing.T) {
 		t.Fatalf("calls = %d", len(calls))
 	}
 	if result.Action != ActionRestart || result.DockerState != models.DockerRunning || result.Status != "Restarted" {
+		t.Fatalf("unexpected control result: %#v", result)
+	}
+}
+
+func TestUnraidDockerControlPrefersRawGraphQLContainerID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Query     string                 `json:"query"`
+			Variables map[string]interface{} `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body.Variables["id"] != testUnraidDockerObjectID {
+			t.Fatalf("target id = %#v, want raw Unraid Docker object id", body.Variables["id"])
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"docker":{"start":{"id":"` + testUnraidDockerObjectID + `","state":"running","status":"Up 1 second"}}}}`))
+	}))
+	defer server.Close()
+
+	client := NewUnraidLiveClient(server.URL, "test-key")
+	client.http = server.Client()
+	result, err := client.ControlContainer(t.Context(), models.AppStatus{AppID: "emby", ContainerID: testUnraidDockerObjectID, ContainerName: "EmbyServer"}, ActionStart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ContainerID != testUnraidDockerObjectID || result.Action != ActionStart {
 		t.Fatalf("unexpected control result: %#v", result)
 	}
 }

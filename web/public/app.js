@@ -34,6 +34,7 @@ const state = {
   userDetailReturnFocus: null,
   openAIAuthDialog: null,
   agentApprovalDialog: null,
+  agentApprovalCooldownTimer: null,
   chatBusy: {
     diagnostic: false,
     user: false,
@@ -696,15 +697,18 @@ function setActiveTab(tabName) {
     apps: "Application inventory",
     incidents: "Incidents and facts",
     diagnostics: "Diagnostics",
+    queue: "Review queue",
     admin: "Admin workspace",
     settings: "Runtime settings",
   };
   $("page-title").textContent = titles[tabName] || "System overview";
   renderPageSubtitle();
   closeNav();
+  if (tabName === "queue") {
+    loadRepairRequests();
+  }
   if (tabName === "admin") {
     loadAudit();
-    loadRepairRequests();
   }
   if (tabName === "settings") loadSettings();
 }
@@ -794,6 +798,7 @@ function renderPageSubtitle() {
     apps: "Search visible apps, review metadata, and use admin-only controls.",
     incidents: "Current incidents and the facts behind them.",
     diagnostics: "Ask the configured diagnosis provider for a structured explanation.",
+    queue: "Review standard-user repair requests that need an admin decision.",
     admin: "Audit events and a collapsed debug snapshot for troubleshooting.",
     settings: "Configure roles, visibility, integrations, providers, and notifications.",
   };
@@ -1509,13 +1514,26 @@ function resetChatPlaceholder(output, message) {
 function setChatPending(output, message) {
   output.classList.remove("chat-empty", "chat-unavailable", "chat-result", "chat-error");
   output.classList.add("chat-pending", "muted");
-  output.textContent = message;
+  output.replaceChildren(renderThinkingLoader(message || "Checking status..."));
 }
 
 function setChatError(output, message) {
   output.classList.remove("chat-empty", "chat-unavailable", "chat-result", "chat-pending", "muted");
   output.classList.add("chat-error");
   output.textContent = message;
+}
+
+function renderThinkingLoader(message) {
+  return node("div", { class: "thinking-loader thinking-container synapse-concept", role: "status", "aria-live": "polite" },
+    node("div", { class: "synapse-network", "aria-hidden": "true" },
+      node("div", { class: "synapse-node n1" }),
+      node("div", { class: "synapse-line l1" }),
+      node("div", { class: "synapse-node n2" }),
+      node("div", { class: "synapse-line l2" }),
+      node("div", { class: "synapse-node n3" }),
+    ),
+    node("span", { class: "thinking-label", text: message }),
+  );
 }
 
 function cleanChatText(value) {
@@ -1746,6 +1764,7 @@ function userRepairDetailActions(app) {
   if (!canControl && !isUserRepairCandidate(app)) return null;
   const request = latestUserRepairRequestForApp(app.app_id);
   const pending = request?.status === "pending";
+  const showRequestStatus = !!request && (!canControl || request.status !== "pending");
   return node("section", { class: "detail-actions user-repair-actions" },
     canControl ? node("div", { class: "user-app-control-row" }, userAppControlActions(app).map((item) => {
       const disabledReason = userAppControlDisabledReason(item.action, app);
@@ -1767,7 +1786,7 @@ function userRepairDetailActions(app) {
       onclick: (event) => requestAdminRepairForApp(app, event.currentTarget),
       text: pending ? "Asked admin" : "Ask admin",
     }),
-    request ? node("span", {
+    showRequestStatus ? node("span", {
       class: `settings-state-pill user-repair-state ${userRepairRequestTone(request)}`,
       text: userRepairRequestStatusText(request),
     }) : null,
@@ -2991,6 +3010,7 @@ function openAgentApprovalDialog(plan) {
   const actionVerb = actionLabel.toLowerCase();
   let selectedChoice = initialAgentApprovalChoice(approvalOptions);
   const optionRows = [];
+  const cooldownNode = renderAgentApprovalCooldown(plan);
   const closeButton = node("button", {
     type: "button",
     class: "command ghost",
@@ -3019,6 +3039,12 @@ function openAgentApprovalDialog(plan) {
     submitButton.textContent = selectedChoice === "deny" ? "Do not allow" : selectedOption?.label || "Submit choice";
     for (const item of optionRows) {
       item.row.classList.toggle("selected", item.option.id === selectedChoice);
+      item.row.classList.toggle("disabled", !item.option.enabled);
+      item.input.disabled = !item.option.enabled;
+      if (item.reasonNode) {
+        item.reasonNode.textContent = item.option.reason || "";
+        item.reasonNode.hidden = !item.option.reason;
+      }
     }
     if (selectedOption?.reason) {
       statusNode.dataset.tone = "bad";
@@ -3043,15 +3069,16 @@ function openAgentApprovalDialog(plan) {
         updateSelection();
       },
     });
+    const reasonNode = node("small", { class: "agent-approval-option-reason", text: option.reason || "", hidden: !option.reason });
     const row = node("label", { class: `agent-approval-option${option.enabled ? "" : " disabled"}${option.id === selectedChoice ? " selected" : ""}` },
       input,
       node("span", { class: "agent-approval-option-text" },
         node("strong", { text: option.label || option.id }),
         option.description ? node("small", { text: option.description }) : null,
-        option.reason ? node("small", { class: "agent-approval-option-reason", text: option.reason }) : null,
+        reasonNode,
       ),
     );
-    optionRows.push({ option, row, input });
+    optionRows.push({ option, row, input, reasonNode });
     return row;
   });
   const dialog = node("section", {
@@ -3078,6 +3105,7 @@ function openAgentApprovalDialog(plan) {
         node("span", { class: "agent-approval-direct-action", text: `${actionLabel} once` }),
         agentPlanTargetText(plan) ? node("small", { text: agentPlanTargetText(plan) }) : null,
       ),
+      cooldownNode,
       node("ol", { class: "agent-approval-steps", "aria-label": "Approval progress" },
         node("li", { class: "current" }, "Review"),
         node("li", {}, "Approve"),
@@ -3103,8 +3131,85 @@ function openAgentApprovalDialog(plan) {
   document.body.classList.add("agent-approval-open");
   state.agentApprovalDialog = { backdrop, dialog, previousFocus, statusNode, submitButton };
   updateSelection();
+  startAgentApprovalCooldownCountdown(plan, cooldownNode, approvalOptions, optionRows, updateSelection);
   const selectedInput = optionRows.find((item) => item.option.id === selectedChoice && !item.input.disabled)?.input;
   (selectedInput || closeButton).focus({ preventScroll: true });
+}
+
+function renderAgentApprovalCooldown(plan) {
+  const cooldownSeconds = agentPlanCooldownSeconds(plan);
+  const retrySeconds = agentPlanRetrySeconds(plan);
+  const text = retrySeconds > 0
+    ? `Cooldown active. Try again in ${formatSeconds(retrySeconds)}.`
+    : `After this fix, this app has a ${formatSeconds(cooldownSeconds)} cooldown before another automatic fix.`;
+  return node("div", { class: `agent-approval-cooldown${retrySeconds > 0 ? " is-waiting" : ""}`, "aria-live": "polite" },
+    node("strong", { text: retrySeconds > 0 ? "Cooldown" : "Cooldown after approval" }),
+    node("small", { text }),
+  );
+}
+
+function startAgentApprovalCooldownCountdown(plan, cooldownNode, approvalOptions, optionRows, updateSelection) {
+  if (state.agentApprovalCooldownTimer) {
+    window.clearInterval(state.agentApprovalCooldownTimer);
+    state.agentApprovalCooldownTimer = null;
+  }
+  const deadline = agentPlanRetryDeadline(plan);
+  if (!deadline || !cooldownNode) return;
+  const allowOption = approvalOptions.find((option) => option.id === "allow_once");
+  const label = cooldownNode.querySelector("strong");
+  const detail = cooldownNode.querySelector("small");
+  const tick = () => {
+    const remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+    if (remaining > 0) {
+      cooldownNode.classList.add("is-waiting");
+      if (label) label.textContent = "Cooldown";
+      if (detail) detail.textContent = `Try again in ${formatSeconds(remaining)}. This updates automatically.`;
+      if (allowOption) {
+        allowOption.enabled = false;
+        allowOption.reason = `Cooldown active. Try again in ${formatSeconds(remaining)}.`;
+      }
+    } else {
+      cooldownNode.classList.remove("is-waiting");
+      cooldownNode.classList.add("is-ready");
+      if (label) label.textContent = "Cooldown clear";
+      if (detail) detail.textContent = `This action is available. After it runs, this app has a ${formatSeconds(agentPlanCooldownSeconds(plan))} cooldown.`;
+      if (allowOption) {
+        allowOption.enabled = true;
+        allowOption.reason = "";
+      }
+      if (state.agentApprovalCooldownTimer) {
+        window.clearInterval(state.agentApprovalCooldownTimer);
+        state.agentApprovalCooldownTimer = null;
+      }
+    }
+    for (const item of optionRows) {
+      if (item.option.id === "allow_once") {
+        item.input.disabled = !item.option.enabled;
+      }
+    }
+    updateSelection();
+  };
+  tick();
+  if (agentPlanRetrySeconds(plan) > 0) {
+    state.agentApprovalCooldownTimer = window.setInterval(tick, 1000);
+  }
+}
+
+function agentPlanCooldownSeconds(plan) {
+  const value = Number(plan?.repair_cooldown_seconds || 0);
+  return Number.isFinite(value) && value > 0 ? value : 60;
+}
+
+function agentPlanRetrySeconds(plan) {
+  const value = Number(plan?.retry_after_seconds || 0);
+  return Number.isFinite(value) && value > 0 ? Math.ceil(value) : 0;
+}
+
+function agentPlanRetryDeadline(plan) {
+  const retryAt = Date.parse(plan?.retry_at || "");
+  if (Number.isFinite(retryAt) && retryAt > Date.now()) return retryAt;
+  const seconds = agentPlanRetrySeconds(plan);
+  return seconds > 0 ? Date.now() + seconds * 1000 : 0;
 }
 
 async function submitAgentApproval(plan, choice, button) {
@@ -3267,6 +3372,10 @@ function repairStatusText(status) {
 function closeAgentApprovalDialog(options = {}) {
   const current = state.agentApprovalDialog;
   if (!current) return;
+  if (state.agentApprovalCooldownTimer) {
+    window.clearInterval(state.agentApprovalCooldownTimer);
+    state.agentApprovalCooldownTimer = null;
+  }
   current.backdrop.remove();
   document.body.classList.remove("agent-approval-open");
   state.agentApprovalDialog = null;
@@ -4495,7 +4604,7 @@ function autoReviewDetail(reference) {
 }
 
 function agentRepairLimitDetail(readiness) {
-  const cooldownSeconds = durationToSeconds(readiness.repair_cooldown) || 600;
+  const cooldownSeconds = durationToSeconds(readiness.repair_cooldown) || 60;
   const windowSeconds = durationToSeconds(readiness.repair_rate_limit_window) || 3600;
   const max = Number(readiness.repair_rate_limit_max || 5);
   return `Only opted-in apps can be changed. Limit: 1 per app every ${formatSeconds(cooldownSeconds)}, ${max} total per ${formatSeconds(windowSeconds)}.`;

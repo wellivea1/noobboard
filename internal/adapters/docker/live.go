@@ -22,6 +22,8 @@ type UnraidLiveClient struct {
 	http    *http.Client
 }
 
+var unraidDockerObjectIDPattern = regexp.MustCompile(`(?i)^[a-f0-9]{64}:[a-f0-9]{64}$`)
+
 func NewUnraidLiveClient(baseURL, apiKey string) UnraidLiveClient {
 	return UnraidLiveClient{
 		baseURL: strings.TrimRight(baseURL, "/"),
@@ -396,6 +398,9 @@ func prefixedContainerID(id, fallbackName string) string {
 	}
 	if strings.Contains(id, ":") {
 		if strings.HasPrefix(id, "container:") && safeContainerTarget(strings.TrimPrefix(id, "container:")) {
+			return id
+		}
+		if unraidDockerObjectIDPattern.MatchString(id) {
 			return id
 		}
 		return ""
