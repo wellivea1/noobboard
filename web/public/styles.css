@@ -5052,7 +5052,13 @@ body.compact-view #user-menu-toggle.nav-toggle {
   background: transparent;
   color: var(--text);
   padding: 0;
-  font-size: 1.25rem;
+  font-size: 0;
+  line-height: 1;
+}
+
+body.compact-view #user-menu-toggle.nav-toggle.command[data-glyph]::before {
+  margin: 0;
+  flex: 0 0 auto;
 }
 
 body.compact-view #user-menu-toggle.nav-toggle:hover,

@@ -121,10 +121,17 @@ func openAIResponsesBody(model, contextText string) ([]byte, error) {
 }
 
 func openAIActionReviewBody(model, prompt string, opts openAIResponsesOptions) ([]byte, error) {
+	input := interface{}(prompt)
+	if opts.InputAsList {
+		input = []interface{}{map[string]interface{}{
+			"role":    "user",
+			"content": prompt,
+		}}
+	}
 	body := map[string]interface{}{
 		"model":        model,
 		"instructions": "You review a proposed NoobBoard repair action. Return only the structured JSON review decision.",
-		"input":        prompt,
+		"input":        input,
 		"text": map[string]interface{}{
 			"format": map[string]interface{}{
 				"type":   "json_schema",

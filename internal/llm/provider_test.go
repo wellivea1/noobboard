@@ -358,6 +358,63 @@ func TestChatGPTConnectorUsesCodexResponsesEndpoint(t *testing.T) {
 	}
 }
 
+func TestChatGPTConnectorReviewActionUsesCodexListInput(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.LLM.Provider = "openai"
+	cfg.LLM.OpenAIAuthMethod = config.OpenAIAuthMethodChatGPTBrowser
+	cfg.LLM.ChatGPTRefreshToken = "refresh-token"
+	cfg.LLM.ChatGPTAccessToken = "access-token"
+	cfg.LLM.ChatGPTAccountID = "account-123"
+	cfg.LLM.ChatGPTTokenExpiresAt = time.Now().UTC().Add(time.Hour)
+	client := NewChatGPTClient(cfg.LLM, privacy.NewRedactor(config.PrivacyConfig{}))
+	client.http = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Method != http.MethodPost || req.URL.String() != OpenAIChatGPTCodexEndpoint {
+			t.Fatalf("unexpected ChatGPT review request %s %s", req.Method, req.URL.String())
+		}
+		if got := req.Header.Get("ChatGPT-Account-Id"); got != "account-123" {
+			t.Fatalf("ChatGPT-Account-Id header = %q", got)
+		}
+		var body map[string]interface{}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		input, ok := body["input"].([]interface{})
+		if !ok || len(input) != 1 {
+			t.Fatalf("ChatGPT action review input = %#v, want one-item list", body["input"])
+		}
+		message, ok := input[0].(map[string]interface{})
+		if !ok || message["role"] != "user" {
+			t.Fatalf("ChatGPT action review input message = %#v", input[0])
+		}
+		if content, _ := message["content"].(string); !strings.Contains(content, "ACTION AUTO-REVIEW") || !strings.Contains(content, "target_label: Emby") {
+			t.Fatalf("ChatGPT action review content missing prompt details: %s", content)
+		}
+		if store, ok := body["store"].(bool); !ok || store {
+			t.Fatalf("ChatGPT action review store = %#v, want false", body["store"])
+		}
+		if stream, ok := body["stream"].(bool); !ok || !stream {
+			t.Fatalf("ChatGPT action review stream = %#v, want true", body["stream"])
+		}
+		include, ok := body["include"].([]interface{})
+		if !ok || len(include) != 1 || include[0] != "reasoning.encrypted_content" {
+			t.Fatalf("ChatGPT action review include = %#v", body["include"])
+		}
+		return streamResponse(t,
+			map[string]interface{}{
+				"type":  "response.output_text.delta",
+				"delta": validActionReviewJSON(t),
+			},
+		)
+	})}
+	decision, err := client.ReviewAction(context.Background(), sampleActionReviewRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !decision.Allow {
+		t.Fatalf("decision = %#v, want allow", decision)
+	}
+}
+
 func TestChatGPTConnectorRunsAllowedReadOnlyAgentToolStateless(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.LLM.Provider = "openai"
@@ -621,9 +678,59 @@ func sampleLLMRequest() Request {
 	}
 }
 
+func sampleActionReviewRequest() ActionReviewRequest {
+	return ActionReviewRequest{
+		ActionID:      "ask_admin_to_restart_container",
+		ActionTitle:   "App fix recommendation",
+		TargetID:      "emby",
+		TargetLabel:   "Emby",
+		CurrentStatus: models.StatusOffline,
+		ActorRole:     models.RoleAdmin,
+		Via:           "admin_approval",
+		Reasoning:     "high",
+		Snapshot: models.Snapshot{
+			GeneratedAt: time.Now().UTC(),
+			Apps: []models.AppStatus{
+				{
+					AppID:              "emby",
+					DisplayName:        "Emby",
+					ContainerName:      "EmbyServer",
+					CurrentStatus:      models.StatusOffline,
+					DockerState:        models.DockerExited,
+					AgentRepairAllowed: true,
+				},
+			},
+			Infrastructure: models.InfrastructureStatus{
+				InternetReachable:      true,
+				DNSOK:                  true,
+				RouterReachable:        true,
+				NASReachable:           true,
+				UnraidAPIReachable:     true,
+				UnraidArrayHealthy:     true,
+				DockerServiceAvailable: true,
+			},
+		},
+	}
+}
+
 func validDiagnosisJSON(t *testing.T) string {
 	t.Helper()
 	data, err := json.Marshal(validDiagnosisMap())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+func validActionReviewJSON(t *testing.T) string {
+	t.Helper()
+	data, err := json.Marshal(map[string]interface{}{
+		"allow":      true,
+		"confidence": 0.92,
+		"summary":    "The proposed app fix is target-specific and consistent with the current app state.",
+		"issues":     []string{},
+		"checked_at": time.Now().UTC().Format(time.RFC3339),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

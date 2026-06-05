@@ -162,6 +162,7 @@ func (c *ChatGPTClient) ReviewAction(ctx context.Context, req ActionReviewReques
 	opts := openAIResponsesOptions{
 		ReasoningEffort:           openAIReviewReasoning(reasoning),
 		IncludeEncryptedReasoning: true,
+		InputAsList:               true,
 		StoreFalse:                true,
 		Stream:                    true,
 	}
