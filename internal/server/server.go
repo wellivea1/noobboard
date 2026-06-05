@@ -1503,10 +1503,7 @@ func (a *App) diagnose(w http.ResponseWriter, r *http.Request, mode llm.Mode, ro
 		}
 	} else if mode == llm.ModeGeneralUserRequested {
 		filtered := privacy.FilterSnapshotForRole(full, role, a.redactorSnapshot())
-		planDiagnosis, arraySuggested := diagnosis, false
-		if filtered.Visibility.ShowNASStatusToUsers {
-			planDiagnosis, arraySuggested = arrayStartBackstopDiagnosis(diagnosis, filtered)
-		}
+		planDiagnosis, arraySuggested := arrayStartBackstopDiagnosis(diagnosis, filtered)
 		if arraySuggested {
 			response.Diagnosis = planDiagnosis
 		}
@@ -1812,13 +1809,11 @@ func (a *App) llmUserRepairPlanResponse(diagnosis llm.Diagnosis, snapshot models
 }
 
 func (a *App) llmUserArrayStartPlanResponse(action llmAgentActionDefinition, known bool, target llmAgentPlanTargetView, snapshot models.Snapshot, actorID string) *llmAgentPlanView {
-	canExecute := known && snapshot.Visibility.ShowNASStatusToUsers && arrayStartNeeded(snapshot.Infrastructure)
+	canExecute := known && arrayStartNeeded(snapshot.Infrastructure)
 	status := "not_actionable"
 	reason := ""
 	if canExecute {
 		status = "direct_array_start_available"
-	} else if !snapshot.Visibility.ShowNASStatusToUsers {
-		reason = "Server storage status is hidden for this role."
 	} else {
 		reason = "The array is not currently stopped."
 	}
@@ -1985,8 +1980,8 @@ func markSuggestedArrayStartPlan(plan *llmAgentPlanView) {
 	if plan == nil || plan.RecommendedActionID != arrayStartActionID {
 		return
 	}
-	plan.Title = "Start array"
-	plan.Summary = "The Unraid array is stopped. Contact the admin first to confirm it was not stopped intentionally; if the admin is unavailable or asleep and service needs to be restored, starting the array is okay."
+	plan.Title = "Start server storage"
+	plan.Summary = "Server storage is stopped. Contact the admin first to confirm it was not stopped intentionally; if the admin is unavailable or asleep and service needs to be restored, starting it is okay."
 }
 
 func (a *App) auditSuggestedRestartPlan(actorID, mode string, plan *llmAgentPlanView) {
@@ -3352,19 +3347,14 @@ func (a *App) executeUserAgentAction(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, errors.New("execution token is missing a replay nonce"))
 		return
 	}
-	visibleSnapshot, err := a.Snapshot(r.Context(), user.Role)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	if !visibleSnapshot.Visibility.ShowNASStatusToUsers {
-		a.deps.Audit.Record(user.ID, "llm.array_start.refused", map[string]interface{}{"reason": "nas_status_hidden", "via": "general_user_llm"})
-		writeError(w, http.StatusForbidden, errors.New("server storage status is hidden for this role"))
-		return
-	}
-	if !arrayStartNeeded(visibleSnapshot.Infrastructure) {
-		a.deps.Audit.Record(user.ID, "llm.array_start.refused", map[string]interface{}{"reason": "visible_array_not_stopped", "state": visibleSnapshot.Infrastructure.UnraidArrayState, "via": "general_user_llm"})
-		writeError(w, http.StatusConflict, errors.New("the array is not currently stopped"))
+	a.settingsMu.RLock()
+	visibility := a.deps.Config.Visibility
+	role := compactDiagnosisRole(user.Role, visibility.DefaultRole)
+	allowed := roleCanUseLLM(visibility, role)
+	a.settingsMu.RUnlock()
+	if !allowed {
+		a.deps.Audit.Record(user.ID, "llm.array_start.refused", map[string]interface{}{"reason": "llm_disabled_for_role", "via": "general_user_llm"})
+		writeError(w, http.StatusForbidden, errors.New("status chat is disabled for this role"))
 		return
 	}
 	snapshot, err := a.readOnlySnapshot(r.Context())
