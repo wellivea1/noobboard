@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/wellivea1/noobboard/internal/config"
 	"github.com/wellivea1/noobboard/internal/models"
@@ -22,6 +23,10 @@ type Store interface {
 	AllUsers() ([]UserRecord, error)
 	UserByUsername(username string) (UserRecord, error)
 	UserByID(id string) (UserRecord, error)
+	UpsertPersistentSession(PersistentSessionRecord) error
+	PersistentSessionByTokenHash(tokenHash string) (PersistentSessionRecord, error)
+	DeletePersistentSession(tokenHash string) error
+	PrunePersistentSessions(now time.Time, maxEntries int) error
 	UpsertNotificationPreference(models.NotificationPreference) error
 	NotificationPreferencesForUser(userID string) ([]models.NotificationPreference, error)
 	AllNotificationPreferences() ([]models.NotificationPreference, error)
@@ -41,6 +46,7 @@ type State struct {
 	NotificationPreferences []models.NotificationPreference `json:"notification_preferences"`
 	Notifications           []NotificationRecord            `json:"notifications"`
 	RepairRequests          []models.RepairRequest          `json:"repair_requests,omitempty"`
+	PersistentSessions      []PersistentSessionRecord       `json:"persistent_sessions,omitempty"`
 	Audit                   []models.AuditEntry             `json:"audit"`
 	Users                   []UserRecord                    `json:"users"`
 	RuntimeSettings         *RuntimeSettings                `json:"runtime_settings,omitempty"`
@@ -65,6 +71,16 @@ type UserRecord struct {
 	Iterations   int         `json:"iterations"`
 	CreatedAt    string      `json:"created_at"`
 	Disabled     bool        `json:"disabled"`
+}
+
+type PersistentSessionRecord struct {
+	TokenHash         string    `json:"token_hash"`
+	UserID            string    `json:"user_id"`
+	CredentialVersion string    `json:"credential_version"`
+	CSRFToken         string    `json:"csrf_token"`
+	CreatedAt         time.Time `json:"created_at"`
+	LastSeenAt        time.Time `json:"last_seen_at"`
+	ExpiresAt         time.Time `json:"expires_at"`
 }
 
 type NotificationRecord struct {
@@ -187,6 +203,77 @@ func (s *FileStore) UserByID(id string) (UserRecord, error) {
 		}
 	}
 	return UserRecord{}, ErrNotFound
+}
+
+func (s *FileStore) UpsertPersistentSession(record PersistentSessionRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, existing := range s.state.PersistentSessions {
+		if existing.TokenHash == record.TokenHash {
+			s.state.PersistentSessions[i] = record
+			return s.persistLocked()
+		}
+	}
+	s.state.PersistentSessions = append(s.state.PersistentSessions, record)
+	return s.persistLocked()
+}
+
+func (s *FileStore) PersistentSessionByTokenHash(tokenHash string) (PersistentSessionRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, record := range s.state.PersistentSessions {
+		if record.TokenHash == tokenHash {
+			return record, nil
+		}
+	}
+	return PersistentSessionRecord{}, ErrNotFound
+}
+
+func (s *FileStore) DeletePersistentSession(tokenHash string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, record := range s.state.PersistentSessions {
+		if record.TokenHash == tokenHash {
+			s.state.PersistentSessions = append(s.state.PersistentSessions[:i], s.state.PersistentSessions[i+1:]...)
+			return s.persistLocked()
+		}
+	}
+	return nil
+}
+
+func (s *FileStore) PrunePersistentSessions(now time.Time, maxEntries int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	kept := s.state.PersistentSessions[:0]
+	for _, record := range s.state.PersistentSessions {
+		if record.TokenHash == "" || record.UserID == "" || record.ExpiresAt.IsZero() || now.After(record.ExpiresAt) {
+			continue
+		}
+		kept = append(kept, record)
+	}
+	s.state.PersistentSessions = kept
+	if maxEntries < 0 {
+		maxEntries = 0
+	}
+	for maxEntries > 0 && len(s.state.PersistentSessions) > maxEntries {
+		oldest := 0
+		oldestSeen := persistentSessionSeenAt(s.state.PersistentSessions[0])
+		for i := 1; i < len(s.state.PersistentSessions); i++ {
+			if seenAt := persistentSessionSeenAt(s.state.PersistentSessions[i]); seenAt.Before(oldestSeen) {
+				oldest = i
+				oldestSeen = seenAt
+			}
+		}
+		s.state.PersistentSessions = append(s.state.PersistentSessions[:oldest], s.state.PersistentSessions[oldest+1:]...)
+	}
+	return s.persistLocked()
+}
+
+func persistentSessionSeenAt(record PersistentSessionRecord) time.Time {
+	if !record.LastSeenAt.IsZero() {
+		return record.LastSeenAt
+	}
+	return record.CreatedAt
 }
 
 func (s *FileStore) UpsertNotificationPreference(pref models.NotificationPreference) error {

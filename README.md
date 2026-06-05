@@ -30,7 +30,7 @@ development or visual QA.
 - Direct probes for internet, DNS, router, and NAS reachability.
 - OpenAI or Anthropic diagnosis support with strict JSON validation and redacted role-scoped context.
 - Runtime settings for roles, visibility, app icons, privacy blacklist, LLM provider, and notifications.
-- Local username/password auth with admin and standard-user roles.
+- Local username/password auth with admin and standard-user roles, plus trusted-device stay-signed-in sessions.
 - PWA metadata and safe-area handling for iOS Safari web apps and Android install prompts.
 
 ## Quick Start (recommended)

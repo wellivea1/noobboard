@@ -87,6 +87,20 @@ func (r *Registry) ByID(id string) (User, error) {
 	return toUser(record), nil
 }
 
+func (r *Registry) ValidateSession(userID, credentialVersion string) (User, error) {
+	record, err := r.store.UserByID(userID)
+	if err != nil {
+		return User{}, err
+	}
+	if record.Disabled {
+		return User{}, errors.New("user disabled")
+	}
+	if credentialVersion == "" || !hmac.Equal([]byte(credentialVersion), []byte(CredentialVersion(record))) {
+		return User{}, errors.New("credentials changed")
+	}
+	return toUser(record), nil
+}
+
 func (r *Registry) List() ([]User, error) {
 	records, err := r.store.AllUsers()
 	if err != nil {
@@ -186,6 +200,12 @@ func toUser(record db.UserRecord) User {
 		Role:        record.Role,
 		Disabled:    record.Disabled,
 	}
+}
+
+func CredentialVersion(record db.UserRecord) string {
+	material := fmt.Sprintf("%s\x00%s\x00%s\x00%d", record.ID, record.PasswordHash, record.Salt, record.Iterations)
+	sum := sha256.Sum256([]byte(material))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
 func verifyPassword(password, saltText, hashText string, iterations int) bool {
