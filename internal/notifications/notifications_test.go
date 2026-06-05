@@ -36,6 +36,44 @@ func (m *memoryStore) UserByUsername(username string) (db.UserRecord, error) {
 func (m *memoryStore) UserByID(id string) (db.UserRecord, error) {
 	return db.UserRecord{}, db.ErrNotFound
 }
+func (m *memoryStore) UpsertPersistentSession(record db.PersistentSessionRecord) error {
+	for i, existing := range m.PersistentSessions {
+		if existing.TokenHash == record.TokenHash {
+			m.PersistentSessions[i] = record
+			return nil
+		}
+	}
+	m.PersistentSessions = append(m.PersistentSessions, record)
+	return nil
+}
+func (m *memoryStore) PersistentSessionByTokenHash(tokenHash string) (db.PersistentSessionRecord, error) {
+	for _, record := range m.PersistentSessions {
+		if record.TokenHash == tokenHash {
+			return record, nil
+		}
+	}
+	return db.PersistentSessionRecord{}, db.ErrNotFound
+}
+func (m *memoryStore) DeletePersistentSession(tokenHash string) error {
+	for i, record := range m.PersistentSessions {
+		if record.TokenHash == tokenHash {
+			m.PersistentSessions = append(m.PersistentSessions[:i], m.PersistentSessions[i+1:]...)
+			return nil
+		}
+	}
+	return nil
+}
+func (m *memoryStore) PrunePersistentSessions(now time.Time, maxEntries int) error {
+	kept := m.PersistentSessions[:0]
+	for _, record := range m.PersistentSessions {
+		if record.ExpiresAt.IsZero() || now.After(record.ExpiresAt) {
+			continue
+		}
+		kept = append(kept, record)
+	}
+	m.PersistentSessions = kept
+	return nil
+}
 func (m *memoryStore) UpsertNotificationPreference(p models.NotificationPreference) error {
 	for i, existing := range m.NotificationPreferences {
 		if existing.UserID == p.UserID && existing.AppID == p.AppID {

@@ -88,14 +88,15 @@ const (
 	siteModeAdmin   siteMode = "admin"
 	siteModeCompact siteMode = "compact"
 
-	maxLoginFailures    = 5
-	loginFailureWindow  = 5 * time.Minute
-	loginLockoutTimeout = 10 * time.Minute
-	maxSessionEntries   = 512
-	maxLoginFailureKeys = 2048
-	defaultLogLimit     = 80
-	maxLogLimit         = 200
-	agentApprovalPlanID = "current_recommendation"
+	maxLoginFailures            = 5
+	loginFailureWindow          = 5 * time.Minute
+	loginLockoutTimeout         = 10 * time.Minute
+	maxSessionEntries           = 512
+	maxPersistentSessionEntries = 2048
+	maxLoginFailureKeys         = 2048
+	defaultLogLimit             = 80
+	maxLogLimit                 = 200
+	agentApprovalPlanID         = "current_recommendation"
 
 	agentRepairPerAppCooldown      = time.Minute
 	agentRepairGlobalWindow        = time.Hour
@@ -699,8 +700,9 @@ func (a *App) healthz(w http.ResponseWriter, _ *http.Request) {
 
 func (a *App) login(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
+		Username   string `json:"username"`
+		Password   string `json:"password"`
+		RememberMe bool   `json:"remember_me"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -723,21 +725,29 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.loginLimiter.recordSuccess(throttleKey)
-	session, err := a.sessions.create(user)
+	record, err := a.deps.Store.UserByID(user.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     "noobboard_session",
-		Value:    session.Token,
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Secure:   a.deps.Config.Auth.CookieSecure,
-		Expires:  session.ExpiresAt,
-	})
-	a.deps.Audit.Record(user.ID, "auth.login", map[string]interface{}{"username": user.Username})
+	sessionTTL := a.deps.Config.Auth.SessionTimeout
+	if req.RememberMe {
+		sessionTTL = a.deps.Config.Auth.RememberSessionTimeout
+	}
+	session, err := a.sessions.createWithOptions(user, users.CredentialVersion(record), sessionTTL, req.RememberMe)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if req.RememberMe {
+		if err := a.savePersistentSession(session); err != nil {
+			a.sessions.delete(session.Token)
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+	}
+	a.setSessionCookie(w, session)
+	a.deps.Audit.Record(user.ID, "auth.login", map[string]interface{}{"username": user.Username, "remember": req.RememberMe})
 	writeJSON(w, http.StatusOK, map[string]interface{}{"user": user, "csrf_token": session.CSRFToken})
 }
 
@@ -748,6 +758,7 @@ func (a *App) logout(w http.ResponseWriter, r *http.Request) {
 	}
 	if session := sessionFromRequest(r); session != "" {
 		a.sessions.delete(session)
+		_ = a.deps.Store.DeletePersistentSession(persistentSessionTokenHash(session))
 	}
 	http.SetCookie(w, &http.Cookie{Name: "noobboard_session", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: a.deps.Config.Auth.CookieSecure})
 	http.SetCookie(w, &http.Cookie{Name: "hsd_session", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: a.deps.Config.Auth.CookieSecure})
@@ -756,8 +767,11 @@ func (a *App) logout(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) me(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
-	token := mustSession(r).CSRFToken
-	writeJSON(w, http.StatusOK, map[string]interface{}{"user": user, "csrf_token": token})
+	session := mustSession(r)
+	if session.Persistent {
+		session = a.renewPersistentSession(w, session)
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"user": user, "csrf_token": session.CSRFToken})
 }
 
 func (a *App) statusSummary(w http.ResponseWriter, r *http.Request) {
@@ -3433,9 +3447,6 @@ func validateGeneralUserAppActionState(action docker.ContainerAction, app models
 		if app.DockerState == models.DockerExited {
 			return errors.New("this app is stopped; use Start")
 		}
-		if status == models.StatusOnline {
-			return errors.New("this app is currently working")
-		}
 	default:
 		return errors.New("app action is not supported")
 	}
@@ -5267,6 +5278,12 @@ func (a *App) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 		token := sessionFromRequest(r)
 		session, ok := a.sessions.get(token)
 		if !ok {
+			session, ok = a.restorePersistentSession(token)
+		}
+		if ok {
+			session, ok = a.validateSession(token, session)
+		}
+		if !ok {
 			writeError(w, http.StatusUnauthorized, errors.New("authentication required"))
 			return
 		}
@@ -5274,6 +5291,103 @@ func (a *App) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 		ctx = context.WithValue(ctx, sessionContextKey, session)
 		next(w, r.WithContext(ctx))
 	}
+}
+
+func (a *App) validateSession(token string, sess session) (session, bool) {
+	if sess.CredentialVersion == "" {
+		return sess, true
+	}
+	user, err := a.deps.Users.ValidateSession(sess.User.ID, sess.CredentialVersion)
+	if err != nil {
+		a.sessions.delete(token)
+		if sess.Persistent {
+			_ = a.deps.Store.DeletePersistentSession(persistentSessionTokenHash(token))
+		}
+		return session{}, false
+	}
+	sess.User = user
+	return sess, true
+}
+
+func (a *App) restorePersistentSession(token string) (session, bool) {
+	if token == "" {
+		return session{}, false
+	}
+	tokenHash := persistentSessionTokenHash(token)
+	record, err := a.deps.Store.PersistentSessionByTokenHash(tokenHash)
+	if err != nil {
+		return session{}, false
+	}
+	now := time.Now().UTC()
+	if record.ExpiresAt.IsZero() || now.After(record.ExpiresAt) {
+		_ = a.deps.Store.DeletePersistentSession(tokenHash)
+		return session{}, false
+	}
+	user, err := a.deps.Users.ValidateSession(record.UserID, record.CredentialVersion)
+	if err != nil {
+		_ = a.deps.Store.DeletePersistentSession(tokenHash)
+		return session{}, false
+	}
+	record.LastSeenAt = now
+	_ = a.deps.Store.UpsertPersistentSession(record)
+	sess := session{
+		Token:             token,
+		CSRFToken:         record.CSRFToken,
+		User:              user,
+		CredentialVersion: record.CredentialVersion,
+		CreatedAt:         record.CreatedAt,
+		ExpiresAt:         record.ExpiresAt,
+		Persistent:        true,
+	}
+	a.sessions.put(sess)
+	return sess, true
+}
+
+func (a *App) renewPersistentSession(w http.ResponseWriter, sess session) session {
+	if sess.Token == "" {
+		return sess
+	}
+	now := time.Now().UTC()
+	sess.ExpiresAt = now.Add(a.deps.Config.Auth.RememberSessionTimeout)
+	sess.Persistent = true
+	a.sessions.put(sess)
+	if err := a.savePersistentSession(sess); err == nil {
+		a.setSessionCookie(w, sess)
+	}
+	return sess
+}
+
+func (a *App) savePersistentSession(sess session) error {
+	now := time.Now().UTC()
+	createdAt := sess.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = now
+	}
+	record := db.PersistentSessionRecord{
+		TokenHash:         persistentSessionTokenHash(sess.Token),
+		UserID:            sess.User.ID,
+		CredentialVersion: sess.CredentialVersion,
+		CSRFToken:         sess.CSRFToken,
+		CreatedAt:         createdAt,
+		LastSeenAt:        now,
+		ExpiresAt:         sess.ExpiresAt,
+	}
+	if err := a.deps.Store.UpsertPersistentSession(record); err != nil {
+		return err
+	}
+	return a.deps.Store.PrunePersistentSessions(now, maxPersistentSessionEntries)
+}
+
+func (a *App) setSessionCookie(w http.ResponseWriter, sess session) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "noobboard_session",
+		Value:    sess.Token,
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   a.deps.Config.Auth.CookieSecure,
+		Expires:  sess.ExpiresAt,
+	})
 }
 
 func (a *App) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
@@ -5304,6 +5418,11 @@ func sessionFromRequest(r *http.Request) string {
 	return ""
 }
 
+func persistentSessionTokenHash(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
+}
+
 func mustUser(r *http.Request) users.User {
 	user, _ := r.Context().Value(userContextKey).(users.User)
 	return user
@@ -5315,11 +5434,14 @@ func mustSession(r *http.Request) session {
 }
 
 type session struct {
-	Token           string
-	CSRFToken       string
-	User            users.User
-	ExpiresAt       time.Time
-	AgentArmedUntil time.Time
+	Token             string
+	CSRFToken         string
+	User              users.User
+	CredentialVersion string
+	CreatedAt         time.Time
+	ExpiresAt         time.Time
+	Persistent        bool
+	AgentArmedUntil   time.Time
 }
 
 type sessionStore struct {
@@ -5333,6 +5455,10 @@ func newSessionStore(ttl time.Duration) *sessionStore {
 }
 
 func (s *sessionStore) create(user users.User) (session, error) {
+	return s.createWithOptions(user, "", s.ttl, false)
+}
+
+func (s *sessionStore) createWithOptions(user users.User, credentialVersion string, ttl time.Duration, persistent bool) (session, error) {
 	now := time.Now().UTC()
 	token, err := randomToken()
 	if err != nil {
@@ -5342,13 +5468,28 @@ func (s *sessionStore) create(user users.User) (session, error) {
 	if err != nil {
 		return session{}, err
 	}
-	entry := session{Token: token, CSRFToken: csrf, User: user, ExpiresAt: now.Add(s.ttl)}
+	if ttl <= 0 {
+		ttl = s.ttl
+	}
+	entry := session{Token: token, CSRFToken: csrf, User: user, CredentialVersion: credentialVersion, CreatedAt: now, ExpiresAt: now.Add(ttl), Persistent: persistent}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneExpiredLocked(now)
 	s.enforceLimitLocked(maxSessionEntries - 1)
 	s.entries[token] = entry
 	return entry, nil
+}
+
+func (s *sessionStore) put(entry session) {
+	if entry.Token == "" {
+		return
+	}
+	now := time.Now().UTC()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pruneExpiredLocked(now)
+	s.enforceLimitLocked(maxSessionEntries - 1)
+	s.entries[entry.Token] = entry
 }
 
 func (s *sessionStore) get(token string) (session, bool) {

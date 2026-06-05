@@ -219,6 +219,28 @@ func TestUnraidDockerControlPrefersRawGraphQLContainerID(t *testing.T) {
 	}
 }
 
+func TestUnraidDockerControlTimeoutAfterSendReturnsUnconfirmedResult(t *testing.T) {
+	client := NewUnraidLiveClient("http://192.168.0.214", "test-key")
+	client.http = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New(`Post "http://192.168.0.214/graphql": context deadline exceeded (Client.Timeout exceeded while awaiting headers)`)
+	})}
+
+	result, err := client.ControlContainer(t.Context(), models.AppStatus{
+		AppID:         "emby",
+		ContainerID:   testUnraidDockerObjectID,
+		ContainerName: "EmbyServer",
+	}, ActionStop)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Action != ActionStop || result.AppID != "emby" || result.ContainerID != testUnraidDockerObjectID {
+		t.Fatalf("timeout result = %#v", result)
+	}
+	if !strings.Contains(result.Status, "did not confirm before timeout") {
+		t.Fatalf("timeout result status = %q", result.Status)
+	}
+}
+
 func TestUnraidDockerRestartFallsBackToStopStartWhenRestartUnsupported(t *testing.T) {
 	var operations []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -450,6 +472,12 @@ type stubDockerClient struct {
 	apps   []models.AppStatus
 	result ControlResult
 	err    error
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
 }
 
 func (c stubDockerClient) Apps(context.Context) ([]models.AppStatus, error) {

@@ -7,7 +7,9 @@ Current controls:
 - Local username/password login.
 - PBKDF2-HMAC-SHA256 password hashes with per-user salts.
 - HTTP-only same-site session cookies.
-- Sessions are time-limited and the in-memory session store prunes expired entries with a hard active-session cap.
+- Normal sessions are time-limited and held in memory; the in-memory session store prunes expired entries with a hard active-session cap.
+- The optional "Stay signed in" login checkbox creates a long-lived persistent session for trusted personal devices. Only a hash of the browser token is stored in the local JSON database, the raw token remains in the HTTP-only cookie, and logout deletes the current persistent session.
+- Persistent sessions survive service restarts but validate against the current user credential fingerprint on every use. Changing the user's password or disabling the user invalidates remembered sessions.
 - Repeated login failures are rate-limited in memory and return `429` with `Retry-After`.
 - Login-failure tracking is pruned and capped to avoid unbounded in-memory growth.
 - CSRF token checks for mutating auth, diagnostic, notification, Docker-control, manual status refresh, and settings requests. Tokens are compared using constant-time comparison.

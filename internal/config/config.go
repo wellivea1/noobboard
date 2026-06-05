@@ -56,6 +56,7 @@ type AuthConfig struct {
 	BootstrapAdminUsername string
 	BootstrapAdminPassword string
 	SessionTimeout         time.Duration
+	RememberSessionTimeout time.Duration
 	CookieSecure           bool
 	AllowInsecureRemote    bool
 }
@@ -196,6 +197,7 @@ func Defaults() Config {
 			BootstrapAdminUsername: "admin",
 			BootstrapAdminPassword: "",
 			SessionTimeout:         12 * time.Hour,
+			RememberSessionTimeout: 10 * 365 * 24 * time.Hour,
 			CookieSecure:           false,
 		},
 		Visibility: models.VisibilitySettings{
@@ -346,6 +348,9 @@ func (c Config) Validate() error {
 	}
 	if c.Auth.SessionTimeout < time.Minute {
 		return errors.New("auth session timeout must be at least one minute")
+	}
+	if c.Auth.RememberSessionTimeout < c.Auth.SessionTimeout {
+		return errors.New("auth remember session timeout must be at least the normal session timeout")
 	}
 	if !c.Auth.AllowInsecureRemote && isRemoteBindAddress(c.Server.BindAddress) && isDefaultPassword(c.Auth.BootstrapAdminPassword) {
 		return errors.New("remote bind requires NOOBBOARD_BOOTSTRAP_ADMIN_PASSWORD or auth.allow_insecure_remote for development only")
@@ -680,6 +685,16 @@ func applyEnv(cfg *Config) {
 	if v := envValue("NOOBBOARD_COOKIE_SECURE", "HSD_COOKIE_SECURE"); v != "" {
 		cfg.Auth.CookieSecure = parseBool(v)
 	}
+	if v := envValue("NOOBBOARD_SESSION_TIMEOUT", "HSD_SESSION_TIMEOUT"); v != "" {
+		if duration, err := parseDurationValue(v); err == nil {
+			cfg.Auth.SessionTimeout = duration
+		}
+	}
+	if v := envValue("NOOBBOARD_REMEMBER_SESSION_TIMEOUT", "HSD_REMEMBER_SESSION_TIMEOUT"); v != "" {
+		if duration, err := parseDurationValue(v); err == nil {
+			cfg.Auth.RememberSessionTimeout = duration
+		}
+	}
 	if v := envValue("NOOBBOARD_ALLOW_INSECURE_REMOTE", "HSD_ALLOW_INSECURE_REMOTE"); v != "" {
 		cfg.Auth.AllowInsecureRemote = parseBool(v)
 	}
@@ -951,6 +966,14 @@ func applyConfigKey(cfg *Config, section, key, value string) {
 		cfg.Auth.BootstrapAdminUsername = value
 	case "auth.bootstrap_admin_password":
 		cfg.Auth.BootstrapAdminPassword = value
+	case "auth.session_timeout":
+		if duration, err := parseDurationValue(value); err == nil {
+			cfg.Auth.SessionTimeout = duration
+		}
+	case "auth.remember_session_timeout":
+		if duration, err := parseDurationValue(value); err == nil {
+			cfg.Auth.RememberSessionTimeout = duration
+		}
 	case "auth.cookie_secure":
 		cfg.Auth.CookieSecure = parseBool(value)
 	case "auth.allow_insecure_remote":

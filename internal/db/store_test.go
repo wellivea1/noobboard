@@ -124,6 +124,63 @@ func TestRuntimeSettingsPersistAndClone(t *testing.T) {
 	}
 }
 
+func TestPersistentSessionsPersistDeleteAndPrune(t *testing.T) {
+	path := cacheTestPath(t, "persistent-sessions")
+	store, err := OpenFileStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	active := PersistentSessionRecord{
+		TokenHash:         "token-active",
+		UserID:            "user-1",
+		CredentialVersion: "credential-v1",
+		CSRFToken:         "csrf",
+		CreatedAt:         now,
+		LastSeenAt:        now,
+		ExpiresAt:         now.Add(time.Hour),
+	}
+	expired := PersistentSessionRecord{
+		TokenHash:         "token-expired",
+		UserID:            "user-1",
+		CredentialVersion: "credential-v1",
+		CSRFToken:         "csrf-old",
+		CreatedAt:         now.Add(-2 * time.Hour),
+		LastSeenAt:        now.Add(-2 * time.Hour),
+		ExpiresAt:         now.Add(-time.Hour),
+	}
+	if err := store.UpsertPersistentSession(active); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertPersistentSession(expired); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := OpenFileStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := reopened.PersistentSessionByTokenHash("token-active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.UserID != "user-1" || got.CSRFToken != "csrf" {
+		t.Fatalf("persistent session = %#v", got)
+	}
+	if err := reopened.PrunePersistentSessions(now, 10); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reopened.PersistentSessionByTokenHash("token-expired"); err != ErrNotFound {
+		t.Fatalf("expired session lookup err = %v", err)
+	}
+	if err := reopened.DeletePersistentSession("token-active"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reopened.PersistentSessionByTokenHash("token-active"); err != ErrNotFound {
+		t.Fatalf("deleted session lookup err = %v", err)
+	}
+}
+
 func cacheTestPath(t *testing.T, name string) string {
 	t.Helper()
 	dir := filepath.Join("..", "..", ".cache", "tests")
