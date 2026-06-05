@@ -188,6 +188,36 @@ func TestLiveStatusCollectsArrayCapacityAndWarnings(t *testing.T) {
 	}
 }
 
+func TestLiveStartArrayUsesSetStateStartMutation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("x-api-key"); got != "test-key" {
+			t.Fatalf("x-api-key header = %q", got)
+		}
+		var body struct {
+			Query string `json:"query"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(body.Query, "setState") || !strings.Contains(body.Query, "desiredState: START") {
+			t.Fatalf("start array mutation = %s", body.Query)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"array":{"setState":{"id":"array","state":"STARTED"}}}}`))
+	}))
+	defer server.Close()
+
+	client := NewLiveClient(server.URL, "test-key")
+	client.http = server.Client()
+	result, err := client.StartArray(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Action != "start_array" || result.State != "started" || result.Status != "accepted" {
+		t.Fatalf("start array result = %#v", result)
+	}
+}
+
 func TestLiveStatusKeepsPartialSystemDetailsWhenFieldsAreUnsupported(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct {

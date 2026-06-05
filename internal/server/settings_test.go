@@ -2643,6 +2643,118 @@ func TestUserDiagnoseSuggestsRepairWhenModelMissesSingleVisibleDownApp(t *testin
 	}
 }
 
+func TestUserDiagnoseOffersLLMOnlyArrayStartWhenArrayStopped(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "compact-diagnose-array-start")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+	cfg.LLM.Provider = "openai"
+	cfg.LLM.OpenAIAuthMethod = config.OpenAIAuthMethodAPIKey
+	cfg.LLM.OpenAIAPIKey = "sk-test-local"
+	cfg.Visibility.DefaultRole = models.RoleGeneralUser
+	cfg.Visibility.GeneralUserCanUseLLM = true
+	cfg.Visibility.ShowNASStatusToUsers = true
+
+	now := time.Now().UTC()
+	stopped := models.InfrastructureStatus{
+		InternetReachable:      true,
+		DNSOK:                  true,
+		RouterReachable:        true,
+		NASReachable:           true,
+		UnraidAPIReachable:     true,
+		UnraidArrayState:       "stopped",
+		UnraidArrayHealthy:     false,
+		DockerServiceAvailable: false,
+		LastCheckedAt:          now,
+		SourceHealth:           models.SourceHealth{Unraid: "live", Docker: "live", UniFi: "live", Probes: "live"},
+	}
+	started := stopped
+	started.UnraidArrayState = "started"
+	started.UnraidArrayHealthy = true
+	started.DockerServiceAvailable = true
+	collector := &recordingUnraidCollector{infra: stopped, afterStart: started}
+
+	oldDelay := agentRepairVerificationDelay
+	oldAttempts := agentRepairVerificationAttempts
+	agentRepairVerificationDelay = 0
+	agentRepairVerificationAttempts = 1
+	defer func() {
+		agentRepairVerificationDelay = oldDelay
+		agentRepairVerificationAttempts = oldAttempts
+	}()
+
+	app := newTestApp(t, cfg)
+	app.deps.Collectors.Unraid = collector
+	app.deps.Collectors.Docker = &recordingDockerCollector{}
+	app.settingsMu.Lock()
+	app.deps.LLM = &recordingLLMClient{
+		diagnosis: llm.Diagnosis{
+			Severity:            models.SeverityMedium,
+			Confidence:          0.7,
+			IncidentType:        models.IncidentUnknown,
+			Diagnosis:           "No app-specific problem found.",
+			Evidence:            []string{"Model missed root cause."},
+			GeneralUserSummary:  "I do not see a specific app problem.",
+			AdminMessage:        "No app-specific problem found.",
+			RecommendedActionID: "none",
+			RecommendedTarget:   llm.ActionTarget{Kind: "none", IDOrName: ""},
+			ShouldNotifyAdmin:   false,
+		},
+	}
+	app.settingsMu.Unlock()
+
+	router := app.Router()
+	cookie, csrf := loginAs(t, router, "viewer", "change-me-now")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/user/diagnose", strings.NewReader(`{"question":"What is wrong right now?"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/user/diagnose status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var response diagnosisResponse
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Diagnosis.RecommendedActionID != arrayStartActionID || response.Diagnosis.IncidentType != models.IncidentArrayStopped {
+		t.Fatalf("array diagnosis was not backstopped: %#v", response.Diagnosis)
+	}
+	if !strings.Contains(response.Diagnosis.GeneralUserSummary, "Contact the admin first") || !strings.Contains(response.Diagnosis.GeneralUserSummary, "unavailable or asleep") {
+		t.Fatalf("array guidance missing admin-first/asleep copy: %q", response.Diagnosis.GeneralUserSummary)
+	}
+	if response.AgentPlan == nil || response.AgentPlan.RecommendedActionID != arrayStartActionID || response.AgentPlan.ExecutionToken == "" {
+		t.Fatalf("array start plan missing token: %#v", response.AgentPlan)
+	}
+	if !response.AgentPlan.CanExecute || response.AgentPlan.CanRequestRepair || response.AgentPlan.DirectAction != "start_array" {
+		t.Fatalf("array start plan should be LLM-only direct execution: %#v", response.AgentPlan)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/user/agent/action", strings.NewReader(fmt.Sprintf(`{"execution_token":%q,"choice":"start_array"}`, response.AgentPlan.ExecutionToken)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("POST /api/user/agent/action status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var actionResponse struct {
+		Status  string                    `json:"status"`
+		Outcome llmAgentRepairOutcomeView `json:"outcome"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&actionResponse); err != nil {
+		t.Fatal(err)
+	}
+	if collector.startCount != 1 {
+		t.Fatalf("StartArray call count = %d", collector.startCount)
+	}
+	if actionResponse.Outcome.Action != "start_array" || !actionResponse.Outcome.Verified || !actionResponse.Outcome.Recovered {
+		t.Fatalf("array start outcome = %#v", actionResponse.Outcome)
+	}
+}
+
 func TestCompactDiagnosisRoleDownscopesAdmin(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -4092,6 +4204,10 @@ func (failingUnraidCollector) Status(context.Context) (models.InfrastructureStat
 	return models.InfrastructureStatus{}, nil, errors.New("unraid unavailable")
 }
 
+func (failingUnraidCollector) StartArray(context.Context) (unraid.ArrayControlResult, error) {
+	return unraid.ArrayControlResult{}, errors.New("unraid unavailable")
+}
+
 type failingDockerCollector struct{}
 
 func (failingDockerCollector) Apps(context.Context) ([]models.AppStatus, error) {
@@ -4163,6 +4279,33 @@ type recordingDockerCollector struct {
 	app              models.AppStatus
 	logApp           models.AppStatus
 	logOptions       docker.LogOptions
+}
+
+type recordingUnraidCollector struct {
+	mu         sync.Mutex
+	infra      models.InfrastructureStatus
+	afterStart models.InfrastructureStatus
+	startCount int
+	startErr   error
+}
+
+func (c *recordingUnraidCollector) Status(context.Context) (models.InfrastructureStatus, []models.LogLine, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.infra, nil, nil
+}
+
+func (c *recordingUnraidCollector) StartArray(context.Context) (unraid.ArrayControlResult, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.startCount++
+	if c.startErr != nil {
+		return unraid.ArrayControlResult{}, c.startErr
+	}
+	if c.afterStart.UnraidArrayState != "" {
+		c.infra = c.afterStart
+	}
+	return unraid.ArrayControlResult{Action: "start_array", State: c.infra.UnraidArrayState, Status: "accepted"}, nil
 }
 
 func (c *recordingDockerCollector) Apps(context.Context) ([]models.AppStatus, error) {

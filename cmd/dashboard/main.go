@@ -281,6 +281,10 @@ func (c unavailableUnraidClient) Status(context.Context) (models.InfrastructureS
 	return models.InfrastructureStatus{}, nil, errors.New(string(c))
 }
 
+func (c unavailableUnraidClient) StartArray(context.Context) (unraid.ArrayControlResult, error) {
+	return unraid.ArrayControlResult{}, errors.New(string(c))
+}
+
 type unavailableDockerClient string
 
 func (c unavailableDockerClient) Apps(context.Context) ([]models.AppStatus, error) {

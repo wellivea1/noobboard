@@ -1925,6 +1925,8 @@ function sentenceCase(value) {
 
 function userAppActionLabel(action) {
   switch (String(action || "").trim().toLowerCase()) {
+    case "start_array":
+      return "Start array";
     case "start":
       return "Start";
     case "stop":
@@ -1938,6 +1940,8 @@ function userAppActionLabel(action) {
 
 function directActionPastTense(action) {
   switch (String(action || "").trim().toLowerCase()) {
+    case "start_array":
+      return "started";
     case "start":
       return "started";
     case "stop":
@@ -2793,7 +2797,9 @@ async function runDiagnosis(question, output, options = {}) {
       maybeOpenAgentApprovalDialog(result.agent_plan);
     } else {
       const userPlanNodes = [];
-      if (result.agent_plan?.auto_repair_attempted) {
+      if (isArrayStartPlan(result.agent_plan)) {
+        userPlanNodes.push(renderArrayStartPrompt(result.agent_plan));
+      } else if (result.agent_plan?.auto_repair_attempted) {
         userPlanNodes.push(renderAgentPlanPrompt(result.agent_plan));
         if (!result.agent_plan.auto_executed && result.agent_plan.can_request_repair) userPlanNodes.push(renderUserRepairRequestPrompt(result.agent_plan, result));
       } else if (result.agent_plan?.can_request_repair) {
@@ -2855,6 +2861,8 @@ function agentPlanStatusText(plan) {
   if (plan?.auto_executed && plan?.outcome?.recovered) return "Fixed";
   if (plan?.auto_executed) return `${userAppActionLabel(plan?.outcome?.action || plan?.direct_action || "restart")} sent`;
   switch (plan?.status) {
+    case "direct_array_start_available":
+      return "Ready";
     case "approval_ready":
       return "Ready";
     case "approval_rate_limited":
@@ -2909,6 +2917,74 @@ function renderUserRepairRequestPrompt(plan, diagnosis = {}) {
       }),
     ),
   );
+}
+
+function isArrayStartPlan(plan) {
+  return String(plan?.recommended_action_id || "").trim() === "ask_admin_to_start_array";
+}
+
+function renderArrayStartPrompt(plan) {
+  const canStart = !!(plan?.can_execute && plan?.execution_token);
+  const statusTone = canStart ? "state-warn" : agentPlanStatusTone(plan);
+  const statusText = canStart ? "Ready" : agentPlanStatusText(plan);
+  const summary = firstChatText(
+    plan?.summary,
+    "Contact the admin first to confirm the array was not intentionally stopped. If the admin is unavailable or asleep and service needs to be restored, starting the array is okay.",
+  );
+  return node("section", { class: "agent-plan-prompt array-start-prompt", "data-plan-id": plan?.id || "" },
+    node("div", { class: "agent-plan-head" },
+      node("span", {},
+        node("strong", { text: firstChatText(plan?.title, "Start array") }),
+        node("small", { text: summary }),
+      ),
+      node("span", { class: `settings-state-pill ${statusTone}`, text: statusText }),
+    ),
+    node("div", { class: "agent-plan-actions" },
+      node("button", {
+        type: "button",
+        class: "primary command",
+        "data-glyph": ">",
+        disabled: !canStart,
+        onclick: (event) => runArrayStartAction(plan, event.currentTarget),
+        text: "Start array",
+      }),
+    ),
+  );
+}
+
+async function runArrayStartAction(plan, button = null) {
+  if (!plan?.execution_token) {
+    showNotice("This LLM action is no longer available. Send another message to check again.", "error");
+    return;
+  }
+  if (!confirm("Start the Unraid array? Contact the admin first if possible, unless they are unavailable or asleep and service needs to be restored.")) return;
+  const original = button?.textContent || "";
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Starting";
+  }
+  markAgentRepairProgress(plan, "pending", "Starting the Unraid array and checking status...");
+  try {
+    const response = await api("/api/user/agent/action", {
+      method: "POST",
+      body: JSON.stringify({ execution_token: plan.execution_token, choice: "start_array" }),
+    });
+    if (response.outcome) {
+      appendAgentRepairOutcome(response.outcome, plan);
+      showNotice(agentRepairOutcomeNotice(response.outcome), agentRepairOutcomeTone(response.outcome));
+    } else {
+      showNotice("Start array request was sent.");
+    }
+    await refresh();
+  } catch (error) {
+    markAgentRepairProgress(plan, "failed", error.message || "NoobBoard could not start the array.");
+    showNotice(error.message, "error");
+    if (button?.isConnected) {
+      button.disabled = false;
+      button.setAttribute("aria-disabled", "false");
+      button.textContent = original;
+    }
+  }
 }
 
 async function requestAdminRepair(plan, diagnosis = {}, button = null) {
@@ -3405,6 +3481,11 @@ function renderAgentRepairOutcome(outcome) {
 }
 
 function agentRepairOutcomeNotice(outcome) {
+  if (String(outcome?.action || "").trim() === "start_array") {
+    if (outcome?.recovered) return "Unraid array started successfully.";
+    if (outcome?.verified) return "Start array ran, but the array still is not started.";
+    return "Start array ran, but verification did not complete.";
+  }
   if (outcome?.recovered) return "App action ran and the status updated.";
   if (outcome?.verified) return "App action ran, but the app still is not responding.";
   return "App action was sent, but NoobBoard could not verify the final status yet.";

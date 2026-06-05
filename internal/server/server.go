@@ -104,6 +104,9 @@ const (
 	actionReviewReferenceLimit     = 6
 	actionReviewReferenceBytes     = 18 * 1024
 	actionReviewReferenceFileBytes = 8 * 1024
+
+	arrayStartActionID = "ask_admin_to_start_array"
+	arrayTargetID      = "unraid_array"
 )
 
 var agentRepairVerificationDelay = 5 * time.Second
@@ -204,6 +207,7 @@ func (a *App) registerSharedRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/user/notify-admin", a.requireAuth(a.notifyAdmin))
 	mux.HandleFunc("GET /api/user/repair-requests", a.requireAuth(a.userRepairRequests))
 	mux.HandleFunc("POST /api/user/repair-request", a.requireAuth(a.createRepairRequest))
+	mux.HandleFunc("POST /api/user/agent/action", a.requireAuth(a.executeUserAgentAction))
 	mux.HandleFunc("POST /api/user/apps/{id}/restart", a.requireAuth(a.restartUserApp))
 	mux.HandleFunc("POST /api/user/apps/{id}/action", a.requireAuth(a.controlUserApp))
 	mux.HandleFunc("GET /api/user/notifications", a.requireAuth(a.userNotifications))
@@ -1480,8 +1484,16 @@ func (a *App) diagnose(w http.ResponseWriter, r *http.Request, mode llm.Mode, ro
 	a.deps.Audit.Record(mustUser(r).ID, "llm.diagnosis", map[string]interface{}{"mode": string(mode), "incident_type": string(diagnosis.IncidentType), "admin_message": diagnosis.AdminMessage})
 	response := diagnosisResponse{Diagnosis: diagnosis}
 	if mode == llm.ModeAdminRequested && role == models.RoleAdmin {
-		planDiagnosis, suggested := adminRestartBackstopDiagnosis(diagnosis, full)
+		planDiagnosis, arraySuggested := arrayStartBackstopDiagnosis(diagnosis, full)
+		if arraySuggested {
+			response.Diagnosis = planDiagnosis
+		}
+		planDiagnosis, suggested := adminRestartBackstopDiagnosis(planDiagnosis, full)
 		response.AgentPlan = a.llmAgentPlanResponse(planDiagnosis, full, mustUser(r).ID)
+		if arraySuggested {
+			markSuggestedArrayStartPlan(response.AgentPlan)
+			a.auditSuggestedArrayStartPlan(mustUser(r).ID, string(mode), response.AgentPlan)
+		}
 		if suggested {
 			markSuggestedRestartPlan(response.AgentPlan, "NoobBoard found one repair-eligible app that is down, so this restart affordance is suggested even though the model did not request it. Existing approval and safety gates still apply.")
 			a.auditSuggestedRestartPlan(mustUser(r).ID, string(mode), response.AgentPlan)
@@ -1491,8 +1503,19 @@ func (a *App) diagnose(w http.ResponseWriter, r *http.Request, mode llm.Mode, ro
 		}
 	} else if mode == llm.ModeGeneralUserRequested {
 		filtered := privacy.FilterSnapshotForRole(full, role, a.redactorSnapshot())
-		planDiagnosis, suggested := generalUserRestartBackstopDiagnosis(diagnosis, filtered)
-		response.AgentPlan = a.llmUserRepairPlanResponse(planDiagnosis, filtered)
+		planDiagnosis, arraySuggested := diagnosis, false
+		if filtered.Visibility.ShowNASStatusToUsers {
+			planDiagnosis, arraySuggested = arrayStartBackstopDiagnosis(diagnosis, filtered)
+		}
+		if arraySuggested {
+			response.Diagnosis = planDiagnosis
+		}
+		planDiagnosis, suggested := generalUserRestartBackstopDiagnosis(planDiagnosis, filtered)
+		response.AgentPlan = a.llmUserRepairPlanResponse(planDiagnosis, filtered, mustUser(r).ID)
+		if arraySuggested {
+			markSuggestedArrayStartPlan(response.AgentPlan)
+			a.auditSuggestedArrayStartPlan(mustUser(r).ID, string(mode), response.AgentPlan)
+		}
 		if suggested {
 			markSuggestedRestartPlan(response.AgentPlan, "NoobBoard found one visible app that is not working, so this fix option is suggested even though the model did not request it.")
 			a.auditSuggestedRestartPlan(mustUser(r).ID, string(mode), response.AgentPlan)
@@ -1715,9 +1738,12 @@ func disableAgentPlanAllowOption(plan *llmAgentPlanView, reason string) {
 	}
 }
 
-func (a *App) llmUserRepairPlanResponse(diagnosis llm.Diagnosis, snapshot models.Snapshot) *llmAgentPlanView {
+func (a *App) llmUserRepairPlanResponse(diagnosis llm.Diagnosis, snapshot models.Snapshot, actorID string) *llmAgentPlanView {
 	action, known := agentActionDefinition(diagnosis.RecommendedActionID)
 	target := resolveAgentPlanTarget(action, diagnosis, snapshot)
+	if action.ID == arrayStartActionID {
+		return a.llmUserArrayStartPlanResponse(action, known, target, snapshot, actorID)
+	}
 	canRequest := known && action.Executable && action.DockerAction == docker.ActionRestart && target.Resolved
 	canExecute := false
 	directAction := docker.ActionRestart
@@ -1785,6 +1811,62 @@ func (a *App) llmUserRepairPlanResponse(diagnosis llm.Diagnosis, snapshot models
 	}
 }
 
+func (a *App) llmUserArrayStartPlanResponse(action llmAgentActionDefinition, known bool, target llmAgentPlanTargetView, snapshot models.Snapshot, actorID string) *llmAgentPlanView {
+	canExecute := known && snapshot.Visibility.ShowNASStatusToUsers && arrayStartNeeded(snapshot.Infrastructure)
+	status := "not_actionable"
+	reason := ""
+	if canExecute {
+		status = "direct_array_start_available"
+	} else if !snapshot.Visibility.ShowNASStatusToUsers {
+		reason = "Server storage status is hidden for this role."
+	} else {
+		reason = "The array is not currently stopped."
+	}
+	expiresAt := time.Now().UTC().Add(5 * time.Minute)
+	executionToken := ""
+	if canExecute {
+		nonce, err := randomToken()
+		if err != nil {
+			canExecute = false
+			status = "approval_locked"
+			reason = "NoobBoard could not create a safe one-use action token."
+		} else {
+			executionToken = a.signAgentApprovalToken(agentApprovalTokenPayload{
+				PlanID:              agentApprovalPlanID,
+				ActorID:             actorID,
+				RecommendedActionID: action.ID,
+				TargetKind:          target.Kind,
+				TargetID:            target.ID,
+				Nonce:               nonce,
+				ExpiresAt:           expiresAt.Unix(),
+			})
+		}
+	}
+	return &llmAgentPlanView{
+		ID:                  agentApprovalPlanID,
+		Title:               action.Title,
+		Summary:             action.Summary,
+		RecommendedActionID: action.ID,
+		DirectAction:        "start_array",
+		ActionKnown:         known,
+		CanExecute:          canExecute,
+		Status:              status,
+		ExecutionToken:      executionToken,
+		ApprovalExpiresAt:   expiresAt,
+		Target:              target,
+		Options: []llmAgentPlanOptionView{
+			{
+				ID:          "start_array_now",
+				Label:       "Start array",
+				Description: "Start the server storage array after checking with the admin first when possible.",
+				Enabled:     canExecute,
+				Selected:    canExecute,
+				Reason:      reason,
+			},
+		},
+	}
+}
+
 func adminRestartBackstopDiagnosis(diagnosis llm.Diagnosis, snapshot models.Snapshot) (llm.Diagnosis, bool) {
 	if !canBackstopRestartAction(diagnosis.RecommendedActionID) {
 		return diagnosis, false
@@ -1796,6 +1878,13 @@ func adminRestartBackstopDiagnosis(diagnosis llm.Diagnosis, snapshot models.Snap
 		return diagnosis, false
 	}
 	return restartBackstopDiagnosis(diagnosis, app), true
+}
+
+func arrayStartBackstopDiagnosis(diagnosis llm.Diagnosis, snapshot models.Snapshot) (llm.Diagnosis, bool) {
+	if !arrayStartNeeded(snapshot.Infrastructure) {
+		return diagnosis, false
+	}
+	return arrayStartGuidedDiagnosis(diagnosis, snapshot.Infrastructure.UnraidArrayState), true
 }
 
 func generalUserRestartBackstopDiagnosis(diagnosis llm.Diagnosis, snapshot models.Snapshot) (llm.Diagnosis, bool) {
@@ -1814,6 +1903,18 @@ func generalUserRestartBackstopDiagnosis(diagnosis llm.Diagnosis, snapshot model
 func canBackstopRestartAction(actionID string) bool {
 	switch strings.TrimSpace(actionID) {
 	case "", "none", "unknown", "ask_admin_to_check":
+		return true
+	default:
+		return false
+	}
+}
+
+func arrayStartNeeded(infra models.InfrastructureStatus) bool {
+	if !infra.UnraidAPIReachable {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(infra.UnraidArrayState)) {
+	case "stopped", "offline", "off", "down":
 		return true
 	default:
 		return false
@@ -1845,12 +1946,47 @@ func restartBackstopDiagnosis(diagnosis llm.Diagnosis, app models.AppStatus) llm
 	return diagnosis
 }
 
+func arrayStartGuidedDiagnosis(diagnosis llm.Diagnosis, state string) llm.Diagnosis {
+	state = strings.TrimSpace(state)
+	if state == "" {
+		state = "stopped"
+	}
+	diagnosis.Severity = models.SeverityHigh
+	if diagnosis.Confidence <= 0 {
+		diagnosis.Confidence = 0.9
+	}
+	diagnosis.IncidentType = models.IncidentArrayStopped
+	diagnosis.AffectedServices = []string{"Unraid array"}
+	diagnosis.Diagnosis = "The Unraid array is " + state + ", so apps that depend on server storage may not be able to run."
+	diagnosis.GeneralUserSummary = "The server storage is stopped. Contact the admin first to make sure it was not stopped on purpose. If the admin is unavailable or asleep and service needs to be restored, it is okay to start the array."
+	diagnosis.AdminMessage = "The Unraid array is " + state + ". Confirm it was not intentionally stopped; if service needs to be restored, start the array."
+	diagnosis.RecommendedActionID = arrayStartActionID
+	diagnosis.RecommendedTarget = llm.ActionTarget{Kind: "storage", IDOrName: arrayTargetID}
+	diagnosis.ShouldNotifyAdmin = true
+	evidence := "Unraid API reports array state " + state
+	for _, existing := range diagnosis.Evidence {
+		if strings.EqualFold(strings.TrimSpace(existing), evidence) {
+			return diagnosis
+		}
+	}
+	diagnosis.Evidence = append(diagnosis.Evidence, evidence)
+	return diagnosis
+}
+
 func markSuggestedRestartPlan(plan *llmAgentPlanView, summary string) {
 	if plan == nil || plan.RecommendedActionID != "ask_admin_to_restart_container" {
 		return
 	}
 	plan.Title = "Suggested restart"
 	plan.Summary = summary
+}
+
+func markSuggestedArrayStartPlan(plan *llmAgentPlanView) {
+	if plan == nil || plan.RecommendedActionID != arrayStartActionID {
+		return
+	}
+	plan.Title = "Start array"
+	plan.Summary = "The Unraid array is stopped. Contact the admin first to confirm it was not stopped intentionally; if the admin is unavailable or asleep and service needs to be restored, starting the array is okay."
 }
 
 func (a *App) auditSuggestedRestartPlan(actorID, mode string, plan *llmAgentPlanView) {
@@ -1867,6 +2003,21 @@ func (a *App) auditSuggestedRestartPlan(actorID, mode string, plan *llmAgentPlan
 		"status":                plan.Status,
 		"can_execute":           plan.CanExecute,
 		"can_request_repair":    plan.CanRequestRepair,
+	})
+}
+
+func (a *App) auditSuggestedArrayStartPlan(actorID, mode string, plan *llmAgentPlanView) {
+	if plan == nil {
+		return
+	}
+	a.deps.Audit.Record(actorID, "llm.agent_plan.array_start_suggested", map[string]interface{}{
+		"mode":                  mode,
+		"plan_id":               plan.ID,
+		"recommended_action_id": plan.RecommendedActionID,
+		"target_kind":           plan.Target.Kind,
+		"target_id":             plan.Target.ID,
+		"status":                plan.Status,
+		"can_execute":           plan.CanExecute,
 	})
 }
 
@@ -1942,6 +2093,12 @@ var llmAgentActionRegistry = map[string]llmAgentActionDefinition{
 		Executable:        true,
 		DockerAction:      docker.ActionRestart,
 	},
+	arrayStartActionID: {
+		ID:         arrayStartActionID,
+		Title:      "Start array",
+		Summary:    "The model identified that the Unraid array is stopped. NoobBoard can start the array from compact chat only after the signed LLM plan is used.",
+		Executable: true,
+	},
 	"ask_admin_to_check_unifi": {
 		ID:      "ask_admin_to_check_unifi",
 		Title:   "Network check recommendation",
@@ -2015,6 +2172,15 @@ func resolveAgentPlanTarget(action llmAgentActionDefinition, diagnosis llm.Diagn
 		Kind:   firstNonEmpty(strings.TrimSpace(diagnosis.RecommendedTarget.Kind), "none"),
 		Query:  strings.TrimSpace(diagnosis.RecommendedTarget.IDOrName),
 		Reason: "No specific target is needed for this recommendation.",
+	}
+	if action.ID == arrayStartActionID {
+		target.Kind = "storage"
+		target.ID = arrayTargetID
+		target.Label = "Unraid array"
+		target.Query = firstNonEmpty(target.Query, arrayTargetID)
+		target.Resolved = true
+		target.Reason = ""
+		return target
 	}
 	if !action.RequiresAppTarget {
 		if target.Kind == "none" || target.Query == "" {
@@ -2274,7 +2440,7 @@ func (a *App) agentRepairLimitState(appID string, now time.Time, reserve bool) a
 		return agentRepairLimitDecision{
 			Allowed:           false,
 			Reason:            "global_rate_limit",
-			Message:           "The app-fix rate limit has been reached. Try again in " + shortDurationText(retryAfter) + ".",
+			Message:           "The repair rate limit has been reached. Try again in " + shortDurationText(retryAfter) + ".",
 			RetryAfter:        retryAfter,
 			RetryAfterSeconds: int((retryAfter + time.Second - 1) / time.Second),
 		}
@@ -2532,6 +2698,92 @@ func (a *App) verifyRepairOutcome(ctx context.Context, before models.AppStatus, 
 		outcome.HistoryError = err.Error()
 	}
 	return outcome
+}
+
+func (a *App) verifyArrayStartOutcome(ctx context.Context, before models.InfrastructureStatus, result unraid.ArrayControlResult) llmAgentRepairOutcomeView {
+	outcome := llmAgentRepairOutcomeView{
+		Action:       "start_array",
+		TargetID:     arrayTargetID,
+		TargetLabel:  "Unraid array",
+		BeforeStatus: arrayHistoryStatus(before),
+		AfterStatus:  models.StatusUnknown,
+		CheckedAt:    time.Now().UTC(),
+		Message:      "Start array was sent, but NoobBoard could not verify the array status yet.",
+		ResultStatus: strings.TrimSpace(result.Status),
+	}
+	var afterSnapshot models.Snapshot
+	var afterSnapshotSet bool
+	attempts := agentRepairVerificationAttempts
+	if attempts <= 0 || agentRepairVerificationDelay <= 0 {
+		attempts = 1
+	}
+	for attempt := 0; attempt < attempts; attempt++ {
+		if delay := agentRepairVerificationDelay; delay > 0 {
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				outcome.Message = "Start array was sent, but verification was cancelled before NoobBoard could refresh status."
+				return outcome
+			case <-timer.C:
+			}
+		}
+		a.invalidateSnapshot()
+		refreshed, err := a.refreshSnapshot(ctx, false)
+		outcome.CheckedAt = time.Now().UTC()
+		if err != nil {
+			outcome.Message = "Start array was sent, but status verification failed: " + err.Error()
+			return outcome
+		}
+		afterSnapshot = refreshed
+		afterSnapshotSet = true
+		after := refreshed.Infrastructure
+		outcome.Verified = true
+		outcome.AfterStatus = arrayHistoryStatus(after)
+		outcome.Recovered = strings.EqualFold(strings.TrimSpace(after.UnraidArrayState), "started")
+		if outcome.Recovered {
+			outcome.Message = "Unraid array started successfully. Send another message or try again if you continue to have issues."
+			break
+		}
+		if attempt == attempts-1 {
+			outcome.Message = "Start array was sent, but the array still does not report started."
+		} else {
+			outcome.Message = "Start array was sent. Waiting for the array to report started."
+		}
+	}
+	if historyEventID, err := a.appendArrayActionHistoryEvent(outcome); err == nil {
+		outcome.HistoryEventID = historyEventID
+		if a.historyRecorder != nil && afterSnapshotSet {
+			a.historyRecorder.Observe(afterSnapshot)
+		}
+	} else {
+		outcome.HistoryError = err.Error()
+	}
+	return outcome
+}
+
+func (a *App) appendArrayActionHistoryEvent(outcome llmAgentRepairOutcomeView) (string, error) {
+	if a.deps.History == nil {
+		return "", nil
+	}
+	eventID := agentRepairHistoryEventID(outcome)
+	event := models.StatusEvent{
+		ID:          eventID,
+		SubjectType: models.SubjectInfra,
+		SubjectID:   arrayTargetID,
+		DisplayName: "Unraid array",
+		From:        outcome.BeforeStatus,
+		To:          outcome.AfterStatus,
+		At:          outcome.CheckedAt,
+		Note:        outcome.Message,
+	}
+	if event.At.IsZero() {
+		event.At = time.Now().UTC()
+	}
+	if err := a.deps.History.Append([]models.StatusEvent{event}); err != nil {
+		return "", err
+	}
+	return eventID, nil
 }
 
 func (a *App) appendAgentRepairHistoryEvent(outcome llmAgentRepairOutcomeView) (string, error) {
@@ -3066,6 +3318,118 @@ func (a *App) executeGeneralUserAppAction(ctx context.Context, user users.User, 
 		a.deps.Audit.Record(user.ID, userAppActionAudit(action, "verify_failed"), verifyDetails)
 	}
 	return userAppActionExecution{Result: result, Outcome: outcome}, nil
+}
+
+func (a *App) executeUserAgentAction(w http.ResponseWriter, r *http.Request) {
+	if err := requireCSRF(r); err != nil {
+		writeError(w, http.StatusForbidden, err)
+		return
+	}
+	var body struct {
+		ExecutionToken string `json:"execution_token"`
+		Choice         string `json:"choice"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	choice := strings.TrimSpace(body.Choice)
+	if choice != "start_array" {
+		writeError(w, http.StatusBadRequest, errors.New("unsupported LLM action choice"))
+		return
+	}
+	user := mustUser(r)
+	payload, err := a.verifyAgentApprovalToken(strings.TrimSpace(body.ExecutionToken), user.ID)
+	if err != nil {
+		writeError(w, http.StatusForbidden, err)
+		return
+	}
+	if payload.RecommendedActionID != arrayStartActionID || payload.TargetKind != "storage" || payload.TargetID != arrayTargetID {
+		writeError(w, http.StatusBadRequest, errors.New("execution token is not valid for starting the array"))
+		return
+	}
+	if strings.TrimSpace(payload.Nonce) == "" {
+		writeError(w, http.StatusForbidden, errors.New("execution token is missing a replay nonce"))
+		return
+	}
+	visibleSnapshot, err := a.Snapshot(r.Context(), user.Role)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if !visibleSnapshot.Visibility.ShowNASStatusToUsers {
+		a.deps.Audit.Record(user.ID, "llm.array_start.refused", map[string]interface{}{"reason": "nas_status_hidden", "via": "general_user_llm"})
+		writeError(w, http.StatusForbidden, errors.New("server storage status is hidden for this role"))
+		return
+	}
+	if !arrayStartNeeded(visibleSnapshot.Infrastructure) {
+		a.deps.Audit.Record(user.ID, "llm.array_start.refused", map[string]interface{}{"reason": "visible_array_not_stopped", "state": visibleSnapshot.Infrastructure.UnraidArrayState, "via": "general_user_llm"})
+		writeError(w, http.StatusConflict, errors.New("the array is not currently stopped"))
+		return
+	}
+	snapshot, err := a.readOnlySnapshot(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	details := map[string]interface{}{
+		"recommended_action_id": payload.RecommendedActionID,
+		"target_kind":           payload.TargetKind,
+		"target_id":             payload.TargetID,
+		"requester_id":          user.ID,
+		"via":                   "general_user_llm",
+		"array_state":           snapshot.Infrastructure.UnraidArrayState,
+		"can_execute":           false,
+	}
+	if !arrayStartNeeded(snapshot.Infrastructure) {
+		details["reason"] = "array_not_stopped"
+		a.deps.Audit.Record(user.ID, "llm.array_start.refused", details)
+		writeError(w, http.StatusConflict, errors.New("the array is not currently stopped"))
+		return
+	}
+	if !a.consumeAgentApproval(payload) {
+		details["reason"] = "execution_replay"
+		a.deps.Audit.Record(user.ID, "llm.array_start.replay_blocked", details)
+		writeError(w, http.StatusConflict, errors.New("execution token has already been used"))
+		return
+	}
+	limit := a.reserveAgentRepair(arrayTargetID, time.Now().UTC())
+	if !limit.Allowed {
+		details["reason"] = limit.Reason
+		details["retry_after_seconds"] = limit.RetryAfterSeconds
+		a.deps.Audit.Record(user.ID, "llm.array_start.rate_limited", auditDetailsCopy(details))
+		writeError(w, http.StatusConflict, errors.New(limit.Message))
+		return
+	}
+	details["can_execute"] = true
+	a.deps.Audit.Record(user.ID, "llm.array_start.approved", auditDetailsCopy(details))
+	result, err := a.deps.Collectors.Unraid.StartArray(r.Context())
+	if err != nil {
+		details["error"] = err.Error()
+		a.deps.Audit.Record(user.ID, "llm.array_start.execute_failed", auditDetailsCopy(details))
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	a.invalidateSnapshot()
+	a.deps.Audit.Record(user.ID, "llm.array_start.executed", auditDetailsCopy(details))
+	a.deps.Audit.Record(user.ID, "infra.unraid_array.action", map[string]interface{}{"action": "start_array", "via": "general_user_llm", "recommended_action_id": payload.RecommendedActionID})
+	outcome := a.verifyArrayStartOutcome(r.Context(), snapshot.Infrastructure, result)
+	verifyDetails := auditDetailsCopy(details)
+	verifyDetails["verified"] = outcome.Verified
+	verifyDetails["recovered"] = outcome.Recovered
+	verifyDetails["before_status"] = string(outcome.BeforeStatus)
+	verifyDetails["after_status"] = string(outcome.AfterStatus)
+	verifyDetails["history_event_id"] = outcome.HistoryEventID
+	if outcome.Verified {
+		a.deps.Audit.Record(user.ID, "llm.array_start.verified", verifyDetails)
+	} else {
+		a.deps.Audit.Record(user.ID, "llm.array_start.verify_failed", verifyDetails)
+	}
+	writeJSON(w, http.StatusAccepted, map[string]interface{}{
+		"status":  "executed",
+		"result":  result,
+		"outcome": outcome,
+	})
 }
 
 func validateGeneralUserAppActionState(action docker.ContainerAction, app models.AppStatus) error {
@@ -3837,6 +4201,7 @@ type llmAgentPlanView struct {
 	DirectAction          string                     `json:"direct_action,omitempty"`
 	ActionKnown           bool                       `json:"action_known"`
 	ApprovalToken         string                     `json:"approval_token"`
+	ExecutionToken        string                     `json:"execution_token,omitempty"`
 	ApprovalExpiresAt     time.Time                  `json:"approval_expires_at"`
 	RequiresAdminApproval bool                       `json:"requires_admin_approval"`
 	CanExecute            bool                       `json:"can_execute"`
@@ -4552,6 +4917,10 @@ type unavailableUnraidClient string
 
 func (c unavailableUnraidClient) Status(context.Context) (models.InfrastructureStatus, []models.LogLine, error) {
 	return models.InfrastructureStatus{}, nil, errors.New(string(c))
+}
+
+func (c unavailableUnraidClient) StartArray(context.Context) (unraid.ArrayControlResult, error) {
+	return unraid.ArrayControlResult{}, errors.New(string(c))
 }
 
 type unavailableDockerClient string

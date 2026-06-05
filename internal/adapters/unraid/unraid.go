@@ -2,6 +2,7 @@ package unraid
 
 import (
 	"context"
+	"strings"
 
 	"github.com/wellivea1/noobboard/internal/adapters/fixture"
 	"github.com/wellivea1/noobboard/internal/models"
@@ -9,6 +10,13 @@ import (
 
 type Client interface {
 	Status(context.Context) (models.InfrastructureStatus, []models.LogLine, error)
+	StartArray(context.Context) (ArrayControlResult, error)
+}
+
+type ArrayControlResult struct {
+	Action string `json:"action"`
+	State  string `json:"state,omitempty"`
+	Status string `json:"status,omitempty"`
 }
 
 type FixtureClient struct {
@@ -34,4 +42,16 @@ func (c FixtureClient) Status(context.Context) (models.InfrastructureStatus, []m
 		}
 	}
 	return snapshot.Infrastructure, logs, nil
+}
+
+func (c FixtureClient) StartArray(context.Context) (ArrayControlResult, error) {
+	snapshot, err := fixture.LoadSnapshot(c.dir, c.scenario)
+	if err != nil {
+		return ArrayControlResult{}, err
+	}
+	state := "started"
+	if strings.EqualFold(strings.TrimSpace(snapshot.Infrastructure.UnraidArrayState), "started") {
+		state = "started"
+	}
+	return ArrayControlResult{Action: "start_array", State: state, Status: "fixture array start accepted"}, nil
 }

@@ -40,6 +40,28 @@ func TestValidateDiagnosisAcceptsStrictSchemaShape(t *testing.T) {
 	}
 }
 
+func TestValidateDiagnosisAcceptsArrayStartAction(t *testing.T) {
+	diagnosis, err := ValidateDiagnosis([]byte(`{
+		"severity":"high",
+		"confidence":0.9,
+		"incident_type":"array_stopped",
+		"affected_services":["Unraid array"],
+		"diagnosis":"The Unraid array is stopped.",
+		"evidence":["Unraid API reports array state stopped"],
+		"general_user_summary":"Contact the admin first. If they are unavailable or asleep and service needs to be restored, start the array.",
+		"admin_message":"The Unraid array is stopped.",
+		"recommended_action_id":"ask_admin_to_start_array",
+		"recommended_action_target":{"kind":"storage","id_or_name":"unraid_array"},
+		"should_notify_admin":true
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diagnosis.RecommendedActionID != "ask_admin_to_start_array" || diagnosis.RecommendedTarget.Kind != "storage" || diagnosis.RecommendedTarget.IDOrName != "unraid_array" {
+		t.Fatalf("array start diagnosis = %#v", diagnosis)
+	}
+}
+
 func TestValidateDiagnosisRequiresAppTargetForAppActions(t *testing.T) {
 	_, err := ValidateDiagnosis([]byte(`{
 		"severity":"medium",
@@ -189,10 +211,13 @@ func TestJSONSchemaDescribesRestartActionSelection(t *testing.T) {
 	if !ok || !strings.Contains(description, "ask_admin_to_restart_container") || !strings.Contains(description, "specific app") {
 		t.Fatalf("recommended_action_id description does not guide restart selection: %#v", action["description"])
 	}
+	if !strings.Contains(description, "ask_admin_to_start_array") || !strings.Contains(description, "unavailable or asleep") {
+		t.Fatalf("recommended_action_id description does not guide array start selection: %#v", action["description"])
+	}
 	target := requireObject(t, properties, "recommended_action_target")
 	targetDescription, ok := target["description"].(string)
-	if !ok || !strings.Contains(targetDescription, "kind=app") {
-		t.Fatalf("recommended_action_target description does not guide app target selection: %#v", target["description"])
+	if !ok || !strings.Contains(targetDescription, "kind=app") || !strings.Contains(targetDescription, "kind=storage") {
+		t.Fatalf("recommended_action_target description does not guide target selection: %#v", target["description"])
 	}
 }
 
@@ -246,6 +271,9 @@ func TestAdminLLMContextIncludesRestartGuidanceAndRepairSignals(t *testing.T) {
 	if !strings.Contains(contextText, "ask_admin_to_restart_container") || !strings.Contains(contextText, "read-only NoobBoard status tools") {
 		t.Fatalf("admin context missing restart/tool guidance: %s", contextText)
 	}
+	if !strings.Contains(contextText, "ask_admin_to_start_array") || !strings.Contains(contextText, "unavailable or asleep") {
+		t.Fatalf("admin context missing array start guidance: %s", contextText)
+	}
 	payload := decodeContextPayload(t, contextText)
 	apiReport := requireObject(t, payload, "api_report")
 	docker := requireObject(t, apiReport, "docker")
@@ -294,6 +322,9 @@ func TestGeneralUserLLMContextDoesNotLeakHiddenAppsOrLogs(t *testing.T) {
 		if strings.Contains(contextText, leaked) {
 			t.Fatalf("general LLM context leaked %q: %s", leaked, contextText)
 		}
+	}
+	if !strings.Contains(contextText, "ask_admin_to_start_array") || !strings.Contains(contextText, "unavailable or asleep") {
+		t.Fatalf("general context missing array start guidance: %s", contextText)
 	}
 	payload := decodeContextPayload(t, contextText)
 	apiReport := requireObject(t, payload, "api_report")

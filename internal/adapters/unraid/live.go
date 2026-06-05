@@ -146,6 +146,45 @@ func (c LiveClient) Status(ctx context.Context) (models.InfrastructureStatus, []
 	return infra, nil, nil
 }
 
+func (c LiveClient) StartArray(ctx context.Context) (ArrayControlResult, error) {
+	if c.baseURL == "" || c.apiKey == "" {
+		return ArrayControlResult{}, errors.New("unraid base URL and API key are required")
+	}
+	query := `mutation StartArray {
+  array {
+    setState(input: { desiredState: START }) {
+      id
+      state
+    }
+  }
+}`
+	var out struct {
+		Data struct {
+			Array struct {
+				SetState struct {
+					ID    string `json:"id"`
+					State string `json:"state"`
+				} `json:"setState"`
+			} `json:"array"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := c.graphql(ctx, query, &out); err != nil {
+		return ArrayControlResult{}, err
+	}
+	if len(out.Errors) > 0 {
+		return ArrayControlResult{}, fmt.Errorf("unraid array start graphql error: %s", out.Errors[0].Message)
+	}
+	state := strings.ToLower(strings.TrimSpace(out.Data.Array.SetState.State))
+	return ArrayControlResult{
+		Action: "start_array",
+		State:  state,
+		Status: "accepted",
+	}, nil
+}
+
 type systemDetails struct {
 	UnraidVersion      string
 	CPUBrand           string
