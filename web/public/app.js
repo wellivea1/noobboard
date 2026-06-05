@@ -1816,7 +1816,6 @@ function userAppControlDisabledReason(action, app) {
   if (action === "start" && (dockerState === "running" || status === "online" || status === "degraded")) return "Already running";
   if (action === "stop" && (dockerState === "exited" || (status === "offline" && dockerState !== "running"))) return "Already stopped";
   if (action === "restart" && dockerState === "exited") return "Stopped; use Start";
-  if (action === "restart" && status === "online") return "Working now";
   return "";
 }
 
@@ -1868,7 +1867,7 @@ async function runUserAppAction(app, action, button = null, options = {}) {
         inlineSuccessOutcome = result.outcome;
         keepButtonState = true;
       } else {
-        showNotice(agentRepairOutcomeNotice(result.outcome), result.outcome.recovered ? "info" : "error");
+        showNotice(agentRepairOutcomeNotice(result.outcome), agentRepairOutcomeTone(result.outcome));
       }
     } else {
       showNotice(`${actionLabel} requested for ${label}.`);
@@ -3293,10 +3292,10 @@ async function submitAgentApproval(plan, choice, button) {
     if (allowed && response.outcome) {
       appendAgentRepairOutcome(response.outcome, plan);
       if (dialog?.statusNode?.isConnected) {
-        dialog.statusNode.dataset.tone = response.outcome.recovered ? "info" : "bad";
+        dialog.statusNode.dataset.tone = agentRepairOutcomeTone(response.outcome) === "error" ? "bad" : "info";
         dialog.statusNode.textContent = agentRepairOutcomeNotice(response.outcome);
       }
-      showNotice(agentRepairOutcomeNotice(response.outcome), response.outcome.recovered ? "info" : "error");
+      showNotice(agentRepairOutcomeNotice(response.outcome), agentRepairOutcomeTone(response.outcome));
       closeAgentApprovalDialog({ returnFocus: false });
     } else if (allowed) {
       markAgentRepairProgress(plan, "failed", `The ${actionLabel.toLowerCase()} request completed, but NoobBoard did not return a verification outcome.`);
@@ -3407,9 +3406,15 @@ function renderAgentRepairOutcome(outcome) {
 }
 
 function agentRepairOutcomeNotice(outcome) {
-  if (outcome?.recovered) return "Approved fix ran and the app recovered.";
-  if (outcome?.verified) return "Approved fix ran, but the app still is not responding.";
-  return "Approved fix ran, but verification did not complete.";
+  if (outcome?.recovered) return "App action ran and the status updated.";
+  if (outcome?.verified) return "App action ran, but the app still is not responding.";
+  return "App action was sent, but NoobBoard could not verify the final status yet.";
+}
+
+function agentRepairOutcomeTone(outcome) {
+  if (outcome?.recovered) return "info";
+  if (!outcome?.verified) return "info";
+  return "error";
 }
 
 function repairStatusText(status) {
@@ -3562,7 +3567,7 @@ async function decideRepairRequest(id, choice, button = null) {
       body: JSON.stringify({ choice }),
     });
     if (result.outcome) {
-      showNotice(agentRepairOutcomeNotice(result.outcome), result.outcome.recovered ? "info" : "error");
+      showNotice(agentRepairOutcomeNotice(result.outcome), agentRepairOutcomeTone(result.outcome));
     } else {
       showNotice(choice === "approve" ? "Repair request approved." : "Repair request denied.");
     }
