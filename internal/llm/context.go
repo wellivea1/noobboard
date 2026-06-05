@@ -78,9 +78,9 @@ func (b ContextBuilder) Build(req Request) (string, error) {
 		}
 	}
 
-	instruction := "Diagnose the server status data. Do not request tools, do not execute actions, and recommend only one allowlisted next action. Do not recommend checking logs as a repair action; NoobBoard cannot execute log-based repairs. Use ask_admin_to_check for manual investigation."
+	instruction := "Diagnose the server status data. You cannot execute anything yourself, but NoobBoard can run one app restart after admin approval and server-side safety gates. When a specific app is offline, exited, or unhealthy and a restart is a reasonable first remediation, set recommended_action_id=ask_admin_to_restart_container and recommended_action_target.kind=app with that app's exact app_id. Prefer this over ask_admin_to_check whenever a restart is plausibly corrective. Do not request tools, shell access, filesystem access, Docker control, Unraid mutations, UniFi changes, log-based repairs, storage actions, firewall actions, or arbitrary commands."
 	if req.Policy.AgentToolsEnabled && req.Policy.RecipientRole == models.RoleAdmin {
-		instruction = "Diagnose the server status data. You may call the provided read-only NoobBoard status tools to refresh live status. Do not request or execute mutations, repairs, shell commands, filesystem access, Docker control, Unraid mutations, or UniFi configuration changes. Recommend only one allowlisted next action. Do not recommend checking logs as a repair action; NoobBoard cannot execute log-based repairs. Use ask_admin_to_check for manual investigation."
+		instruction = "Diagnose the server status data. You may call the provided read-only NoobBoard status tools to confirm live status before answering. You cannot execute anything yourself, but NoobBoard can run one app restart after admin approval and server-side safety gates. When a specific app is offline, exited, or unhealthy and a restart is a reasonable first remediation, set recommended_action_id=ask_admin_to_restart_container and recommended_action_target.kind=app with that app's exact app_id. Prefer this over ask_admin_to_check whenever a restart is plausibly corrective. Never recommend logs/shell/storage/array/firewall/Docker-removal/UniFi changes; those are not executable."
 	}
 	if req.Policy.RecipientRole != models.RoleAdmin {
 		return b.buildGeneralUserContext(snapshot, req)
@@ -298,7 +298,7 @@ func (b ContextBuilder) buildGeneralUserContext(snapshot models.Snapshot, req Re
 			"mode":        req.Mode,
 			"question":    compactText(req.Question, 500),
 			"api_report":  buildGeneralUserAPIReport(snapshot, req.Question, limits),
-			"instruction": "Explain the visible home status in plain English. Do not use technical vocabulary, request tools, execute actions, or recommend anything beyond telling the admin.",
+			"instruction": "Explain the visible home status in plain English. Do not use technical vocabulary, request tools, execute actions, or claim that you personally fixed anything. If a visible app is not working and the report marks it repair_requestable or restart_allowed_general_user, you may recommend asking an admin to fix it or using the offered restart/start control in plain, non-technical language. For that one visible app, return recommended_action_id=ask_admin_to_restart_container and recommended_action_target.kind=app with the exact app_id so NoobBoard can show the existing repair affordance.",
 		}
 		generic, err := genericPayload(payload)
 		if err != nil {
@@ -381,16 +381,21 @@ type unraidAPIReport struct {
 }
 
 type dockerAPIReport struct {
-	ServiceAvailable bool               `json:"docker_service_available"`
-	SourceHealth     string             `json:"source_health"`
-	AppCount         int                `json:"app_count"`
-	NetworkCount     int                `json:"network_count,omitempty"`
-	NetworkNames     []string           `json:"network_names,omitempty"`
-	OnlineAppCount   int                `json:"online_app_count"`
-	DegradedAppCount int                `json:"degraded_app_count"`
-	OfflineAppCount  int                `json:"offline_app_count"`
-	UnknownAppCount  int                `json:"unknown_app_count"`
-	Apps             []models.AppStatus `json:"apps"`
+	ServiceAvailable bool             `json:"docker_service_available"`
+	SourceHealth     string           `json:"source_health"`
+	AppCount         int              `json:"app_count"`
+	NetworkCount     int              `json:"network_count,omitempty"`
+	NetworkNames     []string         `json:"network_names,omitempty"`
+	OnlineAppCount   int              `json:"online_app_count"`
+	DegradedAppCount int              `json:"degraded_app_count"`
+	OfflineAppCount  int              `json:"offline_app_count"`
+	UnknownAppCount  int              `json:"unknown_app_count"`
+	Apps             []adminAppReport `json:"apps"`
+}
+
+type adminAppReport struct {
+	models.AppStatus
+	RestartCandidate bool `json:"restart_candidate"`
 }
 
 type unifiAPIReport struct {
@@ -489,13 +494,16 @@ type generalProbesReport struct {
 }
 
 type generalAppReport struct {
-	AppID          string                `json:"app_id"`
-	DisplayName    string                `json:"display_name"`
-	CurrentStatus  models.CurrentStatus  `json:"current_status"`
-	Severity       models.Severity       `json:"severity"`
-	EndpointStatus models.EndpointStatus `json:"endpoint_status,omitempty"`
-	DockerState    models.DockerState    `json:"docker_state,omitempty"`
-	Summary        string                `json:"summary,omitempty"`
+	AppID                     string                `json:"app_id"`
+	DisplayName               string                `json:"display_name"`
+	CurrentStatus             models.CurrentStatus  `json:"current_status"`
+	Severity                  models.Severity       `json:"severity"`
+	EndpointStatus            models.EndpointStatus `json:"endpoint_status,omitempty"`
+	DockerState               models.DockerState    `json:"docker_state,omitempty"`
+	RestartCandidate          bool                  `json:"restart_candidate"`
+	RestartAllowedGeneralUser bool                  `json:"restart_allowed_general_user"`
+	RepairRequestable         bool                  `json:"repair_requestable"`
+	Summary                   string                `json:"summary,omitempty"`
 }
 
 type generalAppProbeReport struct {
@@ -579,7 +587,7 @@ func buildAPIReport(snapshot models.Snapshot) apiReport {
 			AppCount:         len(snapshot.Apps),
 			NetworkCount:     infra.DockerNetworkCount,
 			NetworkNames:     append([]string(nil), infra.DockerNetworkNames...),
-			Apps:             append([]models.AppStatus(nil), snapshot.Apps...),
+			Apps:             make([]adminAppReport, 0, len(snapshot.Apps)),
 		},
 		UniFi: unifiAPIReport{
 			InternetReachable:       infra.InternetReachable,
@@ -611,6 +619,10 @@ func buildAPIReport(snapshot models.Snapshot) apiReport {
 		Facts:     append([]models.IncidentFact(nil), snapshot.Facts...),
 	}
 	for _, app := range snapshot.Apps {
+		report.Docker.Apps = append(report.Docker.Apps, adminAppReport{
+			AppStatus:        app,
+			RestartCandidate: models.IsAppRestartCandidate(app),
+		})
 		switch app.CurrentStatus {
 		case models.StatusOnline:
 			report.Docker.OnlineAppCount++
@@ -693,14 +705,18 @@ func buildGeneralUserAPIReport(snapshot models.Snapshot, question string, limits
 		}
 	}
 	for _, app := range apps {
+		restartCandidate := models.IsAppRestartCandidate(app)
 		report.Docker.Apps = append(report.Docker.Apps, generalAppReport{
-			AppID:          app.AppID,
-			DisplayName:    app.DisplayName,
-			CurrentStatus:  app.CurrentStatus,
-			Severity:       app.Severity,
-			EndpointStatus: app.EndpointStatus,
-			DockerState:    app.DockerState,
-			Summary:        compactText(app.ServerSummary, limits.SummaryChars),
+			AppID:                     app.AppID,
+			DisplayName:               app.DisplayName,
+			CurrentStatus:             app.CurrentStatus,
+			Severity:                  app.Severity,
+			EndpointStatus:            app.EndpointStatus,
+			DockerState:               app.DockerState,
+			RestartCandidate:          restartCandidate,
+			RestartAllowedGeneralUser: app.RestartAllowedGeneralUser,
+			RepairRequestable:         restartCandidate,
+			Summary:                   compactText(app.ServerSummary, limits.SummaryChars),
 		})
 		if limits.IncludeProbeRows {
 			report.Probes.AppProbeResults = append(report.Probes.AppProbeResults, generalAppProbeReport{
@@ -868,8 +884,11 @@ func Instructions() string {
 	return strings.Join([]string{
 		"You are a diagnostic assistant for a local NoobBoard dashboard.",
 		"You receive only sanitized incident facts, status data, and policy-approved log excerpts.",
-		"Never claim you can repair the system or execute actions.",
+		"You cannot execute anything yourself, but NoobBoard can run one app restart after admin approval and server-side safety gates.",
+		"When a specific app is offline, exited, or unhealthy and a restart is a reasonable first remediation, set recommended_action_id to ask_admin_to_restart_container and target that exact app_id.",
+		"Prefer ask_admin_to_restart_container over ask_admin_to_check whenever a restart is plausibly corrective and the app report marks restart_candidate true.",
 		"Never recommend destructive storage, Unraid array, Docker removal, firewall, VLAN, or filesystem actions.",
+		"Never recommend log-checking as an executable repair; NoobBoard cannot execute log-based repairs.",
 		"Choose recommended_action_id only from the JSON schema enum.",
 		"Set recommended_action_target.kind to app with the exact app_id or display name for app-specific recommendations; otherwise use none, server, network, storage, or manual.",
 		"Return a single JSON object that matches the schema exactly.",
@@ -881,8 +900,11 @@ func AgentInstructions() string {
 		"You are a diagnostic assistant for a local NoobBoard dashboard.",
 		"You receive only sanitized incident facts, status data, policy-approved log excerpts, and optionally read-only NoobBoard status tools.",
 		"You may call the provided NoobBoard tools only to refresh live read-only status.",
-		"Never claim you can repair the system unless a separate explicit mutating tool is provided; no mutating tools are available in this request.",
+		"You cannot execute anything yourself, but NoobBoard can run one app restart after admin approval and server-side safety gates.",
+		"When a specific app is offline, exited, or unhealthy and a restart is a reasonable first remediation, set recommended_action_id to ask_admin_to_restart_container and target that exact app_id.",
+		"Prefer ask_admin_to_restart_container over ask_admin_to_check whenever a restart is plausibly corrective and the app report marks restart_candidate true.",
 		"Never request shell access, filesystem access, raw credentials, Docker control, Unraid mutations, UniFi configuration changes, or arbitrary local/API commands.",
+		"Never recommend log-checking as an executable repair; NoobBoard cannot execute log-based repairs.",
 		"Choose recommended_action_id only from the JSON schema enum.",
 		"Set recommended_action_target.kind to app with the exact app_id or display name for app-specific recommendations; otherwise use none, server, network, storage, or manual.",
 		"Return a single JSON object that matches the schema exactly after any needed tool calls.",

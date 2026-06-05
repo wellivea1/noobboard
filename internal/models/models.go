@@ -63,6 +63,14 @@ const (
 	HealthUnknown   DockerHealth = "unknown"
 )
 
+func IsAppRestartCandidate(app AppStatus) bool {
+	switch app.CurrentStatus {
+	case StatusOffline, StatusDegraded:
+		return true
+	}
+	return app.DockerState == DockerExited || app.DockerHealth == HealthUnhealthy
+}
+
 type EndpointStatus string
 
 const (

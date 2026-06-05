@@ -24,6 +24,13 @@ func TestDefaultConfigValidation(t *testing.T) {
 	if cfg.LLM.OpenAIAuthMethod != OpenAIAuthMethodAPIKey {
 		t.Fatalf("default OpenAI auth method = %q, want api_key", cfg.LLM.OpenAIAuthMethod)
 	}
+	adminPolicy := cfg.LLM.Policies["admin_requested"]
+	if !adminPolicy.AgentToolsEnabled || adminPolicy.AgentMaxToolCalls != 2 {
+		t.Fatalf("admin read-only tools default = enabled:%t max:%d, want enabled:true max:2", adminPolicy.AgentToolsEnabled, adminPolicy.AgentMaxToolCalls)
+	}
+	if cfg.LLM.Policies["general_user_requested"].AgentToolsEnabled {
+		t.Fatal("general-user read-only tools should stay disabled by default")
+	}
 	if cfg.Retention.MaxStatusEventAge != 90*24*time.Hour || cfg.Retention.MaxStatusEventsPerSubject != 500 {
 		t.Fatalf("default status history retention = %s/%d", cfg.Retention.MaxStatusEventAge, cfg.Retention.MaxStatusEventsPerSubject)
 	}

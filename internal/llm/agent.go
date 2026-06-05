@@ -147,14 +147,9 @@ func agentToolsForRequest(req Request, redactor *privacy.Redactor) map[string]ag
 			}
 			return map[string]interface{}{
 				"found": true,
-				"app": generalAppReport{
-					AppID:          app.AppID,
-					DisplayName:    app.DisplayName,
-					CurrentStatus:  app.CurrentStatus,
-					Severity:       app.Severity,
-					EndpointStatus: app.EndpointStatus,
-					DockerState:    app.DockerState,
-					Summary:        app.ServerSummary,
+				"app": adminAppReport{
+					AppStatus:        app,
+					RestartCandidate: models.IsAppRestartCandidate(app),
 				},
 				"probe_result": generalProbeResult{
 					Type:      app.CurrentProbeResult.Type,

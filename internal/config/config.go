@@ -274,8 +274,8 @@ func defaultLLMPolicies() map[string]models.LLMPolicy {
 			MaxLogLines:           80,
 			FailClosedOnRedaction: true,
 			RecipientRole:         models.RoleAdmin,
-			AgentToolsEnabled:     false,
-			AgentMaxToolCalls:     3,
+			AgentToolsEnabled:     true,
+			AgentMaxToolCalls:     2,
 			AgentToolRules: []models.LLMAgentToolRule{
 				{Tool: "noobboard_current_status", Action: "allow"},
 				{Tool: "noobboard_server_status", Action: "allow"},
