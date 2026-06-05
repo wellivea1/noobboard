@@ -104,7 +104,7 @@ func (m *Manager) NotifyAdmins(ctx context.Context, subject, body, appID, dedupe
 			Dedupe:  dedupe,
 			UserID:  user.ID,
 			AppID:   appID,
-			Message: subject + ": " + body,
+			Message: notificationRecordMessage(subject, body),
 			Time:    time.Now().UTC().Format(time.RFC3339Nano),
 		})
 		sent++
@@ -129,7 +129,7 @@ func (m *Manager) NotifyUser(ctx context.Context, userID, subject, body, appID, 
 		Dedupe:  dedupe,
 		UserID:  userID,
 		AppID:   appID,
-		Message: subject + ": " + body,
+		Message: notificationRecordMessage(subject, body),
 		Time:    time.Now().UTC().Format(time.RFC3339Nano),
 	})
 	m.audit.Record("system", "notification.user_message", map[string]interface{}{"app_id": appID, "user_id": userID, "dedupe": dedupe})
@@ -175,8 +175,17 @@ func (m *Manager) ProcessSnapshot(ctx context.Context, snapshot models.Snapshot)
 			if err := m.backend.Send(ctx, msg); err != nil {
 				return err
 			}
+			sentAt := time.Now().UTC()
+			_ = m.store.AppendNotification(db.NotificationRecord{
+				ID:      notificationRecordID(pref.UserID, pref.AppID, key),
+				Dedupe:  key,
+				UserID:  pref.UserID,
+				AppID:   pref.AppID,
+				Message: notificationRecordMessage(msg.Subject, msg.Body),
+				Time:    sentAt.Format(time.RFC3339Nano),
+			})
 			pref.DedupeKey = key
-			pref.LastSentAt = time.Now().UTC()
+			pref.LastSentAt = sentAt
 			pref.LastStatusSeen = string(app.CurrentStatus)
 			_ = m.store.UpsertNotificationPreference(pref)
 			m.audit.Record("system", "notification.sent", map[string]interface{}{"app_id": pref.AppID, "user_id": pref.UserID, "status": string(app.CurrentStatus)})
@@ -230,4 +239,16 @@ func countDedupeKeys(prefs []models.NotificationPreference) int {
 
 func notificationRecordID(values ...string) string {
 	return fmt.Sprintf("notification-%d-%s", time.Now().UTC().UnixNano(), strings.NewReplacer(" ", "-", ":", "-", "/", "-").Replace(strings.Join(values, "-")))
+}
+
+func notificationRecordMessage(subject, body string) string {
+	subject = strings.TrimSpace(subject)
+	body = strings.TrimSpace(body)
+	if subject == "" {
+		return body
+	}
+	if body == "" {
+		return subject
+	}
+	return subject + ": " + body
 }

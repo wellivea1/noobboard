@@ -118,6 +118,9 @@ type flags struct {
 	DrawerNotificationRows      int      `json:"drawerNotificationRows,omitempty"`
 	DrawerEmptyStateVisible     bool     `json:"drawerEmptyStateVisible,omitempty"`
 	DrawerSignOutVisible        bool     `json:"drawerSignOutVisible,omitempty"`
+	NotificationSignupVisible   bool     `json:"notificationSignupVisible,omitempty"`
+	NotificationSignupTitle     string   `json:"notificationSignupTitle,omitempty"`
+	NotificationSignupPrimary   bool     `json:"notificationSignupPrimary,omitempty"`
 	BannedTermCount             int      `json:"bannedTermCount,omitempty"`
 	IconOnlyPrimaryActions      int      `json:"iconOnlyPrimaryActionCount,omitempty"`
 	AdminTabsVisible            bool     `json:"adminTabsVisible,omitempty"`
@@ -1035,6 +1038,9 @@ func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, a
 	if mobileUserDrawer.DrawerNotificationRows < 1 && !mobileUserDrawer.DrawerEmptyStateVisible {
 		failures = append(failures, "general user settings drawer did not render notification rows or empty state")
 	}
+	if mobileUserDrawer.DrawerNotificationRows > 0 && (!mobileUserDrawer.NotificationSignupVisible || !mobileUserDrawer.NotificationSignupPrimary || mobileUserDrawer.NotificationSignupTitle != "Turn on alerts?") {
+		failures = append(failures, "general user notification toggle did not open the signup dialog")
+	}
 	if !mobileUserDrawer.DrawerSignOutVisible {
 		failures = append(failures, "general user settings drawer did not render sign out")
 	}
@@ -1590,6 +1596,27 @@ const userDrawerOpenExpression = `(async () => {
     const rect = element.getBoundingClientRect();
     return Math.round(rect.width) < 44 || Math.round(rect.height) < 44;
   });
+  let notificationSignupVisible = false;
+  let notificationSignupTitle = '';
+  let notificationSignupPrimary = false;
+  const firstNotificationToggle = drawer.querySelector('.user-notification-row input[type="checkbox"]');
+  if (firstNotificationToggle && !firstNotificationToggle.checked) {
+    firstNotificationToggle.click();
+    const signupStarted = Date.now();
+    while (!document.querySelector('.compact-notification-signup') && Date.now() - signupStarted < 3000) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const signup = document.querySelector('.compact-notification-signup');
+    notificationSignupVisible = !!(signup && visibleElement(signup));
+    notificationSignupTitle = signup?.querySelector('h2')?.textContent?.trim() || '';
+    notificationSignupPrimary = !![...(signup?.querySelectorAll('button') || [])].find((button) => button.textContent.trim() === 'Turn on alerts' && visibleElement(button));
+    const cancel = [...(signup?.querySelectorAll('button') || [])].find((button) => button.textContent.trim() === 'Not now');
+    cancel?.click();
+    const closeStarted = Date.now();
+    while (document.querySelector('.compact-notification-signup') && Date.now() - closeStarted < 3000) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
   return {
     userMenuToggleVisible: !!toggle && visibleElement(toggle),
     userDrawerOpen: !!(drawer && !drawer.hidden && visibleElement(drawer) && toggle?.getAttribute('aria-expanded') === 'true'),
@@ -1599,6 +1626,9 @@ const userDrawerOpenExpression = `(async () => {
     drawerNotificationRows: drawer.querySelectorAll('.user-notification-row').length,
     drawerEmptyStateVisible: !!drawer.querySelector('.user-settings-empty') && visibleElement(drawer.querySelector('.user-settings-empty')),
     drawerSignOutVisible: !!drawer.querySelector('#user-drawer-logout') && visibleElement(drawer.querySelector('#user-drawer-logout')),
+    notificationSignupVisible,
+    notificationSignupTitle,
+    notificationSignupPrimary,
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow: hasButtonTextOverflow(),
     elementBoundsOverflow: componentBoundsOverflow(),

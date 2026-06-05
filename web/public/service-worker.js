@@ -1,4 +1,4 @@
-const CACHE = "noobboard-v47";
+const CACHE = "noobboard-v48";
 const ASSETS = [
   "/",
   "/site-config.js",
@@ -33,6 +33,20 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
   event.respondWith(handleFetch(event.request));
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const targetURL = new URL(event.notification?.data?.url || "/", self.location.origin).href;
+  event.waitUntil(clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
+    for (const client of clientList) {
+      if (client.url.startsWith(self.location.origin) && "focus" in client) {
+        return client.focus();
+      }
+    }
+    if (clients.openWindow) return clients.openWindow(targetURL);
+    return undefined;
+  }));
 });
 
 async function handleFetch(request) {

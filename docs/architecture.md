@@ -9,7 +9,9 @@ The service is built around these boundaries:
 - Snapshots and app records carry source metadata (`fixture`, `mixed`, `live`, or `unraid-docker`) so fixture/demo data is visible and cannot be confused with current Docker state.
 - Privacy filtering and redaction run before display, notifications, or LLM calls.
 - The LLM layer receives only role-specific sanitized context and returns strict JSON.
-- Notification delivery is interface-based and starts with a mock backend.
+- Notification delivery is interface-based and starts with a mock backend. Per-user app alerts
+  are also stored locally so the compact app can show device alerts while the page or installed
+  app is open; this is not a full background push transport.
 - Windows service installation lives behind build-tagged service-management code. Under the
   Service Control Manager the binary runs as a real service (`golang.org/x/sys/windows/svc`):
   `serve` detects SCM launch, performs the start/stop handshake, and cancels the server

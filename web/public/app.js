@@ -22,6 +22,10 @@ const state = {
   notificationPreferences: new Map(),
   notificationPreferencesLoaded: false,
   notificationPreferencesLoading: false,
+  compactNotificationDialog: null,
+  notificationPollTimer: null,
+  notificationLastSeenTime: "",
+  notificationRecordsLoaded: false,
   userDrawerActiveSection: "settings",
   userDrawerLastFocus: null,
   userView: "status",
@@ -40,6 +44,9 @@ const state = {
 const $ = (id) => document.getElementById(id);
 const MONITOR_STORAGE_KEY = "noobboard.hiddenMonitors.v1";
 const OVERVIEW_ORDER_STORAGE_KEY = "noobboard.overviewOrder.v1";
+const NOTIFICATION_SIGNUP_STORAGE_KEY = "noobboard.notificationSignup.v1";
+const NOTIFICATION_LAST_SEEN_STORAGE_KEY = "noobboard.notificationLastSeen.v1";
+const NOTIFICATION_POLL_INTERVAL_MS = 30000;
 const OVERVIEW_MONITOR_IDS = ["overview.overall", "overview.server", "overview.router", "overview.apps"];
 const SITE_MODE = String(window.__NOOBBOARD_SITE_MODE__ || window.__HSD_SITE_MODE__ || "admin").toLowerCase() === "compact" ? "compact" : "admin";
 const NEW_USER_KEY = "__new_user__";
@@ -756,6 +763,9 @@ async function refresh() {
     renderSnapshot(snapshot);
     renderPageSubtitle();
     renderMonitorRestore();
+    if (!hasAdminSurface() && state.notificationRecordsLoaded) {
+      await loadUserNotificationRecords({ notify: true });
+    }
   } catch (error) {
     showNotice(error.message, "error");
   } finally {
@@ -870,6 +880,7 @@ function renderUserHome(snapshot) {
   }
   if (state.userView === "chat" && !canChat) state.userView = "status";
   setCompactView(state.userView || "status");
+  startCompactNotificationPolling();
   const statusCards = [
     userStatusCard("Overall", snapshot.overall_status || "unknown", compactOverallSummary(snapshot)),
   ];
@@ -1006,7 +1017,7 @@ function renderCompactNotificationRow(app, index) {
     ),
     node("p", { class: "user-settings-error", role: "alert" }),
   );
-  input.addEventListener("change", () => updateCompactNotificationPreference(app, input, row, stateText));
+  input.addEventListener("change", () => handleCompactNotificationPreferenceChange(app, input, row, stateText));
   return row;
 }
 
@@ -1025,10 +1036,20 @@ async function loadCompactNotificationPreferences() {
   }
 }
 
-async function updateCompactNotificationPreference(app, input, row, stateText) {
+function handleCompactNotificationPreferenceChange(app, input, row, stateText) {
+  const enabled = input.checked;
+  if (enabled && !compactNotificationSignupComplete()) {
+    input.checked = false;
+    setCompactSwitchState(input, stateText, false);
+    openCompactNotificationSignup({ app, input, row, stateText });
+    return;
+  }
+  persistCompactNotificationPreference(app, input, row, stateText, enabled);
+}
+
+async function persistCompactNotificationPreference(app, input, row, stateText, enabled) {
   const appID = String(app.app_id || "").trim();
   if (!appID) return;
-  const enabled = input.checked;
   const previous = !enabled;
   const error = row.querySelector(".user-settings-error");
   input.disabled = true;
@@ -1041,10 +1062,12 @@ async function updateCompactNotificationPreference(app, input, row, stateText) {
       body: JSON.stringify({ app_id: appID, notify_on_down: enabled, notify_on_recovery: enabled }),
     });
     state.notificationPreferences.set(appID, saved);
+    return true;
   } catch {
     input.checked = previous;
     setCompactSwitchState(input, stateText, previous);
     if (error) error.textContent = "Couldn't save that \u2014 try again.";
+    return false;
   } finally {
     input.disabled = false;
     delete row.dataset.saving;
@@ -1054,6 +1077,241 @@ async function updateCompactNotificationPreference(app, input, row, stateText) {
 function setCompactSwitchState(input, stateText, enabled) {
   input.checked = enabled;
   if (stateText) stateText.textContent = enabled ? "On" : "Off";
+}
+
+function compactNotificationStorageSuffix() {
+  const raw = state.user?.id || state.user?.username || "user";
+  return encodeURIComponent(String(raw));
+}
+
+function compactNotificationSignupStorageKey() {
+  return `${NOTIFICATION_SIGNUP_STORAGE_KEY}.${compactNotificationStorageSuffix()}`;
+}
+
+function compactNotificationLastSeenStorageKey() {
+  return `${NOTIFICATION_LAST_SEEN_STORAGE_KEY}.${compactNotificationStorageSuffix()}`;
+}
+
+function compactNotificationSignupMode() {
+  try {
+    return localStorage.getItem(compactNotificationSignupStorageKey()) || "";
+  } catch {
+    return "";
+  }
+}
+
+function setCompactNotificationSignupMode(mode) {
+  try {
+    localStorage.setItem(compactNotificationSignupStorageKey(), mode);
+  } catch {
+    // Local storage can be blocked; the permission still applies for the current browser session.
+  }
+}
+
+function compactNotificationSignupComplete() {
+  if (compactNotificationSignupMode()) return true;
+  if (systemNotificationPermission() === "granted") {
+    setCompactNotificationSignupMode("system");
+    return true;
+  }
+  return false;
+}
+
+function systemNotificationPermission() {
+  if (!("Notification" in window)) return "unsupported";
+  return Notification.permission || "default";
+}
+
+function compactNotificationSignupBody() {
+  const permission = systemNotificationPermission();
+  if (permission === "denied") {
+    return "Device alerts are blocked for this page. NoobBoard can still show alerts here while it is open.";
+  }
+  if (permission === "unsupported" || window.isSecureContext === false) {
+    return "NoobBoard can show alerts here while this page is open. Device alerts need a supported page address.";
+  }
+  return "NoobBoard can show alerts on this device when a selected app stops working or starts working again.";
+}
+
+function openCompactNotificationSignup(pending) {
+  closeCompactNotificationSignup({ returnFocus: false });
+  const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : pending.input;
+  const titleID = `compact-notification-title-${Date.now()}`;
+  const status = node("p", { class: "compact-notification-signup-status", role: "status", text: "You can change this later in Settings." });
+  const primary = node("button", { type: "button", class: "command primary", text: "Turn on alerts" });
+  const cancel = node("button", { type: "button", class: "command", text: "Not now" });
+  const dialog = node("section", {
+    class: "compact-notification-signup",
+    role: "dialog",
+    "aria-modal": "true",
+    "aria-labelledby": titleID,
+  },
+    node("div", { class: "compact-notification-signup-head" },
+      node("h2", { id: titleID, text: "Turn on alerts?" }),
+      node("p", { text: compactNotificationSignupBody() }),
+    ),
+    status,
+    node("div", { class: "compact-notification-signup-actions" }, cancel, primary),
+  );
+  const backdrop = node("div", { class: "compact-notification-signup-backdrop" }, dialog);
+  backdrop.addEventListener("click", (event) => {
+    if (event.target === backdrop) closeCompactNotificationSignup();
+  });
+  backdrop.addEventListener("keydown", handleCompactNotificationSignupKeydown);
+  cancel.addEventListener("click", () => closeCompactNotificationSignup());
+  primary.addEventListener("click", () => confirmCompactNotificationSignup(pending, primary, status));
+  document.body.append(backdrop);
+  document.body.classList.add("compact-notification-signup-open");
+  state.compactNotificationDialog = { backdrop, dialog, previousFocus };
+  primary.focus({ preventScroll: true });
+}
+
+function closeCompactNotificationSignup(options = {}) {
+  const { returnFocus = true } = options;
+  const current = state.compactNotificationDialog;
+  if (!current) return;
+  current.backdrop.remove();
+  document.body.classList.remove("compact-notification-signup-open");
+  state.compactNotificationDialog = null;
+  if (returnFocus) current.previousFocus?.focus?.({ preventScroll: true });
+}
+
+function handleCompactNotificationSignupKeydown(event) {
+  if (!state.compactNotificationDialog) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    event.stopPropagation();
+    closeCompactNotificationSignup();
+    return;
+  }
+  if (event.key !== "Tab") return;
+  event.stopPropagation();
+  const focusable = openAIAuthDialogFocusableElements(state.compactNotificationDialog.dialog);
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+    return;
+  }
+  if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+async function requestSystemNotificationPermission() {
+  if (!("Notification" in window)) return "unsupported";
+  if (Notification.permission === "granted" || Notification.permission === "denied") {
+    return Notification.permission;
+  }
+  if (window.isSecureContext === false) return "unavailable";
+  try {
+    return await Notification.requestPermission();
+  } catch {
+    return "unavailable";
+  }
+}
+
+async function confirmCompactNotificationSignup(pending, primary, status) {
+  primary.disabled = true;
+  status.textContent = "Turning on alerts...";
+  const permission = await requestSystemNotificationPermission();
+  const mode = permission === "granted" ? "system" : "in-app";
+  setCompactNotificationSignupMode(mode);
+  closeCompactNotificationSignup({ returnFocus: false });
+  const { app, input, row, stateText } = pending;
+  let saved = false;
+  if (typeof pending.afterSignup === "function") {
+    saved = await pending.afterSignup(mode);
+  } else if (input?.isConnected && row?.isConnected) {
+    saved = await persistCompactNotificationPreference(app, input, row, stateText, true);
+  }
+  startCompactNotificationPolling();
+  if (saved) showNotice(mode === "system" ? "Alerts turned on." : "Alerts saved. Keep NoobBoard open here to see them.");
+}
+
+function startCompactNotificationPolling() {
+  if (hasAdminSurface() || !compactNotificationSignupComplete()) return;
+  if (!state.notificationLastSeenTime) {
+    try {
+      state.notificationLastSeenTime = localStorage.getItem(compactNotificationLastSeenStorageKey()) || "";
+    } catch {
+      state.notificationLastSeenTime = "";
+    }
+  }
+  if (!state.notificationRecordsLoaded) {
+    loadUserNotificationRecords({ notify: false });
+  }
+  if (state.notificationPollTimer) return;
+  state.notificationPollTimer = window.setInterval(() => {
+    loadUserNotificationRecords({ notify: true });
+  }, NOTIFICATION_POLL_INTERVAL_MS);
+}
+
+async function loadUserNotificationRecords(options = {}) {
+  if (hasAdminSurface()) return;
+  try {
+    const records = await api("/api/user/notifications?limit=20");
+    state.notificationRecordsLoaded = true;
+    handleUserNotificationRecords(Array.isArray(records) ? records : [], options);
+  } catch {
+    // Polling is best-effort; the status view should not become noisy if the session expires.
+  }
+}
+
+function handleUserNotificationRecords(records, options = {}) {
+  const sorted = records
+    .map((record) => ({ record, time: Date.parse(record.time || "") }))
+    .filter((item) => Number.isFinite(item.time))
+    .sort((a, b) => a.time - b.time);
+  if (!sorted.length) return;
+  const previous = Number(state.notificationLastSeenTime || 0);
+  const newest = sorted[sorted.length - 1].time;
+  if (!previous) {
+    saveCompactNotificationLastSeen(newest);
+    return;
+  }
+  const unseen = sorted.filter((item) => item.time > previous);
+  if (options.notify) {
+    unseen.forEach((item) => showUserNotificationRecord(item.record));
+  }
+  if (newest > previous) saveCompactNotificationLastSeen(newest);
+}
+
+function saveCompactNotificationLastSeen(value) {
+  const normalized = String(value || "");
+  state.notificationLastSeenTime = normalized;
+  try {
+    localStorage.setItem(compactNotificationLastSeenStorageKey(), normalized);
+  } catch {
+    // Local storage can be unavailable; current-session de-dupe still works.
+  }
+}
+
+async function showUserNotificationRecord(record) {
+  const message = String(record.message || "NoobBoard status changed.");
+  if (systemNotificationPermission() === "granted") {
+    const tag = String(record.dedupe || record.id || "noobboard-status");
+    const options = { body: message, tag, data: { url: "/" } };
+    try {
+      const registration = await navigator.serviceWorker?.ready;
+      if (registration?.showNotification) {
+        await registration.showNotification("NoobBoard", options);
+        return;
+      }
+    } catch {
+      // Fall back to the page-level Notification constructor.
+    }
+    try {
+      new Notification("NoobBoard", options);
+      return;
+    } catch {
+      // Fall through to the in-app notice.
+    }
+  }
+  showNotice(message);
 }
 
 function renderUserHero(hero) {
@@ -2290,6 +2548,20 @@ async function setAppIcon(app) {
 }
 
 async function savePreference(appID) {
+  if (!compactNotificationSignupComplete()) {
+    const app = (state.snapshot?.apps || []).find((item) => String(item.app_id || "") === String(appID || ""));
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    openCompactNotificationSignup({
+      app,
+      input: previousFocus,
+      afterSignup: () => savePreferenceDirect(appID, { showSuccess: false }),
+    });
+    return;
+  }
+  await savePreferenceDirect(appID);
+}
+
+async function savePreferenceDirect(appID, options = {}) {
   try {
     const saved = await api("/api/user/notification-preferences", {
       method: "POST",
@@ -2297,10 +2569,12 @@ async function savePreference(appID) {
     });
     state.notificationPreferences.set(String(appID || ""), saved);
     state.notificationPreferencesLoaded = true;
-    showNotice("Notification preference saved.");
+    if (options.showSuccess !== false) showNotice("Notification preference saved.");
     await refresh();
+    return true;
   } catch (error) {
     showNotice(error.message, "error");
+    return false;
   }
 }
 

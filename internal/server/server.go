@@ -205,6 +205,7 @@ func (a *App) registerSharedRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/user/repair-request", a.requireAuth(a.createRepairRequest))
 	mux.HandleFunc("POST /api/user/apps/{id}/restart", a.requireAuth(a.restartUserApp))
 	mux.HandleFunc("POST /api/user/apps/{id}/action", a.requireAuth(a.controlUserApp))
+	mux.HandleFunc("GET /api/user/notifications", a.requireAuth(a.userNotifications))
 	mux.HandleFunc("GET /api/user/notification-preferences", a.requireAuth(a.getNotificationPreferences))
 	mux.HandleFunc("POST /api/user/notification-preferences", a.requireAuth(a.saveNotificationPreferences))
 }
@@ -1118,6 +1119,22 @@ func parseHistoryLimit(value string) int {
 	}
 	if limit > 500 {
 		return 500
+	}
+	return limit
+}
+
+func parseNotificationLimit(value string) int {
+	limit := 20
+	if strings.TrimSpace(value) != "" {
+		if parsed, err := strconv.Atoi(strings.TrimSpace(value)); err == nil {
+			limit = parsed
+		}
+	}
+	if limit < 1 {
+		return 1
+	}
+	if limit > 100 {
+		return 100
 	}
 	return limit
 }
@@ -3260,6 +3277,18 @@ func (a *App) getNotificationPreferences(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, prefs)
+}
+
+func (a *App) userNotifications(w http.ResponseWriter, r *http.Request) {
+	records, err := a.deps.Store.NotificationsForUser(mustUser(r).ID, parseNotificationLimit(r.URL.Query().Get("limit")))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	for i := range records {
+		records[i].Message = a.deps.Redactor.RedactString(records[i].Message).Text
+	}
+	writeJSON(w, http.StatusOK, records)
 }
 
 func (a *App) saveNotificationPreferences(w http.ResponseWriter, r *http.Request) {
