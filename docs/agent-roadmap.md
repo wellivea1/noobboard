@@ -327,12 +327,12 @@ can auto-start or auto-restart anything.
   `noobboard_current_status`, `noobboard_server_status`, `noobboard_network_status`, and
   `noobboard_app_status`. These tools refresh sanitized NoobBoard snapshots through the
   normal collectors and never expose raw API clients, credentials, shell, filesystem,
-  Docker control, Unraid mutations, or UniFi configuration mutation. General-user policies
+  Docker control, arbitrary Unraid mutations, or UniFi configuration mutation. General-user policies
   never receive tools.
-- **Narrow mutation allowlist.** Current v1 executes only `docker_restart` for an opted-in app after a server-signed approval or through the request-scoped autonomous diagnosis path. Future tools wrap existing audited operations only:
+- **Narrow mutation allowlist.** Current v1 executes app start/restart for an opted-in app after a server-signed approval or through the request-scoped autonomous diagnosis path, plus one compact LLM-only `ask_admin_to_start_array` path that can call Unraid array start when the current snapshot already reports the array stopped. Future tools wrap existing audited operations only:
   `get_status`, `get_logs` (bounded + redacted), `docker_restart`, `docker_start`,
   `docker_stop` — all already admin-only, CSRF/audit-gated, and resolved from the
-  server-side snapshot. **No shell, no filesystem, no arbitrary commands, no Unraid/UniFi
+  server-side snapshot. **No shell, no filesystem, no arbitrary commands, no arbitrary Unraid/UniFi
   config mutation.** This is the key divergence from OpenCode/Codex, which run shell in a
   sandbox; NoobBoard does not need that blast radius.
 - **Approval modes** (mirroring Codex's suggest / auto-edit / full-auto and OpenCode's

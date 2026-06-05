@@ -152,16 +152,17 @@ func JSONSchema() map[string]interface{} {
 					"Choose exactly one next action.",
 					"none: no follow-up is needed.",
 					"ask_admin_to_restart_container: a specific app is down, exited, unhealthy, or degraded and a server-side start/restart may fix it; set recommended_action_target.kind=app and id_or_name to that app's exact app_id.",
+					"ask_admin_to_start_array: the Unraid array is stopped/offline; explain that the admin should be contacted first to confirm it was not intentionally stopped, but if the admin is unavailable or asleep and service needs to be restored, starting the array is okay. Set recommended_action_target.kind=storage and id_or_name=unraid_array.",
 					"ask_admin_to_check: manual investigation only when no executable app fix is appropriate.",
 					"ask_admin_to_check_unifi: router, WAN, DNS, or network equipment investigation.",
 					"ask_admin_to_check_storage: Unraid array, disk, share, or storage investigation.",
 					"unknown: the next step cannot be mapped safely.",
 				}, " "),
-				"enum": []string{"none", "ask_admin_to_check", "ask_admin_to_restart_container", "ask_admin_to_check_unifi", "ask_admin_to_check_storage", "unknown"},
+				"enum": []string{"none", "ask_admin_to_check", "ask_admin_to_restart_container", "ask_admin_to_start_array", "ask_admin_to_check_unifi", "ask_admin_to_check_storage", "unknown"},
 			},
 			"recommended_action_target": map[string]interface{}{
 				"type":                 "object",
-				"description":          "Target for recommended_action_id. For ask_admin_to_restart_container this must identify exactly one app using kind=app and id_or_name equal to the app_id or display name from the report. NoobBoard starts stopped apps and restarts non-stopped apps server-side. For non-app manual checks use the closest safe kind with an empty id_or_name when no specific target is needed.",
+				"description":          "Target for recommended_action_id. For ask_admin_to_restart_container this must identify exactly one app using kind=app and id_or_name equal to the app_id or display name from the report. NoobBoard starts stopped apps and restarts non-stopped apps server-side. For ask_admin_to_start_array use kind=storage and id_or_name=unraid_array. For non-app manual checks use the closest safe kind with an empty id_or_name when no specific target is needed.",
 				"additionalProperties": false,
 				"properties": map[string]interface{}{
 					"kind":       map[string]interface{}{"type": "string", "enum": []string{"none", "app", "server", "network", "storage", "manual"}},
@@ -195,7 +196,7 @@ func validIncidentType(value models.IncidentType) bool {
 
 func validAction(value string) bool {
 	switch value {
-	case "none", "ask_admin_to_check", "ask_admin_to_restart_container", "ask_admin_to_check_unifi", "ask_admin_to_check_storage", "unknown":
+	case "none", "ask_admin_to_check", "ask_admin_to_restart_container", "ask_admin_to_start_array", "ask_admin_to_check_unifi", "ask_admin_to_check_storage", "unknown":
 		return true
 	default:
 		return false

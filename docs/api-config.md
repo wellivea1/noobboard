@@ -36,6 +36,7 @@ Admin routes are registered on the admin site/port. The compact site/port serves
 - `GET /api/admin/repair-requests`
 - `POST /api/admin/repair-requests/{id}/decision`
 - `POST /api/user/diagnose`
+- `POST /api/user/agent/action`
 - `POST /api/user/notify-admin`
 - `GET /api/user/repair-requests`
 - `POST /api/user/repair-request`
@@ -76,6 +77,8 @@ General-user repair requests are request-only. `POST /api/user/repair-request` a
 Direct general-user app controls are separate from admin LLM/agent action. `POST /api/user/apps/{id}/action` accepts `{"action":"start"|"stop"|"restart","confirmed":true,"confirm_app_id":"<resolved app_id>"}`; `POST /api/user/apps/{id}/restart` is kept as a compatibility alias for restart. These routes are available only for apps visible to that user, only when `app_catalog.general_user_restarts_enabled=true`, only when that app also has `app_catalog.restart_allowed_general_user["<app id>"]=true`, and only for Docker targets. The setting names are retained for compatibility, but the current UI labels them as standard-user app controls. The server refuses start for an already-running app, stop for an already-stopped app, restart for a stopped app that should use Start, and restart for an app that is currently online. Privacy blacklists, hidden apps, the optional safety-reviewer gate, the shared per-app cooldown, and the shared global repair rate limit are enforced before Docker is called. Successful direct controls create audit/history entries and return the same verification `outcome` shape as admin repair; they must not create Review Queue items.
 
 General-user diagnosis can also run a permanent-setting auto-fix when the request body includes `auto_repair:true`, `app_catalog.general_user_auto_repair_enabled=true`, and the same standard-user app-control global/per-app opt-in would allow the target. The model still supplies only the app-fix recommendation and target hint; the server re-resolves the visible app, chooses `start` when the app is stopped (`docker_state=exited`) and `restart` otherwise, then runs the same general-user app-action safety path. Stop is never selected automatically; it remains a manual button. Auto-fix outcomes are returned inline in `agent_plan.outcome` with `auto_executed:true`.
+
+The compact LLM has one storage action that is not available as a normal manual control. When `/api/user/diagnose` returns `agent_plan.recommended_action_id:"ask_admin_to_start_array"` with `direct_action:"start_array"` and an `execution_token`, the compact UI may call `POST /api/user/agent/action` with `{"execution_token":"...","choice":"start_array"}`. The endpoint accepts only that signed one-use plan, only for `target_id:"unraid_array"`, only when NAS status is visible to the role, and only when the current Unraid array state is still stopped/offline. It calls only the Unraid array start mutation, verifies through a fresh status refresh, returns the same `outcome` shape used by repair actions, and writes infrastructure history for `unraid_array`. The diagnosis copy must tell the user to contact the admin first to confirm the array was not intentionally stopped, while allowing start if the admin is unavailable or asleep and service needs to be restored.
 
 Runtime settings endpoints accept and return JSON:
 
