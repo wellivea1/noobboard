@@ -637,7 +637,7 @@ func TestAgentApprovalEndpointAuditsAndFailsClosed(t *testing.T) {
 	}
 }
 
-func TestAgentApprovalExecutesOptedInRestartOnce(t *testing.T) {
+func TestAgentApprovalStartsStoppedAppOnce(t *testing.T) {
 	oldDelay := agentRepairVerificationDelay
 	agentRepairVerificationDelay = 0
 	t.Cleanup(func() { agentRepairVerificationDelay = oldDelay })
@@ -683,7 +683,7 @@ func TestAgentApprovalExecutesOptedInRestartOnce(t *testing.T) {
 			Diagnosis:           "Emby is down.",
 			Evidence:            []string{"App is offline."},
 			GeneralUserSummary:  "Emby is not working.",
-			AdminMessage:        "Restart Emby once.",
+			AdminMessage:        "Start Emby once.",
 			RecommendedActionID: "ask_admin_to_restart_container",
 			RecommendedTarget:   llm.ActionTarget{Kind: "app", IDOrName: "emby"},
 			ShouldNotifyAdmin:   true,
@@ -723,6 +723,9 @@ func TestAgentApprovalExecutesOptedInRestartOnce(t *testing.T) {
 	if !diagnosis.AgentPlan.CanExecute || diagnosis.AgentPlan.Status != "approval_ready" {
 		t.Fatalf("agent plan was not ready to execute: %#v", diagnosis.AgentPlan)
 	}
+	if diagnosis.AgentPlan.DirectAction != string(docker.ActionStart) {
+		t.Fatalf("stopped app approval plan direct_action = %q, want start", diagnosis.AgentPlan.DirectAction)
+	}
 	tokenPayload, err := app.verifyAgentApprovalToken(diagnosis.AgentPlan.ApprovalToken, "admin-1")
 	if err != nil {
 		t.Fatal(err)
@@ -747,7 +750,7 @@ func TestAgentApprovalExecutesOptedInRestartOnce(t *testing.T) {
 	req.AddCookie(cookie)
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusAccepted {
-		t.Fatalf("approve restart status = %d, body = %s", rec.Code, rec.Body.String())
+		t.Fatalf("approve start status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 	var approval struct {
 		Status  string                    `json:"status"`
@@ -762,14 +765,17 @@ func TestAgentApprovalExecutesOptedInRestartOnce(t *testing.T) {
 	if approval.Outcome.BeforeStatus != models.StatusOffline || approval.Outcome.AfterStatus != models.StatusOnline {
 		t.Fatalf("approval outcome statuses = %s -> %s", approval.Outcome.BeforeStatus, approval.Outcome.AfterStatus)
 	}
-	if collector.callCount != 1 || collector.called != docker.ActionRestart || collector.app.AppID != "emby" || !collector.app.AgentRepairAllowed {
-		t.Fatalf("restart was not executed exactly once on resolved opted-in app: count=%d action=%q app=%#v", collector.callCount, collector.called, collector.app)
+	if approval.Outcome.Action != string(docker.ActionStart) {
+		t.Fatalf("approval action = %q, want start", approval.Outcome.Action)
+	}
+	if collector.callCount != 1 || collector.called != docker.ActionStart || collector.app.AppID != "emby" || !collector.app.AgentRepairAllowed {
+		t.Fatalf("start was not executed exactly once on resolved opted-in app: count=%d action=%q app=%#v", collector.callCount, collector.called, collector.app)
 	}
 	history, err := app.deps.History.Query(db.HistoryFilter{SubjectType: models.SubjectApp, SubjectID: "emby", Limit: 5})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(history) == 0 || history[0].Note != "Auto-repair: restarted - recovered." || history[0].From != models.StatusOffline || history[0].To != models.StatusOnline {
+	if len(history) == 0 || history[0].Note != "Auto-repair: started - running." || history[0].From != models.StatusOffline || history[0].To != models.StatusOnline {
 		t.Fatalf("repair verification history event missing: %#v", history)
 	}
 	tail, err := app.deps.Store.AuditTail(10)
@@ -846,6 +852,21 @@ func TestAgentApprovalExecutesOptedInRestartOnce(t *testing.T) {
 	}
 	if len(tail) == 0 || tail[len(tail)-1].Action != "llm.agent_plan.rate_limited" {
 		t.Fatalf("cooldown refusal was not audited: %#v", tail)
+	}
+}
+
+func TestAgentRepairActionForAppStartsOnlyStoppedTargets(t *testing.T) {
+	action, ok := agentActionDefinition("ask_admin_to_restart_container")
+	if !ok {
+		t.Fatal("restart action definition missing")
+	}
+	stopped := agentRepairActionForApp(action, models.AppStatus{AppID: "emby", DockerState: models.DockerExited, CurrentStatus: models.StatusOffline})
+	if stopped.DockerAction != docker.ActionStart {
+		t.Fatalf("stopped app action = %q, want start", stopped.DockerAction)
+	}
+	degraded := agentRepairActionForApp(action, models.AppStatus{AppID: "emby", DockerState: models.DockerRunning, CurrentStatus: models.StatusDegraded})
+	if degraded.DockerAction != docker.ActionRestart {
+		t.Fatalf("running degraded app action = %q, want restart", degraded.DockerAction)
 	}
 }
 
@@ -971,7 +992,7 @@ func TestAgentApprovalAutoReviewDenialBlocksDocker(t *testing.T) {
 	}
 }
 
-func TestAgentAutoRepairExecutesOptedInRestartWhenRequestedAndReviewed(t *testing.T) {
+func TestAgentAutoRepairExecutesOptedInActionWhenRequestedAndReviewed(t *testing.T) {
 	oldDelay := agentRepairVerificationDelay
 	agentRepairVerificationDelay = 0
 	t.Cleanup(func() { agentRepairVerificationDelay = oldDelay })
@@ -1081,8 +1102,11 @@ func TestAgentAutoRepairExecutesOptedInRestartWhenRequestedAndReviewed(t *testin
 	if diagnosis.AgentPlan.Outcome == nil || !diagnosis.AgentPlan.Outcome.Verified || !diagnosis.AgentPlan.Outcome.Recovered {
 		t.Fatalf("auto repair outcome did not report recovered execution: %#v", diagnosis.AgentPlan.Outcome)
 	}
-	if collector.callCount != 1 || collector.called != docker.ActionRestart || collector.app.AppID != "emby" || !collector.app.AgentRepairAllowed {
-		t.Fatalf("auto repair did not restart opted-in app exactly once: count=%d action=%q app=%#v", collector.callCount, collector.called, collector.app)
+	if diagnosis.AgentPlan.DirectAction != string(docker.ActionStart) || diagnosis.AgentPlan.Outcome.Action != string(docker.ActionStart) {
+		t.Fatalf("auto repair did not expose start action: plan=%#v outcome=%#v", diagnosis.AgentPlan.DirectAction, diagnosis.AgentPlan.Outcome)
+	}
+	if collector.callCount != 1 || collector.called != docker.ActionStart || collector.app.AppID != "emby" || !collector.app.AgentRepairAllowed {
+		t.Fatalf("auto repair did not start opted-in app exactly once: count=%d action=%q app=%#v", collector.callCount, collector.called, collector.app)
 	}
 	if llmClient.reviewCalls != 1 || llmClient.reviewRequest.ActionID != "ask_admin_to_restart_container" || llmClient.reviewRequest.TargetID != "emby" || llmClient.reviewRequest.Via != "agent_auto_repair" {
 		t.Fatalf("auto repair review request was not recorded correctly: calls=%d req=%#v", llmClient.reviewCalls, llmClient.reviewRequest)
@@ -1634,8 +1658,8 @@ func TestGeneralUserRepairRequestCanBeApprovedByAdmin(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("approve repair request status = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	if collector.callCount != 1 || collector.called != docker.ActionRestart || collector.app.AppID != "emby" {
-		t.Fatalf("repair request did not restart Emby once: count=%d action=%q app=%#v", collector.callCount, collector.called, collector.app)
+	if collector.callCount != 1 || collector.called != docker.ActionStart || collector.app.AppID != "emby" {
+		t.Fatalf("repair request did not start Emby once: count=%d action=%q app=%#v", collector.callCount, collector.called, collector.app)
 	}
 	stored, err := app.deps.Store.RepairRequestByID(created.Request.ID)
 	if err != nil {

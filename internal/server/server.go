@@ -1499,6 +1499,12 @@ func (a *App) llmAgentPlanResponse(diagnosis llm.Diagnosis, snapshot models.Snap
 	redactor := a.deps.Redactor
 	a.settingsMu.RUnlock()
 	status, canExecute, allowReason := a.agentPlanExecutionState(action, target, snapshot, llmCfg, redactor)
+	planAction := action
+	if action.Executable && target.Resolved {
+		if app, ok := findAppByID(snapshot.Apps, target.ID); ok {
+			planAction = agentRepairActionForApp(action, app)
+		}
+	}
 	expiresAt := time.Now().UTC().Add(5 * time.Minute)
 	approvalToken := ""
 	if requiresApproval {
@@ -1516,11 +1522,19 @@ func (a *App) llmAgentPlanResponse(diagnosis llm.Diagnosis, snapshot models.Snap
 			ExpiresAt:           expiresAt.Unix(),
 		})
 	}
+	allowLabel := "Allow fix"
+	allowDescription := "Permit this single fix attempt."
+	if strings.TrimSpace(string(planAction.DockerAction)) != "" {
+		actionText := strings.ToLower(dockerActionDisplayName(planAction.DockerAction))
+		allowLabel = "Allow " + actionText
+		allowDescription = "Permit this single " + actionText + " attempt."
+	}
 	response := &llmAgentPlanView{
 		ID:                    agentApprovalPlanID,
-		Title:                 action.Title,
-		Summary:               action.Summary,
+		Title:                 planAction.Title,
+		Summary:               planAction.Summary,
 		RecommendedActionID:   action.ID,
+		DirectAction:          string(planAction.DockerAction),
 		ActionKnown:           known,
 		ApprovalToken:         approvalToken,
 		ApprovalExpiresAt:     expiresAt,
@@ -1538,8 +1552,8 @@ func (a *App) llmAgentPlanResponse(diagnosis llm.Diagnosis, snapshot models.Snap
 			},
 			{
 				ID:          "allow_once",
-				Label:       "Allow fix",
-				Description: "Permit this single fix attempt.",
+				Label:       allowLabel,
+				Description: allowDescription,
 				Enabled:     canExecute,
 				Reason:      allowReason,
 			},
@@ -1582,6 +1596,7 @@ func (a *App) maybeExecuteAgentAutoRepair(ctx context.Context, actor users.User,
 	if !ok {
 		return
 	}
+	executionAction := agentRepairActionForApp(action, app)
 	if currentStatusOrUnknown(app.CurrentStatus) == models.StatusOnline {
 		return
 	}
@@ -1592,14 +1607,14 @@ func (a *App) maybeExecuteAgentAutoRepair(ctx context.Context, actor users.User,
 		"target_id":               plan.Target.ID,
 		"app_id":                  app.AppID,
 		"container_name":          app.ContainerName,
-		"docker_action":           string(action.DockerAction),
+		"docker_action":           string(executionAction.DockerAction),
 		"can_execute":             canExecute,
 		"pre_execution_status":    status,
 		"pre_execution_reason":    reason,
 		"current_status":          string(currentStatusOrUnknown(app.CurrentStatus)),
 		"action_auto_review_used": true,
 	}
-	reviewDecision, reviewEnabled, err := a.reviewAgentAction(ctx, actor, snapshot, app, action, "agent_auto_repair")
+	reviewDecision, reviewEnabled, err := a.reviewAgentAction(ctx, actor, snapshot, app, executionAction, "agent_auto_repair")
 	if reviewEnabled {
 		details["auto_review_allow"] = reviewDecision.Allow
 		details["auto_review_confidence"] = reviewDecision.Confidence
@@ -1621,7 +1636,7 @@ func (a *App) maybeExecuteAgentAutoRepair(ctx context.Context, actor users.User,
 		return
 	}
 	a.deps.Audit.Record(actor.ID, "llm.agent_auto_repair.approved", auditDetailsCopy(details))
-	result, err := a.deps.Collectors.Docker.ControlContainer(ctx, app, action.DockerAction)
+	result, err := a.deps.Collectors.Docker.ControlContainer(ctx, app, executionAction.DockerAction)
 	if err != nil {
 		details["error"] = err.Error()
 		a.deps.Audit.Record(actor.ID, "llm.agent_auto_repair.execute_failed", auditDetailsCopy(details))
@@ -1631,8 +1646,8 @@ func (a *App) maybeExecuteAgentAutoRepair(ctx context.Context, actor users.User,
 	details["via"] = "agent_auto_repair"
 	a.invalidateSnapshot()
 	a.deps.Audit.Record(actor.ID, "llm.agent_auto_repair.executed", auditDetailsCopy(details))
-	a.deps.Audit.Record(actor.ID, "app.container.action", map[string]interface{}{"app_id": app.AppID, "action": string(action.DockerAction), "container_name": app.ContainerName, "via": "agent_auto_repair", "plan_id": plan.ID, "recommended_action_id": action.ID})
-	outcome := a.verifyAgentRepairOutcome(ctx, app, action, result)
+	a.deps.Audit.Record(actor.ID, "app.container.action", map[string]interface{}{"app_id": app.AppID, "action": string(executionAction.DockerAction), "container_name": app.ContainerName, "via": "agent_auto_repair", "plan_id": plan.ID, "recommended_action_id": action.ID})
+	outcome := a.verifyAgentRepairOutcome(ctx, app, executionAction, result)
 	verifyDetails := auditDetailsCopy(details)
 	verifyDetails["verified"] = outcome.Verified
 	verifyDetails["recovered"] = outcome.Recovered
@@ -1897,8 +1912,8 @@ var llmAgentActionRegistry = map[string]llmAgentActionDefinition{
 	},
 	"ask_admin_to_restart_container": {
 		ID:                "ask_admin_to_restart_container",
-		Title:             "Restart recommendation",
-		Summary:           "The model suggested restarting one app. NoobBoard can run one restart only after admin approval, safety review, and per-app opt-in.",
+		Title:             "App fix recommendation",
+		Summary:           "The model suggested repairing one app. NoobBoard can start a stopped app or restart a running app only after admin approval, safety review, and per-app opt-in.",
 		ApprovalEligible:  true,
 		RequiresAppTarget: true,
 		Executable:        true,
@@ -1956,6 +1971,22 @@ func userAppControlActionDefinition(action docker.ContainerAction) (llmAgentActi
 	}
 }
 
+func agentRepairActionForApp(action llmAgentActionDefinition, app models.AppStatus) llmAgentActionDefinition {
+	if action.ID != "ask_admin_to_restart_container" || !action.Executable {
+		return action
+	}
+	if app.DockerState == models.DockerExited {
+		action.Title = "Start recommendation"
+		action.Summary = "The target app is stopped. NoobBoard can start it after admin approval, safety review, and per-app opt-in."
+		action.DockerAction = docker.ActionStart
+		return action
+	}
+	action.Title = "Restart recommendation"
+	action.Summary = "The model suggested repairing one app. NoobBoard can restart it after admin approval, safety review, and per-app opt-in."
+	action.DockerAction = docker.ActionRestart
+	return action
+}
+
 func resolveAgentPlanTarget(action llmAgentActionDefinition, diagnosis llm.Diagnosis, snapshot models.Snapshot) llmAgentPlanTargetView {
 	target := llmAgentPlanTargetView{
 		Kind:   firstNonEmpty(strings.TrimSpace(diagnosis.RecommendedTarget.Kind), "none"),
@@ -1999,7 +2030,7 @@ func (a *App) agentPlanExecutionState(action llmAgentActionDefinition, target ll
 		return "target_unresolved", false, target.Reason
 	}
 	if !action.Executable {
-		return "approval_locked", false, "This recommendation is informational; NoobBoard only executes app restart repairs in this version."
+		return "approval_locked", false, "This recommendation is informational; NoobBoard only executes app start/restart repairs in this version."
 	}
 	if !cfg.AgentControlEnabled {
 		return "approval_locked", false, "Enable the action approval gate in LLM settings before a fix can run."
@@ -2012,7 +2043,7 @@ func (a *App) agentPlanExecutionState(action llmAgentActionDefinition, target ll
 		return "approval_locked", false, "This app is privacy-blacklisted, so app fixes are unavailable."
 	}
 	if !app.AgentRepairAllowed {
-		return "approval_locked", false, "Turn on admin/AI restart for this app in app settings before a fix can run."
+		return "approval_locked", false, "Turn on admin/AI app fix for this app in app settings before a fix can run."
 	}
 	if limit := a.agentRepairLimitState(app.AppID, time.Now().UTC(), false); !limit.Allowed {
 		return "approval_rate_limited", false, limit.Message
@@ -2322,7 +2353,8 @@ func (a *App) recordAgentApproval(w http.ResponseWriter, r *http.Request) {
 	}
 	details["app_id"] = app.AppID
 	details["container_name"] = app.ContainerName
-	details["docker_action"] = string(action.DockerAction)
+	executionAction := agentRepairActionForApp(action, app)
+	details["docker_action"] = string(executionAction.DockerAction)
 	if a.redactorSnapshot().IsBlacklistedApp(app) {
 		details["reason"] = "privacy_blacklisted"
 		a.deps.Audit.Record(mustUser(r).ID, "llm.agent_plan.refused", details)
@@ -2332,14 +2364,14 @@ func (a *App) recordAgentApproval(w http.ResponseWriter, r *http.Request) {
 	if !app.AgentRepairAllowed {
 		details["reason"] = "app_not_opted_in"
 		a.deps.Audit.Record(mustUser(r).ID, "llm.agent_plan.refused", details)
-		writeError(w, http.StatusConflict, errors.New("admin/AI restart is not enabled for this app"))
+		writeError(w, http.StatusConflict, errors.New("admin/AI app fix is not enabled for this app"))
 		return
 	}
 	if strings.TrimSpace(payload.Nonce) == "" {
 		writeError(w, http.StatusForbidden, errors.New("approval token is missing a replay nonce"))
 		return
 	}
-	reviewDecision, reviewEnabled, err := a.reviewAgentAction(r.Context(), mustUser(r), snapshot, app, action, "agent_plan")
+	reviewDecision, reviewEnabled, err := a.reviewAgentAction(r.Context(), mustUser(r), snapshot, app, executionAction, "agent_plan")
 	if reviewEnabled {
 		details["auto_review_allow"] = reviewDecision.Allow
 		details["auto_review_confidence"] = reviewDecision.Confidence
@@ -2368,7 +2400,7 @@ func (a *App) recordAgentApproval(w http.ResponseWriter, r *http.Request) {
 	}
 	details["can_execute"] = true
 	a.deps.Audit.Record(mustUser(r).ID, "llm.agent_plan.approved", auditDetailsCopy(details))
-	result, err := a.deps.Collectors.Docker.ControlContainer(r.Context(), app, action.DockerAction)
+	result, err := a.deps.Collectors.Docker.ControlContainer(r.Context(), app, executionAction.DockerAction)
 	if err != nil {
 		details["error"] = err.Error()
 		a.deps.Audit.Record(mustUser(r).ID, "llm.agent_plan.execute_failed", auditDetailsCopy(details))
@@ -2378,8 +2410,8 @@ func (a *App) recordAgentApproval(w http.ResponseWriter, r *http.Request) {
 	details["via"] = "agent_plan"
 	a.invalidateSnapshot()
 	a.deps.Audit.Record(mustUser(r).ID, "llm.agent_plan.executed", auditDetailsCopy(details))
-	a.deps.Audit.Record(mustUser(r).ID, "app.container.action", map[string]interface{}{"app_id": app.AppID, "action": string(action.DockerAction), "container_name": app.ContainerName, "via": "agent_plan", "plan_id": payload.PlanID, "recommended_action_id": action.ID})
-	outcome := a.verifyAgentRepairOutcome(r.Context(), app, action, result)
+	a.deps.Audit.Record(mustUser(r).ID, "app.container.action", map[string]interface{}{"app_id": app.AppID, "action": string(executionAction.DockerAction), "container_name": app.ContainerName, "via": "agent_plan", "plan_id": payload.PlanID, "recommended_action_id": action.ID})
+	outcome := a.verifyAgentRepairOutcome(r.Context(), app, executionAction, result)
 	verifyDetails := auditDetailsCopy(details)
 	verifyDetails["verified"] = outcome.Verified
 	verifyDetails["recovered"] = outcome.Recovered
@@ -3224,7 +3256,8 @@ func (a *App) approveRepairRequest(w http.ResponseWriter, r *http.Request, reque
 	}
 	details["app_id"] = app.AppID
 	details["container_name"] = app.ContainerName
-	details["docker_action"] = string(action.DockerAction)
+	executionAction := agentRepairActionForApp(action, app)
+	details["docker_action"] = string(executionAction.DockerAction)
 	if a.redactorSnapshot().IsBlacklistedApp(app) {
 		details["reason"] = "privacy_blacklisted"
 		a.deps.Audit.Record(mustUser(r).ID, "repair_request.refused", details)
@@ -3234,10 +3267,10 @@ func (a *App) approveRepairRequest(w http.ResponseWriter, r *http.Request, reque
 	if !app.AgentRepairAllowed {
 		details["reason"] = "app_not_opted_in"
 		a.deps.Audit.Record(mustUser(r).ID, "repair_request.refused", details)
-		writeError(w, http.StatusConflict, errors.New("admin/AI restart is not enabled for this app"))
+		writeError(w, http.StatusConflict, errors.New("admin/AI app fix is not enabled for this app"))
 		return
 	}
-	reviewDecision, reviewEnabled, err := a.reviewAgentAction(r.Context(), mustUser(r), snapshot, app, action, "repair_request")
+	reviewDecision, reviewEnabled, err := a.reviewAgentAction(r.Context(), mustUser(r), snapshot, app, executionAction, "repair_request")
 	if reviewEnabled {
 		details["auto_review_allow"] = reviewDecision.Allow
 		details["auto_review_confidence"] = reviewDecision.Confidence
@@ -3260,7 +3293,7 @@ func (a *App) approveRepairRequest(w http.ResponseWriter, r *http.Request, reque
 	}
 	details["can_execute"] = true
 	a.deps.Audit.Record(mustUser(r).ID, "repair_request.approved", auditDetailsCopy(details))
-	result, err := a.deps.Collectors.Docker.ControlContainer(r.Context(), app, action.DockerAction)
+	result, err := a.deps.Collectors.Docker.ControlContainer(r.Context(), app, executionAction.DockerAction)
 	if err != nil {
 		details["error"] = err.Error()
 		a.deps.Audit.Record(mustUser(r).ID, "repair_request.execute_failed", auditDetailsCopy(details))
@@ -3274,8 +3307,8 @@ func (a *App) approveRepairRequest(w http.ResponseWriter, r *http.Request, reque
 	details["via"] = "repair_request"
 	a.invalidateSnapshot()
 	a.deps.Audit.Record(mustUser(r).ID, "repair_request.executed", auditDetailsCopy(details))
-	a.deps.Audit.Record(mustUser(r).ID, "app.container.action", map[string]interface{}{"app_id": app.AppID, "action": string(action.DockerAction), "container_name": app.ContainerName, "via": "repair_request", "request_id": request.ID, "recommended_action_id": action.ID})
-	outcome := a.verifyAgentRepairOutcome(r.Context(), app, action, result)
+	a.deps.Audit.Record(mustUser(r).ID, "app.container.action", map[string]interface{}{"app_id": app.AppID, "action": string(executionAction.DockerAction), "container_name": app.ContainerName, "via": "repair_request", "request_id": request.ID, "recommended_action_id": action.ID})
+	outcome := a.verifyAgentRepairOutcome(r.Context(), app, executionAction, result)
 	repairOutcome := repairRequestOutcomeFromAgent(outcome)
 	resolved, err := a.resolveRepairRequest(r.Context(), request, models.RepairRequestExecuted, mustUser(r).ID, outcome.Message, repairOutcome)
 	if err != nil {
@@ -3977,7 +4010,7 @@ func llmAgentReadinessResponse(cfg config.LLMConfig, sess session) llmAgentReadi
 				Label:       "Approval popup",
 				Status:      agentProposeModeStatus(cfg.AgentControlEnabled),
 				Enabled:     cfg.AgentControlEnabled,
-				Description: "The model can propose one allowlisted app restart; NoobBoard executes it only after per-app opt-in and admin approval.",
+				Description: "The model can propose one allowlisted app fix; NoobBoard starts stopped apps or restarts non-stopped apps only after per-app opt-in and admin approval.",
 			},
 			{
 				ID:          "auto_review",
@@ -3991,7 +4024,7 @@ func llmAgentReadinessResponse(cfg config.LLMConfig, sess session) llmAgentReadi
 				Label:       "Auto action",
 				Status:      agentAutoActionStatus(cfg),
 				Enabled:     cfg.AgentControlEnabled && cfg.ActionAutoReviewEnabled,
-				Description: "When a chat auto-fix toggle is enabled, NoobBoard may run one reviewer-approved restart for a non-online opted-in app without opening the approval popup.",
+				Description: "When a chat auto-fix toggle is enabled, NoobBoard may run one reviewer-approved app start/restart for a non-online opted-in app without opening the approval popup.",
 			},
 		},
 		OpenCodeAutoReview: llmOpenCodeAutoReviewSummary{
@@ -4002,7 +4035,7 @@ func llmAgentReadinessResponse(cfg config.LLMConfig, sess session) llmAgentReadi
 			Reasoning:           strings.TrimSpace(cfg.ActionAutoReviewReasoning),
 			ReferenceCount:      len(cfg.ActionAutoReviewReferencePaths),
 			ModelFinding:        "The OpenCode reference uses a configurable reviewer model and prefers cross-model review when auto-selecting.",
-			DesignFinding:       "NoobBoard uses the same idea as a fail-closed action gate for approval and explicitly requested autonomous restart repair.",
+			DesignFinding:       "NoobBoard uses the same idea as a fail-closed action gate for approval and explicitly requested autonomous app repair.",
 		},
 	}
 }

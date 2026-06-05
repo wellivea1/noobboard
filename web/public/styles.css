@@ -876,6 +876,10 @@ label {
 }
 
 .detail-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  justify-self: end;
   color: var(--muted);
   font-size: 1rem;
   font-weight: 900;
@@ -1272,6 +1276,48 @@ label {
 .agent-approval-request small {
   color: var(--muted);
   line-height: 1.35;
+}
+
+.agent-approval-direct-action {
+  justify-self: start;
+  border: 1px solid var(--accent-strong);
+  border-radius: 999px;
+  padding: 3px 8px;
+  color: var(--accent-strong);
+  font-size: 0.74rem;
+  font-weight: 860;
+  text-transform: uppercase;
+}
+
+.agent-approval-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-approval-steps li {
+  min-height: 30px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  padding: 6px 8px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 780;
+  text-align: center;
+}
+
+.agent-approval-steps li.current,
+.agent-approval-dialog.is-running .agent-approval-steps li {
+  border-color: var(--accent-strong);
+  color: var(--text);
+  background: var(--surface-raised);
+}
+
+.agent-approval-dialog.is-running .agent-approval-options {
+  opacity: 0.64;
 }
 
 .agent-approval-options {
@@ -2030,6 +2076,21 @@ button.command.app-control:focus-visible {
   overflow: visible;
 }
 
+.status-dot-only.offline::before {
+  border-radius: 2px;
+}
+
+.status-dot-only.degraded::before,
+.status-dot-only.warning::before {
+  border-radius: 0;
+  clip-path: polygon(50% 0, 0 100%, 100% 100%);
+}
+
+.status-dot-only.unknown::before {
+  border: 2px solid currentColor;
+  background: transparent;
+}
+
 .status-dot-only .status-text {
   position: absolute;
   width: 1px;
@@ -2184,6 +2245,17 @@ button.command.app-control:focus-visible {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+}
+
+.settings-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 4px;
+  border-top: 1px solid var(--border-soft);
+  padding-top: 12px;
 }
 
 .audit-filter {
@@ -2378,6 +2450,7 @@ button.command.app-control:focus-visible {
 .settings-choice {
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr) auto;
+  grid-template-areas: "input copy action";
   align-items: center;
   gap: 10px;
   min-height: 52px;
@@ -2394,6 +2467,7 @@ button.command.app-control:focus-visible {
 }
 
 .settings-choice input[type="radio"] {
+  grid-area: input;
   width: 18px;
   min-width: 18px;
   min-height: 18px;
@@ -2405,6 +2479,10 @@ button.command.app-control:focus-visible {
   display: grid;
   gap: 2px;
   min-width: 0;
+}
+
+.settings-choice-copy {
+  grid-area: copy;
 }
 
 .settings-choice-copy strong,
@@ -2426,9 +2504,11 @@ button.command.app-control:focus-visible {
 }
 
 .settings-choice-action {
+  grid-area: action;
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 8px;
   min-width: 0;
 }
@@ -2522,9 +2602,9 @@ button.command.app-control:focus-visible {
 
 .settings-list-item button.command,
 .settings-kv-row button.command {
-  width: 38px;
-  min-width: 38px;
-  min-height: 38px;
+  width: 44px;
+  min-width: 44px;
+  min-height: 44px;
   padding: 0;
 }
 
@@ -2534,10 +2614,10 @@ button.command.app-control:focus-visible {
 
 .settings-app-image-row {
   grid-template-columns: 38px minmax(0, 0.9fr) minmax(220px, 1.1fr);
-  align-items: center;
+  align-items: start;
   min-height: 52px;
   border-bottom: 1px solid var(--border-soft);
-  padding: 6px 8px;
+  padding: 12px 8px;
 }
 
 .settings-app-controls {
@@ -2554,6 +2634,8 @@ button.command.app-control:focus-visible {
 }
 
 .settings-app-image-row .app-logo {
+  justify-self: center;
+  margin-top: 6px;
   width: 34px;
   height: 34px;
 }
@@ -2562,6 +2644,7 @@ button.command.app-control:focus-visible {
   display: grid;
   gap: 2px;
   min-width: 0;
+  margin-top: 6px;
 }
 
 .settings-row-main small {
@@ -2967,6 +3050,16 @@ button.command.app-control:focus-visible {
   justify-content: flex-end;
   gap: 8px;
   min-width: 0;
+}
+
+.role-general-config {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  padding: 12px;
+  background: var(--surface-alt);
 }
 
 .role-default-field {
@@ -3632,6 +3725,10 @@ body.compact-view .user-app-card p {
 }
 
 body.compact-view .detail-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  justify-self: end;
   font-size: 0.82rem;
 }
 
@@ -4387,10 +4484,12 @@ body.compact-view .assistant-toggle {
 
   .settings-choice {
     grid-template-columns: 20px minmax(0, 1fr);
+    grid-template-areas:
+      "input copy"
+      ". action";
   }
 
   .settings-choice-action {
-    grid-column: 1 / -1;
     justify-content: flex-start;
     flex-wrap: wrap;
   }
@@ -4696,7 +4795,7 @@ body.compact-view .user-view-tabs {
 }
 
 body.compact-view .user-view-tabs button {
-  min-height: 34px;
+  min-height: 44px;
   padding: 0 8px;
   border: 0;
   border-radius: 5px;
@@ -4717,7 +4816,7 @@ body.compact-view .user-view-tabs button:disabled {
 
 body.compact-view .user-primary-actions {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 7px;
 }
 
@@ -4735,7 +4834,7 @@ body.compact-view .user-primary-actions button.command {
 }
 
 body.compact-view #user-notify-admin,
-body.compact-view #user-chat-open {
+body.compact-view #user-ask-primary {
   width: 100%;
   min-width: 0;
   min-height: 44px;
@@ -4748,7 +4847,7 @@ body.compact-view .user-primary-actions button.command::before {
 }
 
 body.compact-view #user-notify-admin::before,
-body.compact-view #user-chat-open::before {
+body.compact-view #user-ask-primary::before {
   margin-right: 3px;
 }
 
@@ -4942,6 +5041,9 @@ body.compact-view .topbar {
 }
 
 body.compact-view #user-menu-toggle.nav-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 44px;
   min-width: 44px;
   min-height: 44px;
@@ -4949,6 +5051,8 @@ body.compact-view #user-menu-toggle.nav-toggle {
   border-radius: 6px;
   background: transparent;
   color: var(--text);
+  padding: 0;
+  font-size: 1.25rem;
 }
 
 body.compact-view #user-menu-toggle.nav-toggle:hover,
@@ -5042,6 +5146,37 @@ body.user-menu-open .user-drawer {
   overflow-x: hidden;
   padding: var(--space-4) var(--space-4) calc(var(--space-5) + var(--safe-bottom)) max(var(--space-4), var(--safe-left));
   -webkit-overflow-scrolling: touch;
+}
+
+.user-drawer-nav {
+  display: grid;
+  gap: 6px;
+  margin-bottom: var(--space-4);
+}
+
+.user-drawer-nav button {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  padding: 0 10px;
+  background: var(--surface-alt);
+  color: var(--text);
+  text-align: left;
+}
+
+.user-drawer-nav button.active {
+  border-color: var(--accent-strong);
+  background: var(--surface-raised);
+}
+
+.user-drawer-nav button span:first-child {
+  display: inline-grid;
+  place-items: center;
+  color: var(--muted);
 }
 
 .user-drawer-content,
