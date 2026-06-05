@@ -142,11 +142,10 @@ func infrastructureFacts(infra models.InfrastructureStatus, now time.Time) []mod
 	if unraidData && infra.NASReachable && !infra.UnraidAPIReachable {
 		add("unraid_api_unavailable", models.IncidentUnraidAPIUnavailable, models.SeverityMedium, "NAS responds but the Unraid API is unavailable.", []string{"NAS reachable", "Unraid API probe failed"}, false)
 	}
-	arrayStartNeeded := unraidData && models.UnraidStorageNeedsStart(infra)
-	if arrayStartNeeded {
-		add("array_stopped", models.IncidentArrayStopped, models.SeverityHigh, "Unraid server storage is not started.", []string{"Unraid API reports server storage state " + models.UnraidStorageDisplayState(infra)}, true)
+	if unraidData && infra.UnraidAPIReachable && infra.UnraidArrayState == "stopped" {
+		add("array_stopped", models.IncidentArrayStopped, models.SeverityHigh, "Unraid array is stopped.", []string{"Unraid API reports array stopped"}, true)
 	}
-	if unraidData && infra.UnraidAPIReachable && !arrayStartNeeded && !infra.UnraidArrayHealthy {
+	if unraidData && infra.UnraidAPIReachable && !infra.UnraidArrayHealthy {
 		add("array_degraded", models.IncidentStorageWarning, models.SeverityHigh, "Unraid array is degraded or warning.", []string{"Unraid API reports array health warning"}, true)
 	}
 	if unraidData && infra.UnraidAPIReachable && (infra.UnraidAlertCount > 0 || infra.UnraidWarningCount > 0) {
