@@ -2905,6 +2905,104 @@ func TestLoginFormDoesNotShipDefaultPassword(t *testing.T) {
 	}
 }
 
+func TestLoginStaySignedInPersistsAcrossRestart(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "remember-login")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+	cfg.Auth.RememberSessionTimeout = 30 * 24 * time.Hour
+
+	app := newTestApp(t, cfg)
+	router := app.Router()
+	cookie, csrf := loginAsRemember(t, router, "viewer", "change-me-now", true)
+	if cookie.Expires.Before(time.Now().UTC().Add(29 * 24 * time.Hour)) {
+		t.Fatalf("remembered cookie expires too soon: %s", cookie.Expires)
+	}
+	if csrf == "" {
+		t.Fatal("remembered login did not return a csrf token")
+	}
+	state, err := app.deps.Store.LoadState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.PersistentSessions) != 1 {
+		t.Fatalf("persistent session count = %d, want 1", len(state.PersistentSessions))
+	}
+	if strings.Contains(state.PersistentSessions[0].TokenHash, cookie.Value) {
+		t.Fatal("persistent session stored the raw cookie token")
+	}
+
+	reloaded := newTestApp(t, cfg)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
+	req.AddCookie(cookie)
+	reloaded.Router().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("remembered /api/auth/me status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if len(rec.Result().Cookies()) == 0 {
+		t.Fatal("remembered /api/auth/me did not refresh the session cookie")
+	}
+}
+
+func TestLoginStaySignedInInvalidatesWhenCredentialsChange(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "remember-login-credentials")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+
+	app := newTestApp(t, cfg)
+	router := app.Router()
+	viewerCookie, _ := loginAsRemember(t, router, "viewer", "change-me-now", true)
+	adminCookie, adminCSRF := loginAdmin(t, router)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/users", strings.NewReader(`{"username":"viewer","display_name":"Viewer","role":"general_user","password":"new-change-me-now"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", adminCSRF)
+	req.AddCookie(adminCookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/admin/users status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	reloaded := newTestApp(t, cfg)
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
+	req.AddCookie(viewerCookie)
+	reloaded.Router().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("old remembered session status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestLoginWithoutStaySignedInDoesNotPersistSession(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "normal-login")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+
+	app := newTestApp(t, cfg)
+	router := app.Router()
+	cookie, _ := loginAsRemember(t, router, "viewer", "change-me-now", false)
+	if cookie.Expires.After(time.Now().UTC().Add(13 * time.Hour)) {
+		t.Fatalf("normal cookie expires too late: %s", cookie.Expires)
+	}
+	state, err := app.deps.Store.LoadState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.PersistentSessions) != 0 {
+		t.Fatalf("normal login persistent session count = %d, want 0", len(state.PersistentSessions))
+	}
+
+	reloaded := newTestApp(t, cfg)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
+	req.AddCookie(cookie)
+	reloaded.Router().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("normal session after restart status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestSecurityHeadersAndAPINoStore(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Database.Path = serverCacheTestPath(t, "security-headers")
@@ -4180,8 +4278,13 @@ func loginAdmin(t *testing.T, router http.Handler) (*http.Cookie, string) {
 
 func loginAs(t *testing.T, router http.Handler, username, password string) (*http.Cookie, string) {
 	t.Helper()
+	return loginAsRemember(t, router, username, password, false)
+}
+
+func loginAsRemember(t *testing.T, router http.Handler, username, password string, remember bool) (*http.Cookie, string) {
+	t.Helper()
 	rec := httptest.NewRecorder()
-	body := fmt.Sprintf(`{"username":%q,"password":%q}`, username, password)
+	body := fmt.Sprintf(`{"username":%q,"password":%q,"remember_me":%t}`, username, password, remember)
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(rec, req)

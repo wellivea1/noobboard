@@ -624,6 +624,7 @@ async function login(event) {
       body: JSON.stringify({
         username: form.get("username"),
         password: form.get("password"),
+        remember_me: form.get("remember_me") === "on",
       }),
     });
     state.user = data.user;

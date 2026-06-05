@@ -566,6 +566,29 @@ label {
   font-weight: 700;
 }
 
+.login-remember {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  color: var(--text);
+  font-weight: 800;
+}
+
+.login-remember input {
+  width: 20px;
+  height: 20px;
+  margin: 1px 0 0;
+  accent-color: var(--accent);
+}
+
+.login-remember small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
 .topbar {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;

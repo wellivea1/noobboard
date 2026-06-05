@@ -34,6 +34,9 @@ func TestDefaultConfigValidation(t *testing.T) {
 	if cfg.Retention.MaxStatusEventAge != 90*24*time.Hour || cfg.Retention.MaxStatusEventsPerSubject != 500 {
 		t.Fatalf("default status history retention = %s/%d", cfg.Retention.MaxStatusEventAge, cfg.Retention.MaxStatusEventsPerSubject)
 	}
+	if cfg.Auth.SessionTimeout != 12*time.Hour || cfg.Auth.RememberSessionTimeout != 10*365*24*time.Hour {
+		t.Fatalf("default auth timeouts = %s/%s", cfg.Auth.SessionTimeout, cfg.Auth.RememberSessionTimeout)
+	}
 }
 
 func TestConfigValidationRejectsInvalidCompactPort(t *testing.T) {
@@ -47,6 +50,14 @@ func TestConfigValidationRejectsInvalidCompactPort(t *testing.T) {
 	cfg.Server.CompactPort = 70000
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected invalid compact port to fail validation")
+	}
+}
+
+func TestConfigValidationRejectsShortRememberSessionTimeout(t *testing.T) {
+	cfg := Defaults()
+	cfg.Auth.RememberSessionTimeout = cfg.Auth.SessionTimeout - time.Minute
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected remember session timeout shorter than normal session timeout to fail validation")
 	}
 }
 
@@ -165,6 +176,25 @@ app_catalog:
 	}
 	if !cfg.AppCatalog.RestartAllowedGeneralUser["emby"] || !cfg.AppCatalog.RestartAllowedGeneralUser["jellyfin"] {
 		t.Fatalf("general-user restart flags were not parsed: %#v", cfg.AppCatalog.RestartAllowedGeneralUser)
+	}
+}
+
+func TestLoadParsesAuthSessionTimeouts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+auth:
+  session_timeout: 2h
+  remember_session_timeout: 30d
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Auth.SessionTimeout != 2*time.Hour || cfg.Auth.RememberSessionTimeout != 30*24*time.Hour {
+		t.Fatalf("auth timeouts = %s/%s", cfg.Auth.SessionTimeout, cfg.Auth.RememberSessionTimeout)
 	}
 }
 
