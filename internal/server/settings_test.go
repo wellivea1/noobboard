@@ -1799,6 +1799,66 @@ func TestGeneralUserDirectControlsCanStartAndStopOptedInApp(t *testing.T) {
 	}
 }
 
+func TestGeneralUserDirectStartVerifiesAfterAppIDChanges(t *testing.T) {
+	oldDelay := agentRepairVerificationDelay
+	agentRepairVerificationDelay = 0
+	t.Cleanup(func() { agentRepairVerificationDelay = oldDelay })
+
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "general-user-direct-start-id-change")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+	cfg.AppCatalog.GeneralUserRestartsEnabled = true
+	cfg.AppCatalog.RestartAllowedGeneralUser = map[string]bool{"emby": true}
+
+	app := newTestApp(t, cfg)
+	collector := &recordingDockerCollector{
+		apps: []models.AppStatus{{
+			AppID:                 "emby",
+			DisplayName:           "Emby",
+			ContainerID:           "container:EmbyServer",
+			ContainerName:         "EmbyServer",
+			Category:              "docker",
+			DockerState:           models.DockerExited,
+			CurrentStatus:         models.StatusOffline,
+			VisibleToGeneralUsers: true,
+		}},
+		afterControlApps: []models.AppStatus{{
+			AppID:                 "embyserver",
+			DisplayName:           "Emby Server",
+			ContainerID:           "container:EmbyServer",
+			ContainerName:         "EmbyServer",
+			Category:              "docker",
+			DockerState:           models.DockerRunning,
+			CurrentStatus:         models.StatusOnline,
+			VisibleToGeneralUsers: true,
+		}},
+	}
+	app.deps.Collectors.Docker = collector
+
+	router := app.Router()
+	viewerCookie, viewerCSRF := loginAs(t, router, "viewer", "change-me-now")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/user/apps/emby/action", strings.NewReader(`{"action":"start","confirmed":true,"confirm_app_id":"emby"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", viewerCSRF)
+	req.AddCookie(viewerCookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("direct start status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Status  string                    `json:"status"`
+		Outcome llmAgentRepairOutcomeView `json:"outcome"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Status != "executed" || !response.Outcome.Verified || !response.Outcome.Recovered || response.Outcome.TargetID != "embyserver" || response.Outcome.Message != "Start: started - running." {
+		t.Fatalf("direct start outcome after app id changed = %#v", response)
+	}
+}
+
 func TestGeneralUserDirectRestartAutoReviewDenialBlocksDocker(t *testing.T) {
 	oldDelay := agentRepairVerificationDelay
 	agentRepairVerificationDelay = 0
@@ -3189,6 +3249,42 @@ func TestAppHistoryEndpointReturnsVisibleAppHistory(t *testing.T) {
 	}
 	if response.SubjectType != models.SubjectApp || response.SubjectID != "emby" || response.Current != models.StatusOffline || len(response.Events) != 1 {
 		t.Fatalf("unexpected app history response: %#v", response)
+	}
+}
+
+func TestAppByIDEndpointResolvesVisibleAppAliases(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "app-by-id-alias")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+	app := newTestApp(t, cfg)
+	app.deps.Collectors.Docker = &countingDockerCollector{apps: []models.AppStatus{{
+		AppID:                 "emby",
+		DisplayName:           "Emby",
+		ContainerName:         "EmbyServer",
+		ContainerID:           "container:EmbyServer",
+		VisibleToGeneralUsers: true,
+		DockerState:           models.DockerRunning,
+		DockerHealth:          models.HealthHealthy,
+		CurrentStatus:         models.StatusOnline,
+	}}}
+	if _, err := app.refreshSnapshot(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	router := app.Router()
+	cookie, _ := loginAs(t, router, "viewer", "change-me-now")
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/apps/EmbyServer", nil)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET app by alias status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var response models.AppStatus
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.AppID != "emby" || response.ContainerName != "" {
+		t.Fatalf("unexpected app alias response: %#v", response)
 	}
 }
 

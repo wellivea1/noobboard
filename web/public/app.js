@@ -1496,6 +1496,9 @@ async function runUserAppAction(app, action, button = null) {
       body: JSON.stringify({ action: actionName, confirmed: true, confirm_app_id: appID }),
     });
     if (result.outcome) {
+      if (state.userView === "app-detail" && result.outcome.target_id) {
+        state.userDetailID = result.outcome.target_id;
+      }
       showNotice(agentRepairOutcomeNotice(result.outcome), result.outcome.recovered ? "info" : "error");
     } else {
       showNotice(`${actionLabel} requested for ${label}.`);

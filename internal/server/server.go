@@ -768,16 +768,14 @@ func (a *App) apps(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) appByID(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/apps/")
-	snapshot, err := a.latestSnapshot(r.Context(), mustUser(r).Role)
+	app, ok, err := a.visibleAppByID(r.Context(), mustUser(r).Role, id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	for _, app := range snapshot.Apps {
-		if app.AppID == id {
-			writeJSON(w, http.StatusOK, app)
-			return
-		}
+	if ok {
+		writeJSON(w, http.StatusOK, app)
+		return
 	}
 	writeError(w, http.StatusNotFound, db.ErrNotFound)
 }
@@ -793,12 +791,11 @@ func (a *App) appHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	role := mustUser(r).Role
-	snapshot, err := a.latestSnapshot(r.Context(), role)
+	app, ok, err := a.visibleAppByID(r.Context(), role, id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	app, ok := findAppByID(snapshot.Apps, id)
 	if !ok {
 		writeError(w, http.StatusNotFound, db.ErrNotFound)
 		return
@@ -1143,15 +1140,79 @@ func parseHistoryWindow(value string) time.Duration {
 }
 
 func findAppByID(apps []models.AppStatus, id string) (models.AppStatus, bool) {
-	id = strings.ToLower(strings.TrimSpace(id))
+	id = normalizeAppIdentifier(id)
+	if id == "" {
+		return models.AppStatus{}, false
+	}
 	for _, app := range apps {
-		for _, candidate := range []string{app.AppID, app.ContainerName, app.DisplayName} {
-			if strings.ToLower(strings.TrimSpace(candidate)) == id {
+		for _, candidate := range appIdentityCandidates(app) {
+			if normalizeAppIdentifier(candidate) == id {
 				return app, true
 			}
 		}
 	}
 	return models.AppStatus{}, false
+}
+
+func (a *App) visibleAppByID(ctx context.Context, role models.Role, id string) (models.AppStatus, bool, error) {
+	visibleSnapshot, err := a.latestSnapshot(ctx, role)
+	if err != nil {
+		return models.AppStatus{}, false, err
+	}
+	if app, ok := findAppByID(visibleSnapshot.Apps, id); ok {
+		return app, true, nil
+	}
+	if role == models.RoleAdmin {
+		return models.AppStatus{}, false, nil
+	}
+	fullSnapshot, err := a.latestFullSnapshot(ctx)
+	if err != nil {
+		return models.AppStatus{}, false, err
+	}
+	fullApp, ok := findAppByID(fullSnapshot.Apps, id)
+	if !ok {
+		return models.AppStatus{}, false, nil
+	}
+	app, ok := findAppBySameIdentity(visibleSnapshot.Apps, fullApp)
+	return app, ok, nil
+}
+
+func findAppBySameIdentity(apps []models.AppStatus, target models.AppStatus) (models.AppStatus, bool) {
+	for _, candidate := range appIdentityCandidates(target) {
+		if app, ok := findAppByID(apps, candidate); ok {
+			return app, true
+		}
+	}
+	return models.AppStatus{}, false
+}
+
+func appIdentityCandidates(app models.AppStatus) []string {
+	candidates := []string{
+		app.AppID,
+		app.ContainerID,
+		app.ContainerName,
+		app.DisplayName,
+	}
+	seen := make(map[string]struct{}, len(candidates))
+	out := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		normalized := normalizeAppIdentifier(candidate)
+		if normalized == "" {
+			continue
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		out = append(out, candidate)
+	}
+	return out
+}
+
+func normalizeAppIdentifier(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.TrimPrefix(value, "/")
+	return strings.ToLower(value)
 }
 
 func visibleInfraHistorySubject(subject string, snapshot models.Snapshot, role models.Role) (models.CurrentStatus, string, bool) {
@@ -2259,7 +2320,7 @@ func (a *App) verifyRepairOutcome(ctx context.Context, before models.AppStatus, 
 		}
 		afterSnapshot = refreshed
 		afterSnapshotSet = true
-		afterApp, ok := findAppByID(afterSnapshot.Apps, before.AppID)
+		afterApp, ok := findAppBySameIdentity(afterSnapshot.Apps, before)
 		if !ok {
 			outcome.Verified = true
 			outcome.AfterStatus = models.StatusUnknown
@@ -2268,6 +2329,7 @@ func (a *App) verifyRepairOutcome(ctx context.Context, before models.AppStatus, 
 			break
 		}
 		outcome.Verified = true
+		outcome.TargetID = firstNonEmpty(afterApp.AppID, outcome.TargetID)
 		outcome.AfterStatus = currentStatusOrUnknown(afterApp.CurrentStatus)
 		outcome.TargetLabel = firstNonEmpty(afterApp.DisplayName, afterApp.ContainerName, afterApp.AppID, targetLabel)
 		outcome.Recovered = dockerActionReachedExpectedState(action.DockerAction, afterApp)
