@@ -220,6 +220,12 @@ func (c UnraidLiveClient) runContainerMutation(ctx context.Context, operation, f
 		} `json:"errors"`
 	}
 	if err := c.graphqlVariables(ctx, query, map[string]interface{}{"id": targetID}, &out); err != nil {
+		if graphQLMutationMayHaveBeenAccepted(err) {
+			return ControlResult{
+				ContainerID: targetID,
+				Status:      field + " sent; Unraid did not confirm before timeout",
+			}, nil
+		}
 		return ControlResult{}, err
 	}
 	if len(out.Errors) > 0 {
@@ -235,6 +241,16 @@ func (c UnraidLiveClient) runContainerMutation(ctx context.Context, operation, f
 		DockerState: dockerState(container.State),
 		Status:      container.Status,
 	}, nil
+}
+
+func graphQLMutationMayHaveBeenAccepted(err error) bool {
+	if err == nil {
+		return false
+	}
+	if strings.Contains(err.Error(), "Client.Timeout exceeded while awaiting headers") {
+		return true
+	}
+	return false
 }
 
 type dockerContainer struct {

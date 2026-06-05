@@ -1748,6 +1748,69 @@ func TestGeneralUserDirectRestartCanRestartDegradedOptedInApp(t *testing.T) {
 	}
 }
 
+func TestGeneralUserDirectRestartCanRestartOnlineOptedInApp(t *testing.T) {
+	oldDelay := agentRepairVerificationDelay
+	agentRepairVerificationDelay = 0
+	t.Cleanup(func() { agentRepairVerificationDelay = oldDelay })
+
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "general-user-direct-restart-online")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+	cfg.AppCatalog.GeneralUserRestartsEnabled = true
+	cfg.AppCatalog.RestartAllowedGeneralUser = map[string]bool{"emby": true}
+
+	app := newTestApp(t, cfg)
+	collector := &recordingDockerCollector{
+		apps: []models.AppStatus{{
+			AppID:                 "emby",
+			DisplayName:           "Emby",
+			ContainerID:           "container:Emby",
+			ContainerName:         "Emby",
+			Category:              "docker",
+			DockerState:           models.DockerRunning,
+			CurrentStatus:         models.StatusOnline,
+			VisibleToGeneralUsers: true,
+		}},
+		afterControlApps: []models.AppStatus{{
+			AppID:                 "emby",
+			DisplayName:           "Emby",
+			ContainerID:           "container:Emby",
+			ContainerName:         "Emby",
+			Category:              "docker",
+			DockerState:           models.DockerRunning,
+			CurrentStatus:         models.StatusOnline,
+			VisibleToGeneralUsers: true,
+		}},
+	}
+	app.deps.Collectors.Docker = collector
+
+	router := app.Router()
+	viewerCookie, viewerCSRF := loginAs(t, router, "viewer", "change-me-now")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/user/apps/emby/action", strings.NewReader(`{"action":"restart","confirmed":true,"confirm_app_id":"emby"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", viewerCSRF)
+	req.AddCookie(viewerCookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("direct online restart status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Status  string                    `json:"status"`
+		Outcome llmAgentRepairOutcomeView `json:"outcome"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Status != "executed" || !response.Outcome.Verified || !response.Outcome.Recovered {
+		t.Fatalf("direct online restart outcome = %#v", response)
+	}
+	if collector.callCount != 1 || collector.called != docker.ActionRestart || collector.app.AppID != "emby" {
+		t.Fatalf("direct online restart did not restart opted-in app once: count=%d action=%q app=%#v", collector.callCount, collector.called, collector.app)
+	}
+}
+
 func TestGeneralUserDirectControlsCanStartAndStopOptedInApp(t *testing.T) {
 	oldDelay := agentRepairVerificationDelay
 	agentRepairVerificationDelay = 0
@@ -2096,26 +2159,6 @@ func TestGeneralUserDirectRestartRefusesUnsafeTargets(t *testing.T) {
 				Category:              "docker",
 				DockerState:           models.DockerExited,
 				CurrentStatus:         models.StatusOffline,
-				VisibleToGeneralUsers: true,
-			},
-			wantStatus:  http.StatusConflict,
-			wantNoCalls: true,
-		},
-		{
-			name: "already online",
-			cfg: func(cfg config.Config) config.Config {
-				cfg.AppCatalog.GeneralUserRestartsEnabled = true
-				cfg.AppCatalog.RestartAllowedGeneralUser = map[string]bool{"emby": true}
-				return cfg
-			},
-			app: models.AppStatus{
-				AppID:                 "emby",
-				DisplayName:           "Emby",
-				ContainerID:           "container:Emby",
-				ContainerName:         "Emby",
-				Category:              "docker",
-				DockerState:           models.DockerRunning,
-				CurrentStatus:         models.StatusOnline,
 				VisibleToGeneralUsers: true,
 			},
 			wantStatus:  http.StatusConflict,
