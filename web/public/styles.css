@@ -208,9 +208,8 @@ button.command.is-refreshing[data-glyph]::before {
     animation: none;
   }
 
-  .synapse-node,
-  .synapse-line::after {
-    animation: none;
+  .spark-cursor {
+    animation: none !important;
   }
 }
 
@@ -3512,94 +3511,93 @@ button.command.app-control:focus-visible {
   margin-bottom: 6px;
 }
 
-.thinking-container {
-  display: inline-flex;
-  align-items: center;
-  gap: 12px;
-  padding: 4px 0;
+.thinking-bubble {
+  display: inline-grid;
+  gap: 8px;
+  width: min(100%, 230px);
+  border: 1px solid var(--border-soft);
+  border-radius: 8px 8px 8px 2px;
+  padding: 11px 13px;
+  background: var(--surface);
 }
 
-.synapse-network {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 48px;
+.skeleton-spark-container {
+  position: relative;
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  overflow: hidden;
+  padding: 3px 0;
 }
 
-.synapse-node {
-  width: 8px;
+.skeleton-row {
   height: 8px;
   border-radius: 999px;
-  background: var(--border);
-  animation: synapse-glow 1.6s infinite ease-in-out;
+  background: color-mix(in srgb, var(--border-soft) 74%, var(--surface-alt));
 }
 
-.synapse-line {
-  position: relative;
-  width: 14px;
-  height: 2px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: var(--border-soft);
+.skeleton-row.r1 {
+  width: 86%;
 }
 
-.synapse-line::after {
-  content: "";
+.skeleton-row.r2 {
+  width: 54%;
+}
+
+.spark-cursor {
   position: absolute;
-  inset: 0;
-  left: -100%;
+  top: 3px;
+  left: 0;
+  width: 18px;
+  height: 8px;
+  border-radius: 999px;
   background: linear-gradient(90deg, transparent, var(--accent-strong), transparent);
-  animation: synapse-line-pulse 1.6s infinite linear;
-}
-
-.synapse-node.n1 {
-  animation-delay: 0s;
-}
-
-.synapse-line.l1::after {
-  animation-delay: 0.2s;
-}
-
-.synapse-node.n2 {
-  animation-delay: 0.4s;
-}
-
-.synapse-line.l2::after {
-  animation-delay: 0.6s;
-}
-
-.synapse-node.n3 {
-  animation-delay: 0.8s;
+  box-shadow: 0 0 11px color-mix(in srgb, var(--accent-strong) 62%, transparent);
+  opacity: 0.86;
+  animation: chat-spark-travel 2.1s infinite ease-in-out;
 }
 
 .thinking-label {
   color: var(--muted);
-  font-size: 0.86rem;
-  font-weight: 700;
+  font-size: 0.82rem;
+  font-weight: 720;
   letter-spacing: 0;
+  line-height: 1.24;
 }
 
-@keyframes synapse-glow {
-  0%,
-  100% {
-    background: var(--border);
-    box-shadow: none;
-  }
-
-  30% {
-    background: var(--accent-strong);
-    box-shadow: 0 0 10px var(--accent-strong);
-  }
-}
-
-@keyframes synapse-line-pulse {
+@keyframes chat-spark-travel {
   0% {
-    left: -100%;
+    left: 0;
+    top: 3px;
+    opacity: 0;
   }
 
-  50%,
+  8% {
+    opacity: 0.86;
+  }
+
+  46% {
+    left: calc(86% - 18px);
+    top: 3px;
+    opacity: 0.86;
+  }
+
+  52% {
+    left: 0;
+    top: 19px;
+    opacity: 0.86;
+  }
+
+  90% {
+    left: calc(54% - 18px);
+    top: 19px;
+    opacity: 0.86;
+  }
+
   100% {
-    left: 100%;
+    left: calc(54% - 18px);
+    top: 19px;
+    opacity: 0;
   }
 }
 
