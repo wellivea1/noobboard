@@ -820,6 +820,7 @@ function renderSourcePill(snapshot) {
 }
 
 function renderSnapshot(snapshot) {
+  syncAutoRepairControls(snapshot);
   syncAssistant(snapshot);
   if (!hasAdminSurface()) {
     renderUserHome(snapshot);
@@ -844,6 +845,7 @@ function syncAssistant(snapshot) {
   if (!canChat) $("assistant-panel").hidden = true;
   $("assistant-input").disabled = !canChat || state.chatBusy.assistant;
   $("assistant-send").disabled = !canChat || state.chatBusy.assistant;
+  syncAutoRepairControls(snapshot);
   if (!canChat) {
     setChatNotice($("assistant-output"), available ? "Status chat is disabled for this role." : diagnosticsUnavailableMessage(snapshot));
   } else if ($("assistant-output").classList.contains("chat-unavailable")) {
@@ -871,6 +873,7 @@ function renderUserHome(snapshot) {
   $("user-chat-input").placeholder = "Ask what's wrong or whether an app is working.";
   $("user-chat-input").disabled = !canChat || state.chatBusy.user;
   $("user-chat-send").disabled = !canChat || state.chatBusy.user;
+  syncAutoRepairControls(snapshot);
   if (!canChat) {
     if (!$("user-chat-input").value.trim()) $("user-chat-input").value = "What is wrong right now?";
     setChatNotice($("user-chat-output"), "Status chat is not available.");
@@ -904,6 +907,40 @@ function renderUserHome(snapshot) {
     loadInfraDetail(state.userDetailSubject, { focus: false });
   }
   if (isUserMenuOpen()) renderUserDrawer();
+}
+
+function syncAutoRepairControls(snapshot = state.snapshot) {
+  const info = snapshot?.repair_automation || {};
+  const available = diagnosticsAvailable(snapshot || {});
+  const reason = info.reason || "Auto-fix is disabled in admin settings.";
+  const adminReady = available && !!info.admin_auto_repair_available;
+  const userReady = available && canUseCompactChat(snapshot || {}) && !!info.user_auto_repair_available;
+  syncAutoRepairControl("diagnostic-auto-repair", adminReady, reason, "diagnostic");
+  syncAutoRepairControl("assistant-auto-repair", hasAdminSurface() ? adminReady : userReady, reason, "assistant");
+  syncAutoRepairControl("user-chat-auto-repair", userReady, reason, "user");
+}
+
+function syncAutoRepairControl(id, available, reason, busyKey) {
+  const input = $(id);
+  if (!input) return;
+  const wrap = $(`${id}-wrap`) || input.closest(".chat-auto-repair");
+  const busy = !!(busyKey && state.chatBusy[busyKey]);
+  const disabled = !available || busy;
+  input.disabled = disabled;
+  input.setAttribute("aria-disabled", String(disabled));
+  if (!available) input.checked = false;
+  const title = available
+    ? "Allow NoobBoard to run one eligible, reviewed app fix for this diagnosis."
+    : reason;
+  input.title = title;
+  if (wrap) {
+    wrap.classList.toggle("is-disabled", disabled);
+    wrap.title = title;
+  }
+}
+
+function autoRepairRequested(input) {
+  return !!(input && !input.disabled && input.checked);
 }
 
 function renderUserDrawer() {
@@ -2582,7 +2619,7 @@ async function diagnose() {
   await runDiagnosis(
     $("diagnostic-question").value || "What is wrong right now?",
     $("diagnostic-output"),
-    { input: $("diagnostic-question"), button: $("diagnose"), busyKey: "diagnostic" },
+    { input: $("diagnostic-question"), button: $("diagnose"), autoRepairInput: $("diagnostic-auto-repair"), busyKey: "diagnostic" },
   );
 }
 
@@ -2590,7 +2627,7 @@ async function runUserChat() {
   await runDiagnosis(
     $("user-chat-input").value || "What is wrong right now?",
     $("user-chat-output"),
-    { input: $("user-chat-input"), button: $("user-chat-send"), busyKey: "user" },
+    { input: $("user-chat-input"), button: $("user-chat-send"), autoRepairInput: $("user-chat-auto-repair"), busyKey: "user" },
   );
 }
 
@@ -2606,7 +2643,7 @@ async function runAssistantChat() {
   await runDiagnosis(
     $("assistant-input").value || "What is wrong right now?",
     $("assistant-output"),
-    { input: $("assistant-input"), button: $("assistant-send"), busyKey: "assistant" },
+    { input: $("assistant-input"), button: $("assistant-send"), autoRepairInput: $("assistant-auto-repair"), busyKey: "assistant" },
   );
   $("assistant-panel").hidden = false;
 }
@@ -2615,14 +2652,16 @@ async function runDiagnosis(question, output, options = {}) {
   const adminSurface = hasAdminSurface();
   const path = adminSurface ? "/api/admin/diagnose" : "/api/user/diagnose";
   const questionText = String(question || "What is wrong right now?").trim() || "What is wrong right now?";
+  const wantsAutoRepair = autoRepairRequested(options.autoRepairInput);
   if (options.busyKey && state.chatBusy[options.busyKey]) return;
   if (options.busyKey) state.chatBusy[options.busyKey] = true;
   setChatPending(output, "Checking status...");
   setChatControlsBusy(options.input, options.button, true);
+  syncAutoRepairControls(state.snapshot);
   try {
     const result = await api(path, {
       method: "POST",
-      body: JSON.stringify({ question: questionText }),
+      body: JSON.stringify({ question: questionText, auto_repair: wantsAutoRepair }),
     });
     output.classList.remove("chat-empty", "muted", "chat-pending", "chat-error");
     output.classList.add("chat-result");
@@ -2659,6 +2698,7 @@ async function runDiagnosis(question, output, options = {}) {
   } finally {
     if (options.busyKey) state.chatBusy[options.busyKey] = false;
     setChatControlsBusy(options.input, options.button, false);
+    syncAutoRepairControls(state.snapshot);
   }
 }
 
@@ -2696,8 +2736,6 @@ function agentPlanStatusText(plan) {
   switch (plan?.status) {
     case "approval_ready":
       return "Ready";
-    case "approval_needs_arm":
-      return "Enable session";
     case "approval_rate_limited":
       return "Limited";
     case "auto_review_refused":
@@ -2713,7 +2751,7 @@ function agentPlanStatusText(plan) {
 
 function agentPlanStatusTone(plan) {
   if (plan?.auto_executed && plan?.outcome?.recovered) return "state-ok";
-  if (plan?.auto_executed || plan?.can_execute || plan?.status === "approval_needs_arm") return "state-warn";
+  if (plan?.auto_executed || plan?.can_execute) return "state-warn";
   if (plan?.status === "auto_review_refused" || plan?.status === "auto_execute_failed") return "state-bad";
   return "state-muted";
 }
@@ -2864,7 +2902,7 @@ function normalizeAgentApprovalOptions(plan) {
       description: "Permit this single fix attempt.",
       enabled: !!plan?.can_execute,
       selected: false,
-      reason: plan?.can_execute ? "" : "Enable fixes for this session and turn on admin/AI restart for the target app first.",
+      reason: plan?.can_execute ? "" : "Turn on admin-approved app fixes and per-app admin/AI restart first.",
     },
   ];
 }
@@ -2906,7 +2944,7 @@ function openAgentApprovalDialog(plan) {
     class: "openai-auth-status",
     "aria-live": "polite",
     "data-tone": plan.can_execute ? "info" : "bad",
-    text: plan.can_execute ? "Approval will run one restart for the selected app." : "Automatic fixes require per-app opt-in and this admin session to be enabled for fixes.",
+    text: plan.can_execute ? "Approval will run one restart for the selected app." : "Fixes require admin app fixes and per-app opt-in.",
   });
   const updateSelection = () => {
     const selectedOption = approvalOptions.find((option) => option.id === selectedChoice);
@@ -4090,8 +4128,6 @@ function renderLLMSettings(item, data) {
   const anthropicModel = settingSelectField("Anthropic model", knownModelValue(ANTHROPIC_MODEL_OPTIONS, settings.anthropic_model, "claude-sonnet-4-5"), ANTHROPIC_MODEL_OPTIONS);
   const timeout = durationSecondsField("Timeout", settings.timeout || 45000000000);
   const agentControlEnabled = settingToggle("Allow admin-approved app fixes", !!settings.agent_control_enabled);
-  const agentAutoRepairEnabled = settingToggle("Allow automatic admin restart after diagnosis", !!settings.agent_auto_repair_enabled);
-  const agentArmDuration = durationSecondsField("Temporary fix access duration", settings.agent_arm_duration || settings.agent_readiness?.agent_arm_duration || 600000000000);
   const actionAutoReviewEnabled = settingToggle("Require reviewer before fixes", !!settings.action_auto_review_enabled);
   const actionAutoReviewModel = settingSelectField("Reviewer model", settings.action_auto_review_model || "same", actionReviewModelOptions(settings));
   const actionAutoReviewReasoning = settingSelectField("Reviewer reasoning", settings.action_auto_review_reasoning || "", [
@@ -4168,7 +4204,7 @@ function renderLLMSettings(item, data) {
     openAISection,
     anthropicSection,
     renderLLMAgentReadiness(settings.agent_readiness || {}, {
-      controls: [agentControlEnabled.element, agentAutoRepairEnabled.element, agentArmDuration.element],
+      controls: [agentControlEnabled.element],
     }),
     node("section", { class: "settings-subsection" },
       node("h4", { text: "Safety reviewer" }),
@@ -4196,8 +4232,7 @@ function renderLLMSettings(item, data) {
       anthropic_model: anthropicModel.input.value.trim(),
       timeout: secondsToDuration(timeout.input.value),
       agent_control_enabled: agentControlEnabled.input.checked,
-      agent_auto_repair_enabled: agentAutoRepairEnabled.input.checked,
-      agent_arm_duration: secondsToDuration(agentArmDuration.input.value),
+      agent_auto_repair_enabled: actionAutoReviewEnabled.input.checked,
       action_auto_review_enabled: actionAutoReviewEnabled.input.checked,
       action_auto_review_model: actionAutoReviewModel.input.value,
       action_auto_review_reasoning: actionAutoReviewReasoning.input.value,
@@ -4258,17 +4293,6 @@ function renderLLMAgentReadiness(readiness, options = {}) {
   const autoReview = modes.find((mode) => mode.id === "auto_review") || {};
   const autoAction = modes.find((mode) => mode.id === "auto_action") || {};
   const reference = readiness.opencode_auto_review || {};
-  const controlEnabled = !!readiness.agent_control_enabled;
-  const armed = !!readiness.agent_armed;
-  const armSeconds = durationToSeconds(readiness.agent_arm_duration) || 600;
-  const armAction = node("button", {
-    type: "button",
-    class: `command ${armed ? "ghost" : "primary"}`,
-    "data-glyph": armed ? "x" : "v",
-    disabled: !controlEnabled,
-    onclick: () => setAgentArm(!armed, armSeconds, armAction),
-    text: armed ? "Disable fixes" : "Enable fixes",
-  });
   return node("section", { class: "settings-subsection agent-readiness" },
     node("div", { class: "settings-section-title-row" },
       node("h4", { text: "Admin app fixes" }),
@@ -4277,10 +4301,9 @@ function renderLLMAgentReadiness(readiness, options = {}) {
     options.controls?.length ? node("div", { class: "settings-field-grid" }, options.controls) : null,
     node("div", { class: "settings-status-list" },
       settingsStatusRow("Read-only live tools", activeText, readiness.admin_tools_enabled ? "available" : "locked", readOnlyNames || "No read-only tools are registered."),
-      settingsStatusRow("Temporary fix access", agentArmStatusText(readiness), armed ? "armed" : controlEnabled ? "planned" : "locked", agentArmDetailText(readiness), armAction),
-      settingsStatusRow("Approval popup", readiness.agent_control_enabled ? "Ready after temporary access" : "Off", readiness.agent_control_enabled ? "planned" : "locked", readiness.agent_control_enabled ? agentRepairLimitDetail(readiness) : "Turn on admin-approved app fixes before chat can ask to change an app."),
+      settingsStatusRow("Approval popup", readiness.agent_control_enabled ? "Ready" : "Off", readiness.agent_control_enabled ? "available" : "locked", readiness.agent_control_enabled ? agentRepairLimitDetail(readiness) : "Turn on admin-approved app fixes before chat can ask to change an app."),
       settingsStatusRow("Safety reviewer", autoReview.enabled ? "Available" : agentModeStatusText(autoReview.status), autoReview.status || "locked", autoReviewDetail(reference)),
-      settingsStatusRow("Automatic admin restart", agentModeStatusText(autoAction.status), autoAction.status || "locked", autoActionDetail(autoAction, readiness)),
+      settingsStatusRow("Chat auto-fix", agentModeStatusText(autoAction.status), autoAction.status || "locked", autoActionDetail(autoAction, readiness)),
     ),
     node("p", { class: "muted agent-reference-note", text: reference.design_finding || "Future repair actions require schema validation, audit policy, and explicit approval." }),
   );
@@ -4291,8 +4314,8 @@ function autoActionDetail(autoAction, readiness) {
   if (!readiness?.agent_control_enabled) return "Turn on admin-approved fixes first.";
   const status = String(autoAction.status || "").toLowerCase();
   if (status === "review_required") return "Requires the safety reviewer so a separate model can veto the restart.";
-  if (status === "armed") return "Temporary access is enabled. Only non-online opted-in apps can be restarted automatically.";
-  return "Enable temporary fix access before diagnosis can run an automatic restart.";
+  if (status === "available") return "Available only when a chat auto-fix toggle is turned on for that question. Only non-online opted-in apps can be restarted automatically.";
+  return "Turn on the safety reviewer before diagnosis can run an automatic restart.";
 }
 
 function autoReviewDetail(reference) {
@@ -4311,23 +4334,6 @@ function agentRepairLimitDetail(readiness) {
   return `Only opted-in apps can be changed. Limit: 1 per app every ${formatSeconds(cooldownSeconds)}, ${max} total per ${formatSeconds(windowSeconds)}.`;
 }
 
-function agentArmStatusText(readiness) {
-  if (readiness.agent_armed) return "Enabled";
-  return readiness.agent_control_enabled ? "Not enabled" : "Off";
-}
-
-function agentArmDetailText(readiness) {
-  if (!readiness.agent_control_enabled) return "Turn on admin-approved app fixes and save before temporary access can be enabled.";
-  if (readiness.agent_armed && readiness.agent_armed_until) return `This admin session can run app fixes until ${timeOnly(readiness.agent_armed_until)}.`;
-  return "Enable only when you are ready to approve or supervise a specific app fix. It expires automatically.";
-}
-
-function timeOnly(value) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "the configured expiry";
-  return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-}
-
 function formatSeconds(seconds) {
   const value = Number(seconds || 0);
   if (!Number.isFinite(value) || value <= 0) return "configured window";
@@ -4336,29 +4342,6 @@ function formatSeconds(seconds) {
   if (minutes < 60) return `${Math.round(minutes)}m`;
   const hours = minutes / 60;
   return `${Math.round(hours)}h`;
-}
-
-async function setAgentArm(armed, durationSeconds, button) {
-  const originalText = button?.textContent || "";
-  if (button) {
-    button.disabled = true;
-    button.textContent = armed ? "Enabling fixes" : "Disabling fixes";
-  }
-  try {
-    await api("/api/admin/agent/arm", {
-      method: "POST",
-      body: JSON.stringify({ armed: !!armed, duration_seconds: durationSeconds || 0 }),
-    });
-    showNotice(armed ? "Temporary app fix access enabled." : "Temporary app fix access disabled.");
-    await loadSettings();
-  } catch (error) {
-    showNotice(error.message, "error");
-  } finally {
-    if (button?.isConnected) {
-      button.disabled = false;
-      button.textContent = originalText;
-    }
-  }
 }
 
 function settingsStatusRow(label, value, status, detail, action = null) {

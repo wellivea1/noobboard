@@ -378,8 +378,8 @@ func TestAdminDiagnoseKeepsManualRecommendationInformational(t *testing.T) {
 			Evidence:            []string{"App is offline."},
 			GeneralUserSummary:  "Emby needs an admin check.",
 			AdminMessage:        "Check Emby logs before taking action.",
-			RecommendedActionID: "ask_admin_to_check_logs",
-			RecommendedTarget:   llm.ActionTarget{Kind: "app", IDOrName: "emby"},
+			RecommendedActionID: "ask_admin_to_check",
+			RecommendedTarget:   llm.ActionTarget{Kind: "manual", IDOrName: ""},
 			ShouldNotifyAdmin:   true,
 		},
 	}
@@ -404,7 +404,7 @@ func TestAdminDiagnoseKeepsManualRecommendationInformational(t *testing.T) {
 	if response.AgentPlan == nil {
 		t.Fatalf("agent_plan missing from response: %s", rec.Body.String())
 	}
-	if !response.AgentPlan.ActionKnown || response.AgentPlan.RecommendedActionID != "ask_admin_to_check_logs" {
+	if !response.AgentPlan.ActionKnown || response.AgentPlan.RecommendedActionID != "ask_admin_to_check" {
 		t.Fatalf("manual recommendation was not preserved as a known action: %#v", response.AgentPlan)
 	}
 	if response.AgentPlan.RequiresAdminApproval || response.AgentPlan.ApprovalToken != "" || response.AgentPlan.CanExecute {
@@ -487,34 +487,7 @@ func TestAgentApprovalEndpointAuditsAndFailsClosed(t *testing.T) {
 	req.AddCookie(cookie)
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusConflict {
-		t.Fatalf("unarmed allow approval status = %d, body = %s", rec.Code, rec.Body.String())
-	}
-	tail, err = app.deps.Store.AuditTail(5)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(tail) == 0 || tail[len(tail)-1].Action != "llm.agent_plan.not_armed" {
-		t.Fatalf("unarmed approval was not audited: %#v", tail)
-	}
-
-	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/api/admin/agent/arm", strings.NewReader(`{"armed":true,"duration_seconds":60}`))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-CSRF-Token", csrf)
-	req.AddCookie(cookie)
-	router.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("arm agent status = %d, body = %s", rec.Code, rec.Body.String())
-	}
-
-	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/api/admin/agent/approval", strings.NewReader(fmt.Sprintf(`{"approval_token":%q,"choice":"allow_once"}`, approvalToken)))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-CSRF-Token", csrf)
-	req.AddCookie(cookie)
-	router.ServeHTTP(rec, req)
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("armed allow approval status = %d, body = %s", rec.Code, rec.Body.String())
+		t.Fatalf("unopted allow approval status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 	tail, err = app.deps.Store.AuditTail(5)
 	if err != nil {
@@ -933,7 +906,7 @@ func TestAgentApprovalAutoReviewDenialBlocksDocker(t *testing.T) {
 	}
 }
 
-func TestAgentAutoRepairExecutesOptedInRestartWhenArmedAndReviewed(t *testing.T) {
+func TestAgentAutoRepairExecutesOptedInRestartWhenRequestedAndReviewed(t *testing.T) {
 	oldDelay := agentRepairVerificationDelay
 	agentRepairVerificationDelay = 0
 	t.Cleanup(func() { agentRepairVerificationDelay = oldDelay })
@@ -1002,17 +975,27 @@ func TestAgentAutoRepairExecutesOptedInRestartWhenArmedAndReviewed(t *testing.T)
 	router := app.Router()
 	cookie, csrf := loginAdmin(t, router)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/admin/agent/arm", strings.NewReader(`{"armed":true,"duration_seconds":60}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/diagnose", strings.NewReader(`{"question":"what is wrong with Emby?"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-CSRF-Token", csrf)
 	req.AddCookie(cookie)
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("arm agent status = %d, body = %s", rec.Code, rec.Body.String())
+		t.Fatalf("diagnose without auto-repair status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var manual diagnosisResponse
+	if err := json.NewDecoder(rec.Body).Decode(&manual); err != nil {
+		t.Fatal(err)
+	}
+	if manual.AgentPlan == nil || manual.AgentPlan.AutoExecuted || !manual.AgentPlan.RequiresAdminApproval || !manual.AgentPlan.CanExecute {
+		t.Fatalf("diagnose without auto_repair did not leave approval plan manual: %#v", manual.AgentPlan)
+	}
+	if collector.callCount != 0 || llmClient.reviewCalls != 0 {
+		t.Fatalf("diagnose without auto_repair executed repair or review: docker=%d reviews=%d", collector.callCount, llmClient.reviewCalls)
 	}
 
 	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/api/admin/diagnose", strings.NewReader(`{"question":"what is wrong with Emby?"}`))
+	req = httptest.NewRequest(http.MethodPost, "/api/admin/diagnose", strings.NewReader(`{"question":"what is wrong with Emby?","auto_repair":true}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-CSRF-Token", csrf)
 	req.AddCookie(cookie)
@@ -1123,17 +1106,7 @@ func TestAgentAutoRepairReviewDenialBlocksDockerDuringDiagnosis(t *testing.T) {
 	router := app.Router()
 	cookie, csrf := loginAdmin(t, router)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/admin/agent/arm", strings.NewReader(`{"armed":true,"duration_seconds":60}`))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-CSRF-Token", csrf)
-	req.AddCookie(cookie)
-	router.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("arm agent status = %d, body = %s", rec.Code, rec.Body.String())
-	}
-
-	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/api/admin/diagnose", strings.NewReader(`{"question":"what is wrong with Emby?"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/diagnose", strings.NewReader(`{"question":"what is wrong with Emby?","auto_repair":true}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-CSRF-Token", csrf)
 	req.AddCookie(cookie)
@@ -1481,7 +1454,7 @@ func TestGeneralUserDiagnoseAutoControlsOptedInAppWhenEnabled(t *testing.T) {
 			cookie, csrf := loginAs(t, router, "viewer", "change-me-now")
 
 			rec := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodPost, "/api/user/diagnose", strings.NewReader(`{"question":"can you fix Emby?"}`))
+			req := httptest.NewRequest(http.MethodPost, "/api/user/diagnose", strings.NewReader(`{"question":"can you fix Emby?","auto_repair":true}`))
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("X-CSRF-Token", csrf)
 			req.AddCookie(cookie)
@@ -1530,7 +1503,7 @@ func TestGeneralUserDiagnoseAutoControlsOptedInAppWhenEnabled(t *testing.T) {
 	}
 }
 
-func TestGeneralUserRepairRequestCanBeApprovedByArmedAdmin(t *testing.T) {
+func TestGeneralUserRepairRequestCanBeApprovedByAdmin(t *testing.T) {
 	oldDelay := agentRepairVerificationDelay
 	agentRepairVerificationDelay = 0
 	t.Cleanup(func() { agentRepairVerificationDelay = oldDelay })
@@ -1587,16 +1560,6 @@ func TestGeneralUserRepairRequestCanBeApprovedByArmedAdmin(t *testing.T) {
 	}
 
 	adminCookie, adminCSRF := loginAdmin(t, router)
-	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/api/admin/agent/arm", strings.NewReader(`{"armed":true,"duration_seconds":60}`))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-CSRF-Token", adminCSRF)
-	req.AddCookie(adminCookie)
-	router.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("arm agent status = %d, body = %s", rec.Code, rec.Body.String())
-	}
-
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/api/admin/repair-requests/"+created.Request.ID+"/decision", strings.NewReader(`{"choice":"approve"}`))
 	req.Header.Set("Content-Type", "application/json")

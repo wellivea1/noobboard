@@ -111,7 +111,7 @@ func JSONSchema() map[string]interface{} {
 			},
 			"general_user_summary":  map[string]interface{}{"type": "string"},
 			"admin_message":         map[string]interface{}{"type": "string"},
-			"recommended_action_id": map[string]interface{}{"type": "string", "enum": []string{"none", "ask_admin_to_check", "ask_admin_to_restart_container", "ask_admin_to_check_logs", "ask_admin_to_check_unifi", "ask_admin_to_check_storage", "unknown"}},
+			"recommended_action_id": map[string]interface{}{"type": "string", "enum": []string{"none", "ask_admin_to_check", "ask_admin_to_restart_container", "ask_admin_to_check_unifi", "ask_admin_to_check_storage", "unknown"}},
 			"recommended_action_target": map[string]interface{}{
 				"type":                 "object",
 				"additionalProperties": false,
@@ -147,7 +147,7 @@ func validIncidentType(value models.IncidentType) bool {
 
 func validAction(value string) bool {
 	switch value {
-	case "none", "ask_admin_to_check", "ask_admin_to_restart_container", "ask_admin_to_check_logs", "ask_admin_to_check_unifi", "ask_admin_to_check_storage", "unknown":
+	case "none", "ask_admin_to_check", "ask_admin_to_restart_container", "ask_admin_to_check_unifi", "ask_admin_to_check_storage", "unknown":
 		return true
 	default:
 		return false
@@ -165,7 +165,7 @@ func validActionTargetKind(value string) bool {
 
 func actionRequiresAppTarget(actionID string) bool {
 	switch actionID {
-	case "ask_admin_to_restart_container", "ask_admin_to_check_logs":
+	case "ask_admin_to_restart_container":
 		return true
 	default:
 		return false

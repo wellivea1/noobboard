@@ -31,8 +31,8 @@ func TestValidateDiagnosisAcceptsStrictSchemaShape(t *testing.T) {
 		"evidence":["container exited"],
 		"general_user_summary":"Emby is offline.",
 		"admin_message":"Incident: Emby is offline.",
-		"recommended_action_id":"ask_admin_to_check_logs",
-		"recommended_action_target":{"kind":"app","id_or_name":"emby"},
+		"recommended_action_id":"ask_admin_to_check",
+		"recommended_action_target":{"kind":"manual","id_or_name":""},
 		"should_notify_admin":true
 	}`))
 	if err != nil {
@@ -69,7 +69,7 @@ func TestValidateDiagnosisInfersSingleAffectedAppTarget(t *testing.T) {
 		"evidence":["container exited"],
 		"general_user_summary":"Emby is offline.",
 		"admin_message":"Incident: Emby is offline.",
-		"recommended_action_id":"ask_admin_to_check_logs",
+		"recommended_action_id":"ask_admin_to_restart_container",
 		"recommended_action_target":{"kind":"manual","id_or_name":""},
 		"should_notify_admin":true
 	}`))
