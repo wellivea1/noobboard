@@ -78,9 +78,9 @@ func (b ContextBuilder) Build(req Request) (string, error) {
 		}
 	}
 
-	instruction := "Diagnose the server status data. You cannot execute anything yourself, but NoobBoard can run one app restart after admin approval and server-side safety gates. When a specific app is offline, exited, or unhealthy and a restart is a reasonable first remediation, set recommended_action_id=ask_admin_to_restart_container and recommended_action_target.kind=app with that app's exact app_id. Prefer this over ask_admin_to_check whenever a restart is plausibly corrective. Do not request tools, shell access, filesystem access, Docker control, Unraid mutations, UniFi changes, log-based repairs, storage actions, firewall actions, or arbitrary commands."
+	instruction := "Diagnose the server status data. You cannot execute anything yourself, but NoobBoard can run one app start/restart after admin approval and server-side safety gates. When a specific app is offline, exited, or unhealthy and an app fix is a reasonable first remediation, set recommended_action_id=ask_admin_to_restart_container and recommended_action_target.kind=app with that app's exact app_id. NoobBoard will start stopped apps and restart non-stopped apps. Prefer this over ask_admin_to_check whenever an app fix is plausibly corrective. Do not request tools, shell access, filesystem access, Docker control, Unraid mutations, UniFi changes, log-based repairs, storage actions, firewall actions, or arbitrary commands."
 	if req.Policy.AgentToolsEnabled && req.Policy.RecipientRole == models.RoleAdmin {
-		instruction = "Diagnose the server status data. You may call the provided read-only NoobBoard status tools to confirm live status before answering. You cannot execute anything yourself, but NoobBoard can run one app restart after admin approval and server-side safety gates. When a specific app is offline, exited, or unhealthy and a restart is a reasonable first remediation, set recommended_action_id=ask_admin_to_restart_container and recommended_action_target.kind=app with that app's exact app_id. Prefer this over ask_admin_to_check whenever a restart is plausibly corrective. Never recommend logs/shell/storage/array/firewall/Docker-removal/UniFi changes; those are not executable."
+		instruction = "Diagnose the server status data. You may call the provided read-only NoobBoard status tools to confirm live status before answering. You cannot execute anything yourself, but NoobBoard can run one app start/restart after admin approval and server-side safety gates. When a specific app is offline, exited, or unhealthy and an app fix is a reasonable first remediation, set recommended_action_id=ask_admin_to_restart_container and recommended_action_target.kind=app with that app's exact app_id. NoobBoard will start stopped apps and restart non-stopped apps. Prefer this over ask_admin_to_check whenever an app fix is plausibly corrective. Never recommend logs/shell/storage/array/firewall/Docker-removal/UniFi changes; those are not executable."
 	}
 	if req.Policy.RecipientRole != models.RoleAdmin {
 		return b.buildGeneralUserContext(snapshot, req)
@@ -884,9 +884,10 @@ func Instructions() string {
 	return strings.Join([]string{
 		"You are a diagnostic assistant for a local NoobBoard dashboard.",
 		"You receive only sanitized incident facts, status data, and policy-approved log excerpts.",
-		"You cannot execute anything yourself, but NoobBoard can run one app restart after admin approval and server-side safety gates.",
-		"When a specific app is offline, exited, or unhealthy and a restart is a reasonable first remediation, set recommended_action_id to ask_admin_to_restart_container and target that exact app_id.",
-		"Prefer ask_admin_to_restart_container over ask_admin_to_check whenever a restart is plausibly corrective and the app report marks restart_candidate true.",
+		"You cannot execute anything yourself, but NoobBoard can run one app start/restart after admin approval and server-side safety gates.",
+		"When a specific app is offline, exited, or unhealthy and an app fix is a reasonable first remediation, set recommended_action_id to ask_admin_to_restart_container and target that exact app_id.",
+		"NoobBoard will start stopped apps and restart non-stopped apps.",
+		"Prefer ask_admin_to_restart_container over ask_admin_to_check whenever an app fix is plausibly corrective and the app report marks restart_candidate true.",
 		"Never recommend destructive storage, Unraid array, Docker removal, firewall, VLAN, or filesystem actions.",
 		"Never recommend log-checking as an executable repair; NoobBoard cannot execute log-based repairs.",
 		"Choose recommended_action_id only from the JSON schema enum.",
@@ -900,9 +901,10 @@ func AgentInstructions() string {
 		"You are a diagnostic assistant for a local NoobBoard dashboard.",
 		"You receive only sanitized incident facts, status data, policy-approved log excerpts, and optionally read-only NoobBoard status tools.",
 		"You may call the provided NoobBoard tools only to refresh live read-only status.",
-		"You cannot execute anything yourself, but NoobBoard can run one app restart after admin approval and server-side safety gates.",
-		"When a specific app is offline, exited, or unhealthy and a restart is a reasonable first remediation, set recommended_action_id to ask_admin_to_restart_container and target that exact app_id.",
-		"Prefer ask_admin_to_restart_container over ask_admin_to_check whenever a restart is plausibly corrective and the app report marks restart_candidate true.",
+		"You cannot execute anything yourself, but NoobBoard can run one app start/restart after admin approval and server-side safety gates.",
+		"When a specific app is offline, exited, or unhealthy and an app fix is a reasonable first remediation, set recommended_action_id to ask_admin_to_restart_container and target that exact app_id.",
+		"NoobBoard will start stopped apps and restart non-stopped apps.",
+		"Prefer ask_admin_to_restart_container over ask_admin_to_check whenever an app fix is plausibly corrective and the app report marks restart_candidate true.",
 		"Never request shell access, filesystem access, raw credentials, Docker control, Unraid mutations, UniFi configuration changes, or arbitrary local/API commands.",
 		"Never recommend log-checking as an executable repair; NoobBoard cannot execute log-based repairs.",
 		"Choose recommended_action_id only from the JSON schema enum.",

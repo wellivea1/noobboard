@@ -870,6 +870,11 @@ function renderUserHome(snapshot) {
     $("user-chat-open").disabled = !canChat;
     $("user-chat-open").setAttribute("aria-disabled", String(!canChat));
   }
+  if ($("user-ask-primary")) {
+    $("user-ask-primary").hidden = !canChat;
+    $("user-ask-primary").disabled = !canChat;
+    $("user-ask-primary").setAttribute("aria-disabled", String(!canChat));
+  }
   $("user-chat-input").placeholder = "Ask what's wrong or whether an app is working.";
   $("user-chat-input").disabled = !canChat || state.chatBusy.user;
   $("user-chat-send").disabled = !canChat || state.chatBusy.user;
@@ -1520,6 +1525,21 @@ function cleanChatText(value) {
   return text;
 }
 
+function cleanCompactChatText(value) {
+  let text = cleanChatText(value);
+  if (!text) return "";
+  const replacements = [
+    [/\bWAN\b/gi, "internet"],
+    [/\bDocker\b/gi, "app service"],
+    [/\bcontainer(s)?\b/gi, "app$1"],
+    [/\barray\b/gi, "server storage"],
+    [/\bparity\b/gi, "storage protection"],
+    [/\bUnraid\b/gi, "the server"],
+  ];
+  for (const [pattern, replacement] of replacements) text = text.replace(pattern, replacement);
+  return text.replace(/\s+/g, " ").trim();
+}
+
 function firstChatText(...values) {
   for (const value of values) {
     const text = cleanChatText(value);
@@ -1531,6 +1551,14 @@ function firstChatText(...values) {
 function cleanChatList(values) {
   if (!Array.isArray(values)) return [];
   return values.map(cleanChatText).filter(Boolean);
+}
+
+function firstCompactChatText(...values) {
+  for (const value of values) {
+    const text = cleanCompactChatText(value);
+    if (text) return text;
+  }
+  return "";
 }
 
 function setChatControlsBusy(input, button, busy) {
@@ -2706,7 +2734,7 @@ async function runDiagnosis(question, output, options = {}) {
         userPlanNodes.push(renderUserRepairRequestPrompt(result.agent_plan, result));
       }
       const autoFixed = !!(result.agent_plan?.auto_executed && result.agent_plan?.outcome?.recovered);
-      const answerText = firstChatText(result.general_user_summary, result.diagnosis, "I could not find a clear answer.");
+      const answerText = firstCompactChatText(result.general_user_summary, result.diagnosis, "I could not find a clear answer.");
       output.replaceChildren(
         node("strong", { text: "Answer" }),
         node("p", { text: answerText }),
@@ -2929,13 +2957,19 @@ function normalizeAgentApprovalOptions(plan) {
       description: "Permit this single fix attempt.",
       enabled: !!plan?.can_execute,
       selected: false,
-      reason: plan?.can_execute ? "" : "Turn on admin-approved app fixes and per-app admin/AI restart first.",
+      reason: plan?.can_execute ? "" : "Turn on admin-approved app fixes and per-app admin/AI app fix first.",
     },
   ];
 }
 
 function initialAgentApprovalChoice(options) {
   return (options.find((option) => option.enabled && option.selected) || options.find((option) => option.enabled) || options[0] || {}).id || "deny";
+}
+
+function agentPlanDirectAction(plan) {
+  const action = String(plan?.direct_action || plan?.outcome?.action || "restart").trim().toLowerCase();
+  if (["start", "stop", "restart"].includes(action)) return action;
+  return "restart";
 }
 
 function maybeOpenAgentApprovalDialog(plan) {
@@ -2952,6 +2986,9 @@ function openAgentApprovalDialog(plan) {
   const approvalOptions = normalizeAgentApprovalOptions(plan);
   const approvalSummary = firstChatText(plan.summary, "The model suggested a fix. Approve or deny before allowing any automatic action.");
   const requestedFix = firstChatText(plan.title, plan.recommended_action_id, "Unknown action");
+  const directAction = agentPlanDirectAction(plan);
+  const actionLabel = userAppActionLabel(directAction);
+  const actionVerb = actionLabel.toLowerCase();
   let selectedChoice = initialAgentApprovalChoice(approvalOptions);
   const optionRows = [];
   const closeButton = node("button", {
@@ -2973,7 +3010,7 @@ function openAgentApprovalDialog(plan) {
     class: "openai-auth-status",
     "aria-live": "polite",
     "data-tone": plan.can_execute ? "info" : "bad",
-    text: plan.can_execute ? "Approval will run one restart for the selected app." : "Fixes require admin app fixes and per-app opt-in.",
+    text: plan.can_execute ? `Approval will ${actionVerb} the selected app once.` : "Fixes require admin app fixes and per-app opt-in.",
   });
   const updateSelection = () => {
     const selectedOption = approvalOptions.find((option) => option.id === selectedChoice);
@@ -2991,7 +3028,7 @@ function openAgentApprovalDialog(plan) {
       statusNode.textContent = "No automatic fix will run.";
     } else {
       statusNode.dataset.tone = "info";
-      statusNode.textContent = "NoobBoard will run one restart for this app.";
+      statusNode.textContent = `NoobBoard will ${actionVerb} this app once, then verify whether it recovered.`;
     }
   };
   const optionNodes = approvalOptions.map((option) => {
@@ -3038,7 +3075,13 @@ function openAgentApprovalDialog(plan) {
       node("div", { class: "agent-approval-request" },
         node("span", { class: "openai-auth-label", text: "Requested fix" }),
         node("strong", { text: requestedFix }),
+        node("span", { class: "agent-approval-direct-action", text: `${actionLabel} once` }),
         agentPlanTargetText(plan) ? node("small", { text: agentPlanTargetText(plan) }) : null,
+      ),
+      node("ol", { class: "agent-approval-steps", "aria-label": "Approval progress" },
+        node("li", { class: "current" }, "Review"),
+        node("li", {}, "Approve"),
+        node("li", {}, `${actionLabel} and verify`),
       ),
       node("fieldset", { class: "agent-approval-options" },
         node("legend", { class: "openai-auth-label", text: "Approval choice" }),
@@ -3067,20 +3110,23 @@ function openAgentApprovalDialog(plan) {
 async function submitAgentApproval(plan, choice, button) {
   const selectedChoice = String(choice || "deny").trim();
   const allowed = selectedChoice === "allow_once";
+  const directAction = agentPlanDirectAction(plan);
+  const actionLabel = userAppActionLabel(directAction);
+  const actionProgress = userAppActionProgressText(directAction);
   const originalText = button?.textContent || "";
   if (button) {
     button.disabled = true;
-    button.textContent = allowed ? "Starting" : "Recording";
+    button.textContent = allowed ? actionProgress : "Recording";
   }
   const dialog = state.agentApprovalDialog;
+  if (allowed) dialog?.dialog?.classList.add("is-running");
   if (dialog?.statusNode) {
     dialog.statusNode.dataset.tone = "info";
-    dialog.statusNode.textContent = allowed ? "Approval recorded. Starting the app fix..." : "Recording denial...";
+    dialog.statusNode.textContent = allowed ? `Approval recorded. ${actionProgress} the app and checking status...` : "Recording denial...";
   }
   if (allowed) {
-    const prompt = markAgentRepairProgress(plan, "pending", "Approval recorded. Restarting the app and checking whether it recovers...");
+    markAgentRepairProgress(plan, "pending", `Approval recorded. ${actionProgress} the app and checking whether it recovers...`);
     closeAgentApprovalDialog({ returnFocus: false });
-    focusAgentPlanPrompt(prompt);
   }
   try {
     const response = await api("/api/admin/agent/approval", {
@@ -3092,9 +3138,18 @@ async function submitAgentApproval(plan, choice, button) {
     });
     if (allowed && response.outcome) {
       appendAgentRepairOutcome(response.outcome, plan);
+      if (dialog?.statusNode?.isConnected) {
+        dialog.statusNode.dataset.tone = response.outcome.recovered ? "info" : "bad";
+        dialog.statusNode.textContent = agentRepairOutcomeNotice(response.outcome);
+      }
       showNotice(agentRepairOutcomeNotice(response.outcome), response.outcome.recovered ? "info" : "error");
+      closeAgentApprovalDialog({ returnFocus: false });
     } else if (allowed) {
-      markAgentRepairProgress(plan, "failed", "The fix request completed, but NoobBoard did not return a verification outcome.");
+      markAgentRepairProgress(plan, "failed", `The ${actionLabel.toLowerCase()} request completed, but NoobBoard did not return a verification outcome.`);
+      if (dialog?.statusNode?.isConnected) {
+        dialog.statusNode.dataset.tone = "bad";
+        dialog.statusNode.textContent = "The request completed, but NoobBoard did not return verification.";
+      }
       showNotice("Fix request completed without a verification outcome.", "error");
     } else {
       showNotice("Automatic fix was not allowed.");
@@ -3102,6 +3157,11 @@ async function submitAgentApproval(plan, choice, button) {
     }
   } catch (error) {
     if (allowed) markAgentRepairProgress(plan, "failed", error.message || "NoobBoard could not run the approved fix.");
+    if (dialog?.statusNode?.isConnected) {
+      dialog.dialog?.classList.remove("is-running");
+      dialog.statusNode.dataset.tone = "bad";
+      dialog.statusNode.textContent = error.message || "NoobBoard could not run the approved fix.";
+    }
     showNotice(error.message, "error");
   } finally {
     if (button?.isConnected) {
@@ -3394,8 +3454,8 @@ function auditDetails(details) {
   const entries = Object.entries(details || {});
   if (!entries.length) return node("span", { class: "muted", text: "No details" });
   return node("div", { class: "audit-detail-chips" }, entries.map(([key, value]) => node("span", { class: "audit-chip" },
-    node("strong", { text: key }),
-    node("span", { text: formatAuditValue(value) }),
+    node("strong", { text: `${key}:` }),
+    node("span", { text: ` ${formatAuditValue(value)}` }),
   )));
 }
 
@@ -3549,19 +3609,6 @@ function renderRoleDetail(role, defaultRole, roles, visibility) {
       ),
       node("div", { class: "role-detail-actions" },
         role.role === defaultRole ? node("span", { class: "role-badge", text: "Default" }) : null,
-        node("label", { class: "role-default-field" },
-          node("span", { text: "Default role" }),
-          node("select", {
-            onchange: (event) => {
-              visibility.default_role = event.target.value;
-              renderRoleSettings();
-            },
-          }, roles.map((item) => node("option", {
-            value: item.role,
-            selected: item.role === defaultRole,
-            text: item.display_name || item.role,
-          }))),
-        ),
         node("button", {
           type: "button",
           class: "primary command",
@@ -3569,6 +3616,21 @@ function renderRoleDetail(role, defaultRole, roles, visibility) {
           onclick: saveRoleAccess,
           text: "Save role access",
         }),
+      ),
+    ),
+    node("section", { class: "role-general-config" },
+      node("label", { class: "role-default-field" },
+        node("span", { text: "Default role" }),
+        node("select", {
+          onchange: (event) => {
+            visibility.default_role = event.target.value;
+            renderRoleSettings();
+          },
+        }, roles.map((item) => node("option", {
+          value: item.role,
+          selected: item.role === defaultRole,
+          text: item.display_name || item.role,
+        }))),
       ),
     ),
     node("label", { class: "role-name-field" },
@@ -4000,9 +4062,9 @@ function settingsCard(item, body, save) {
   return node("article", { class: "settings-card settings-section", "data-settings-section": item.section },
     node("header", {},
       node("h3", { text: item.title }),
-      node("div", { class: "settings-actions" }, saveButton, status),
     ),
     body,
+    save ? node("footer", { class: "settings-footer" }, saveButton, status) : null,
   );
 }
 
@@ -4105,7 +4167,7 @@ function renderAppImageSettings(item, data) {
       placeholder: app.icon_url && app.icon_source !== "built-in" ? app.icon_url : "https://example.local/icon.png",
       inputmode: "url",
     });
-    const repairToggle = settingToggle("Allow admin/AI restart", key ? !!repairAllowed[key] : false);
+    const repairToggle = settingToggle("Allow admin/AI app fix", key ? !!repairAllowed[key] : false);
     const userRestartToggle = settingToggle("Allow user controls", key ? !!userRestartAllowed[key] : false);
     appRows.push({ key, input, repairInput: repairToggle.input, userRestartInput: userRestartToggle.input });
     return node("div", { class: "settings-app-image-row" },
@@ -5134,6 +5196,7 @@ $("diagnostic-question").addEventListener("keydown", (event) => submitOnEnter(ev
 $("notify-admin").addEventListener("click", () => notifyAdmin());
 $("user-status-open").addEventListener("click", () => setCompactView("status"));
 $("user-chat-open").addEventListener("click", focusUserChat);
+$("user-ask-primary").addEventListener("click", focusUserChat);
 $("user-chat-send").addEventListener("click", runUserChat);
 $("user-chat-input").addEventListener("keydown", (event) => submitOnEnter(event, runUserChat));
 $("user-notify-admin").addEventListener("click", () => notifyAdmin("A standard user reported a problem."));

@@ -472,7 +472,7 @@ weakening it.
   action and a confirm affordance consistent with `controlApp`.
 - Show the execution outcome inline in the chat thread.
 - Admin settings: expose the `AgentControlEnabled` switch and per-app
-  "Allow admin/AI restart" toggles alongside the reviewer gate; show
+  "Allow admin/AI app fix" toggles alongside the reviewer gate; show
   cooldown/rate-limit state.
 
 ## R5 — Tests, security review, docs
