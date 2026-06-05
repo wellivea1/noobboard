@@ -541,7 +541,15 @@ function configureMobileRuntime() {
   const setVisualViewportHeight = () => {
     const viewport = window.visualViewport;
     const height = Math.round(viewport?.height || window.innerHeight || 0);
+    const top = Math.max(0, Math.round(viewport?.offsetTop || 0));
+    const layoutHeight = Math.round(window.innerHeight || height || 0);
+    const keyboardInset = Math.max(0, layoutHeight - height - top);
+    const keyboardOpen = keyboardInset > 80 || (layoutHeight > 0 && height > 0 && height < layoutHeight * 0.78);
     if (height > 0) root.style.setProperty("--visual-viewport-height", `${height}px`);
+    root.style.setProperty("--visual-viewport-top", `${top}px`);
+    root.style.setProperty("--keyboard-inset-bottom", `${keyboardInset}px`);
+    root.classList.toggle("is-keyboard-open", keyboardOpen);
+    scheduleCompactChatIntoView();
   };
   setVisualViewportHeight();
   window.addEventListener("resize", setVisualViewportHeight, { passive: true });
@@ -552,11 +560,29 @@ function configureMobileRuntime() {
     document.addEventListener("focusin", (event) => {
       const target = event.target;
       if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) return;
+      if (target.closest(".panel.user-chat")) {
+        scheduleCompactChatIntoView();
+        return;
+      }
       setTimeout(() => {
         target.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
       }, 250);
     });
   }
+}
+
+function scheduleCompactChatIntoView() {
+  if (!document.body.classList.contains("compact-view") || document.body.dataset.compactView !== "chat") return;
+  clearTimeout(scheduleCompactChatIntoView.timer);
+  scheduleCompactChatIntoView.timer = setTimeout(() => {
+    const panel = document.querySelector(".panel.user-chat");
+    const input = $("user-chat-input");
+    if (!panel || panel.hidden || !input) return;
+    const active = document.activeElement;
+    if (active !== input && !panel.contains(active)) return;
+    const row = panel.querySelector(".button-row") || input;
+    row.scrollIntoView({ block: "end", inline: "nearest", behavior: "smooth" });
+  }, 90);
 }
 
 function node(tag, attrs = {}, ...children) {
@@ -748,6 +774,7 @@ function setCompactView(view) {
   });
   if (state.userView === "chat") {
     $("user-chat-input")?.focus({ preventScroll: true });
+    scheduleCompactChatIntoView();
   }
 }
 
@@ -2755,6 +2782,7 @@ function focusUserChat() {
   if (!panel || panel.hidden) return;
   panel.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
   $("user-chat-input").focus({ preventScroll: true });
+  scheduleCompactChatIntoView();
 }
 
 async function runAssistantChat() {
