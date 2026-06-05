@@ -104,9 +104,21 @@ Two plain-language groups, each a `<section>` with an `<h3>`:
   list the compact home shows). Each row: app icon + name + a switch.
   - Label the switch in plain language: **"Tell me if {App} has a problem"**.
   - On load, fetch `GET /api/user/notification-preferences` and reflect current state.
-  - On change, `POST /api/user/notification-preferences` with
+  - The first time a user turns a switch on from this device, show a compact signup dialog before
+    saving. Copy:
+    - Title: `Turn on alerts?`
+    - Body: `NoobBoard can show alerts on this device when a selected app stops working or starts working again.`
+    - Primary button: `Turn on alerts`
+    - Secondary button: `Not now`
+  - If device alerts are unavailable or blocked, the dialog may explain that NoobBoard can still
+    show alerts while the page is open. Do not claim full background delivery unless a real
+    background transport is implemented.
+  - After signup, `POST /api/user/notification-preferences` with
     `{ app_id, notify_on_down: <on>, notify_on_recovery: <on> }` (one switch controls both, for
     minimalism). Optimistic update + revert with an inline error on failure.
+  - While the compact app is open, poll `GET /api/user/notifications` and display newly saved
+    records with the browser/device notification API when available, otherwise with the in-app
+    notice banner.
   - Empty state (no visible apps): "No apps to notify about yet."
 - Switches are ≥44px tall, have an accessible label tied to the app, and a visible on/off state
   (not color alone — include an on/off text or knob position).
@@ -133,6 +145,9 @@ List them as the rationale for the extensible array, but do not build:
 - Notifications heading: `Notifications`
 - Notifications intro: `Get a heads-up when something stops working.`
 - Per-app switch: `Tell me if {App} has a problem`
+- Signup title: `Turn on alerts?`
+- Signup primary action: `Turn on alerts`
+- Signup secondary action: `Not now`
 - Notifications empty: `No apps to notify about yet.`
 - Account heading: `Account`
 - Account identity: `Signed in as {display name}`

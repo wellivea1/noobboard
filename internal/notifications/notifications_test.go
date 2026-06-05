@@ -153,6 +153,19 @@ func TestNotificationDedupesDuringRateLimitWindow(t *testing.T) {
 	if len(backend.Sent) != 1 {
 		t.Fatalf("expected one notification, got %d", len(backend.Sent))
 	}
+	records, err := store.NotificationsForUser("u1", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected one stored notification record, got %#v", records)
+	}
+	if records[0].UserID != "u1" || records[0].AppID != "emby" || records[0].Dedupe == "" {
+		t.Fatalf("stored notification record has wrong routing fields: %#v", records[0])
+	}
+	if records[0].Message != "Emby is offline: Emby is offline." {
+		t.Fatalf("stored notification message = %q", records[0].Message)
+	}
 }
 
 func TestWholeNASOutageSuppressesPerAppAlerts(t *testing.T) {

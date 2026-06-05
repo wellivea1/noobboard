@@ -43,6 +43,7 @@ Admin routes are registered on the admin site/port. The compact site/port serves
 - `POST /api/user/apps/{id}/action`
 - `GET /api/user/notification-preferences`
 - `POST /api/user/notification-preferences`
+- `GET /api/user/notifications`
 - `GET /api/admin/settings/visibility`
 - `POST /api/admin/settings/visibility`
 - `GET /api/admin/settings/roles`

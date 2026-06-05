@@ -352,6 +352,10 @@ body.agent-approval-open {
   overflow: hidden;
 }
 
+body.compact-notification-signup-open {
+  overflow: hidden;
+}
+
 .openai-auth-backdrop {
   position: fixed;
   inset: 0;
@@ -5111,6 +5115,64 @@ body.user-menu-open .user-drawer {
 
 .user-settings-empty {
   margin: var(--space-3) 0;
+}
+
+.compact-notification-signup-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: max(18px, var(--safe-top)) max(16px, var(--safe-right)) max(18px, var(--safe-bottom)) max(16px, var(--safe-left));
+  background: rgba(0, 0, 0, 0.56);
+}
+
+.compact-notification-signup {
+  display: grid;
+  gap: var(--space-4);
+  width: min(360px, calc(100vw - 32px - var(--safe-left) - var(--safe-right)));
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: var(--space-4);
+  background: var(--surface);
+  box-shadow: 0 18px 54px rgba(0, 0, 0, 0.42);
+}
+
+.compact-notification-signup-head {
+  display: grid;
+  gap: 8px;
+}
+
+.compact-notification-signup h2,
+.compact-notification-signup p {
+  margin: 0;
+}
+
+.compact-notification-signup h2 {
+  color: var(--text);
+  font-size: 1.12rem;
+  line-height: 1.2;
+}
+
+.compact-notification-signup p {
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.42;
+}
+
+.compact-notification-signup-status {
+  min-height: 1.2em;
+}
+
+.compact-notification-signup-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+}
+
+.compact-notification-signup-actions .command {
+  justify-content: center;
+  min-height: 44px;
 }
 
 .user-signout {

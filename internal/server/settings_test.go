@@ -3252,6 +3252,82 @@ func TestAppHistoryEndpointReturnsVisibleAppHistory(t *testing.T) {
 	}
 }
 
+func TestUserNotificationsEndpointReturnsOwnAndGlobalRecords(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "user-notifications")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+	app := newTestApp(t, cfg)
+	viewer, err := app.deps.Store.UserByUsername("viewer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := app.deps.Store.AppendNotification(db.NotificationRecord{
+		ID:      "viewer-record",
+		Dedupe:  "viewer-dedupe",
+		UserID:  viewer.ID,
+		AppID:   "emby",
+		Message: "Emby is offline: token=abc123",
+		Time:    time.Now().UTC().Add(-time.Minute).Format(time.RFC3339Nano),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.deps.Store.AppendNotification(db.NotificationRecord{
+		ID:      "other-record",
+		Dedupe:  "other-dedupe",
+		UserID:  "someone-else",
+		AppID:   "emby",
+		Message: "Other user only",
+		Time:    time.Now().UTC().Format(time.RFC3339Nano),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.deps.Store.AppendNotification(db.NotificationRecord{
+		ID:      "global-record",
+		Dedupe:  "global-dedupe",
+		UserID:  "",
+		AppID:   "internet",
+		Message: "Internet status changed",
+		Time:    time.Now().UTC().Add(time.Minute).Format(time.RFC3339Nano),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	router := app.Router()
+	cookie, _ := loginAs(t, router, "viewer", "change-me-now")
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/user/notifications?limit=10", nil)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET user notifications status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var records []db.NotificationRecord
+	if err := json.NewDecoder(rec.Body).Decode(&records); err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("expected viewer plus global notification records, got %#v", records)
+	}
+	var sawViewer, sawGlobal bool
+	for _, record := range records {
+		if record.ID == "other-record" {
+			t.Fatalf("leaked another user's notification record: %#v", records)
+		}
+		if record.ID == "viewer-record" {
+			sawViewer = true
+			if strings.Contains(record.Message, "abc123") || !strings.Contains(record.Message, "[REDACTED]") {
+				t.Fatalf("viewer notification was not redacted: %q", record.Message)
+			}
+		}
+		if record.ID == "global-record" {
+			sawGlobal = true
+		}
+	}
+	if !sawViewer || !sawGlobal {
+		t.Fatalf("missing expected notification records: %#v", records)
+	}
+}
+
 func TestAppByIDEndpointResolvesVisibleAppAliases(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Database.Path = serverCacheTestPath(t, "app-by-id-alias")
