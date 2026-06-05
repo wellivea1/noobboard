@@ -157,11 +157,14 @@ func compactActionReviewApps(apps []models.AppStatus, targetID string) string {
 }
 
 func compactActionReviewInfra(infra models.InfrastructureStatus) string {
-	return fmt.Sprintf("- internet=%t router=%t server=%t docker_service=%t checked_at=%s",
+	return fmt.Sprintf("- internet=%t router=%t server=%t docker_service=%t array_state=%q array_fs_state=%q storage_ready=%t checked_at=%s",
 		infra.InternetReachable,
 		infra.RouterReachable,
 		infra.NASReachable,
 		infra.DockerServiceAvailable,
+		infra.UnraidArrayState,
+		infra.UnraidArrayFSState,
+		models.UnraidStorageReady(infra),
 		infra.LastCheckedAt.UTC().Format(time.RFC3339),
 	)
 }

@@ -35,6 +35,7 @@ func (c LiveClient) Status(ctx context.Context) (models.InfrastructureStatus, []
 	}
 	query := `query DashboardStatus {
   info { os { platform distro release uptime } }
+  vars { mdState fsState }
   array {
     state
     capacity { disks { free used total } }
@@ -50,6 +51,10 @@ func (c LiveClient) Status(ctx context.Context) (models.InfrastructureStatus, []
 					Uptime  flexInt64 `json:"uptime"`
 				} `json:"os"`
 			} `json:"info"`
+			Vars struct {
+				MDState string `json:"mdState"`
+				FSState string `json:"fsState"`
+			} `json:"vars"`
 			Array struct {
 				State    string `json:"state"`
 				Capacity struct {
@@ -88,7 +93,26 @@ func (c LiveClient) Status(ctx context.Context) (models.InfrastructureStatus, []
 			warnings = append(warnings, fmt.Sprintf("%s temperature %dC", disk.Name, disk.Temp))
 		}
 	}
-	state := strings.ToLower(out.Data.Array.State)
+	state := models.NormalizeUnraidState(out.Data.Array.State)
+	mdState := models.NormalizeUnraidState(out.Data.Vars.MDState)
+	fsState := models.NormalizeUnraidState(out.Data.Vars.FSState)
+	if state == "" || fsState == "" {
+		if fallback, err := c.arrayRuntimeState(ctx); err == nil {
+			if state == "" {
+				state = models.NormalizeUnraidState(fallback.ArrayState)
+			}
+			if mdState == "" {
+				mdState = models.NormalizeUnraidState(fallback.MDState)
+			}
+			if fsState == "" {
+				fsState = models.NormalizeUnraidState(fallback.FSState)
+			}
+		}
+	}
+	if fsState != "" && fsState != "started" {
+		arrayHealthy = false
+		warnings = append(warnings, fmt.Sprintf("array filesystem state %s", fsState))
+	}
 	total := int64(out.Data.Array.Capacity.Disks.Total)
 	used := int64(out.Data.Array.Capacity.Disks.Used)
 	free := int64(out.Data.Array.Capacity.Disks.Free)
@@ -127,7 +151,13 @@ func (c LiveClient) Status(ctx context.Context) (models.InfrastructureStatus, []
 		UnraidShareCount:        details.ShareCount,
 		UnraidShareNames:        details.ShareNames,
 		UnraidArrayState:        state,
-		UnraidArrayHealthy:      arrayHealthy && state == "started",
+		UnraidArrayFSState:      fsState,
+		UnraidArrayMDState:      mdState,
+		UnraidArrayHealthy: arrayHealthy && models.UnraidStorageReady(models.InfrastructureStatus{
+			UnraidAPIReachable: true,
+			UnraidArrayState:   state,
+			UnraidArrayFSState: fsState,
+		}),
 		ArrayDiskCount:          len(out.Data.Array.Disks),
 		ArrayDiskWarningCount:   len(warnings),
 		ArrayCapacityTotalBytes: total,
@@ -182,6 +212,49 @@ func (c LiveClient) StartArray(ctx context.Context) (ArrayControlResult, error) 
 		Action: "start_array",
 		State:  state,
 		Status: "accepted",
+	}, nil
+}
+
+type arrayRuntimeState struct {
+	ArrayState string
+	MDState    string
+	FSState    string
+}
+
+func (c LiveClient) arrayRuntimeState(ctx context.Context) (arrayRuntimeState, error) {
+	query := `query ArrayRuntimeState {
+  array {
+    state
+  }
+  vars {
+    mdState
+    fsState
+  }
+}`
+	var out struct {
+		Data struct {
+			Array struct {
+				State string `json:"state"`
+			} `json:"array"`
+			Vars struct {
+				MDState string `json:"mdState"`
+				FSState string `json:"fsState"`
+			} `json:"vars"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := c.graphql(ctx, query, &out); err != nil {
+		return arrayRuntimeState{}, err
+	}
+	if len(out.Errors) > 0 {
+		return arrayRuntimeState{}, fmt.Errorf("unraid array runtime graphql error: %s", out.Errors[0].Message)
+	}
+	return arrayRuntimeState{
+		ArrayState: out.Data.Array.State,
+		MDState:    out.Data.Vars.MDState,
+		FSState:    out.Data.Vars.FSState,
 	}, nil
 }
 
@@ -610,6 +683,30 @@ func (c LiveClient) parityCheckState(ctx context.Context) (string, error) {
 }
 
 func (c LiveClient) apiFailureStatus(ctx context.Context, apiErr error) (models.InfrastructureStatus, []models.LogLine, error) {
+	if fallback, err := c.arrayRuntimeState(ctx); err == nil {
+		state := models.NormalizeUnraidState(fallback.ArrayState)
+		mdState := models.NormalizeUnraidState(fallback.MDState)
+		fsState := models.NormalizeUnraidState(fallback.FSState)
+		if state != "" || fsState != "" {
+			ready := models.UnraidStorageReady(models.InfrastructureStatus{
+				UnraidAPIReachable: true,
+				UnraidArrayState:   state,
+				UnraidArrayFSState: fsState,
+			})
+			return models.InfrastructureStatus{
+				NASReachable:       true,
+				UnraidAPIReachable: true,
+				UnraidArrayState:   state,
+				UnraidArrayFSState: fsState,
+				UnraidArrayMDState: mdState,
+				UnraidArrayHealthy: ready,
+				LastCheckedAt:      time.Now().UTC(),
+				SourceHealth: models.SourceHealth{
+					Unraid: "array runtime state available; dashboard graphql unavailable: " + apiErr.Error(),
+				},
+			}, nil, nil
+		}
+	}
 	if !c.webGUIReachable(ctx) {
 		return models.InfrastructureStatus{}, nil, apiErr
 	}

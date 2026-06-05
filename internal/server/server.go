@@ -1357,10 +1357,10 @@ func arrayHistoryStatus(infra models.InfrastructureStatus) models.CurrentStatus 
 	if !infra.UnraidAPIReachable || strings.TrimSpace(infra.UnraidArrayState) == "" {
 		return models.StatusUnknown
 	}
-	if infra.UnraidArrayHealthy {
+	if models.UnraidStorageReady(infra) && infra.UnraidArrayHealthy {
 		return models.StatusOnline
 	}
-	if strings.EqualFold(strings.TrimSpace(infra.UnraidArrayState), "started") {
+	if models.UnraidStorageReady(infra) {
 		return models.StatusDegraded
 	}
 	return models.StatusOffline
@@ -1879,7 +1879,7 @@ func arrayStartBackstopDiagnosis(diagnosis llm.Diagnosis, snapshot models.Snapsh
 	if !arrayStartNeeded(snapshot.Infrastructure) {
 		return diagnosis, false
 	}
-	return arrayStartGuidedDiagnosis(diagnosis, snapshot.Infrastructure.UnraidArrayState), true
+	return arrayStartGuidedDiagnosis(diagnosis, models.UnraidStorageDisplayState(snapshot.Infrastructure)), true
 }
 
 func generalUserRestartBackstopDiagnosis(diagnosis llm.Diagnosis, snapshot models.Snapshot) (llm.Diagnosis, bool) {
@@ -1905,15 +1905,7 @@ func canBackstopRestartAction(actionID string) bool {
 }
 
 func arrayStartNeeded(infra models.InfrastructureStatus) bool {
-	if !infra.UnraidAPIReachable {
-		return false
-	}
-	switch strings.ToLower(strings.TrimSpace(infra.UnraidArrayState)) {
-	case "stopped", "offline", "off", "down":
-		return true
-	default:
-		return false
-	}
+	return models.UnraidStorageNeedsStart(infra)
 }
 
 func exactlyOneRestartBackstopCandidate(apps []models.AppStatus, eligible func(models.AppStatus) bool) (models.AppStatus, bool) {
@@ -1952,13 +1944,13 @@ func arrayStartGuidedDiagnosis(diagnosis llm.Diagnosis, state string) llm.Diagno
 	}
 	diagnosis.IncidentType = models.IncidentArrayStopped
 	diagnosis.AffectedServices = []string{"Unraid array"}
-	diagnosis.Diagnosis = "The Unraid array is " + state + ", so apps that depend on server storage may not be able to run."
-	diagnosis.GeneralUserSummary = "The server storage is stopped. Contact the admin first to make sure it was not stopped on purpose. If the admin is unavailable or asleep and service needs to be restored, it is okay to start the array."
-	diagnosis.AdminMessage = "The Unraid array is " + state + ". Confirm it was not intentionally stopped; if service needs to be restored, start the array."
+	diagnosis.Diagnosis = "Server storage is not ready (" + state + "), so apps that depend on it may not be able to run."
+	diagnosis.GeneralUserSummary = "The server storage is not ready. Contact the admin first to make sure it was not stopped on purpose. If the admin is unavailable or asleep and service needs to be restored, it is okay to start the array."
+	diagnosis.AdminMessage = "Server storage is not ready (" + state + "). Confirm it was not intentionally stopped; if service needs to be restored, start the array."
 	diagnosis.RecommendedActionID = arrayStartActionID
 	diagnosis.RecommendedTarget = llm.ActionTarget{Kind: "storage", IDOrName: arrayTargetID}
 	diagnosis.ShouldNotifyAdmin = true
-	evidence := "Unraid API reports array state " + state
+	evidence := "Unraid API reports server storage state " + state
 	for _, existing := range diagnosis.Evidence {
 		if strings.EqualFold(strings.TrimSpace(existing), evidence) {
 			return diagnosis
@@ -2735,15 +2727,15 @@ func (a *App) verifyArrayStartOutcome(ctx context.Context, before models.Infrast
 		after := refreshed.Infrastructure
 		outcome.Verified = true
 		outcome.AfterStatus = arrayHistoryStatus(after)
-		outcome.Recovered = strings.EqualFold(strings.TrimSpace(after.UnraidArrayState), "started")
+		outcome.Recovered = models.UnraidStorageReady(after)
 		if outcome.Recovered {
-			outcome.Message = "Unraid array started successfully. Send another message or try again if you continue to have issues."
+			outcome.Message = "Server storage started successfully. Send another message or try again if you continue to have issues."
 			break
 		}
 		if attempt == attempts-1 {
-			outcome.Message = "Start array was sent, but the array still does not report started."
+			outcome.Message = "Start storage was sent, but server storage still does not report ready."
 		} else {
-			outcome.Message = "Start array was sent. Waiting for the array to report started."
+			outcome.Message = "Start storage was sent. Waiting for server storage to report ready."
 		}
 	}
 	if historyEventID, err := a.appendArrayActionHistoryEvent(outcome); err == nil {
@@ -3369,12 +3361,14 @@ func (a *App) executeUserAgentAction(w http.ResponseWriter, r *http.Request) {
 		"requester_id":          user.ID,
 		"via":                   "general_user_llm",
 		"array_state":           snapshot.Infrastructure.UnraidArrayState,
+		"array_fs_state":        snapshot.Infrastructure.UnraidArrayFSState,
+		"storage_ready":         models.UnraidStorageReady(snapshot.Infrastructure),
 		"can_execute":           false,
 	}
 	if !arrayStartNeeded(snapshot.Infrastructure) {
-		details["reason"] = "array_not_stopped"
+		details["reason"] = "storage_ready"
 		a.deps.Audit.Record(user.ID, "llm.array_start.refused", details)
-		writeError(w, http.StatusConflict, errors.New("the array is not currently stopped"))
+		writeError(w, http.StatusConflict, errors.New("server storage is not currently stopped or unavailable"))
 		return
 	}
 	if !a.consumeAgentApproval(payload) {

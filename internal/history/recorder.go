@@ -171,21 +171,21 @@ func arrayStatus(infra models.InfrastructureStatus) models.CurrentStatus {
 	if !infra.UnraidAPIReachable || strings.TrimSpace(infra.UnraidArrayState) == "" {
 		return models.StatusUnknown
 	}
-	if infra.UnraidArrayHealthy {
+	if models.UnraidStorageReady(infra) && infra.UnraidArrayHealthy {
 		return models.StatusOnline
 	}
-	if strings.EqualFold(strings.TrimSpace(infra.UnraidArrayState), "started") {
+	if models.UnraidStorageReady(infra) {
 		return models.StatusDegraded
 	}
 	return models.StatusOffline
 }
 
 func arrayNote(infra models.InfrastructureStatus) string {
-	state := strings.TrimSpace(infra.UnraidArrayState)
+	state := models.UnraidStorageDisplayState(infra)
 	if state == "" {
 		return "Array state is unknown."
 	}
-	if infra.UnraidArrayHealthy {
+	if models.UnraidStorageReady(infra) && infra.UnraidArrayHealthy {
 		return "Array is healthy."
 	}
 	return "Array state is " + state + "."
