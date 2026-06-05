@@ -61,6 +61,7 @@ type screenshots struct {
 	MobileAdmin            string `json:"mobileAdmin"`
 	MobileSettings         string `json:"mobileSettings"`
 	MobileUserHome         string `json:"mobileUserHome"`
+	MobileUserChatKeyboard string `json:"mobileUserChatKeyboard"`
 	MobileUserAppDetail    string `json:"mobileUserAppDetail"`
 	MobileUserInfraDetail  string `json:"mobileUserInfraDetail"`
 	MobileUserDrawer       string `json:"mobileUserDrawer"`
@@ -117,6 +118,10 @@ type flags struct {
 	UserRepairActionLabel       string   `json:"userRepairActionLabel,omitempty"`
 	UserPromptTryAgainVisible   bool     `json:"userPromptTryAgainVisible,omitempty"`
 	UserPromptInlineSuccess     bool     `json:"userPromptInlineSuccess,omitempty"`
+	UserChatKeyboardMode        bool     `json:"userChatKeyboardMode,omitempty"`
+	UserChatComposerVisible     bool     `json:"userChatComposerVisible,omitempty"`
+	UserChatOutputVisible       bool     `json:"userChatOutputVisible,omitempty"`
+	UserChatChromeCollapsed     bool     `json:"userChatChromeCollapsed,omitempty"`
 	UserMenuToggleVisible       bool     `json:"userMenuToggleVisible,omitempty"`
 	UserDrawerOpen              bool     `json:"userDrawerOpen,omitempty"`
 	UserDrawerHidden            bool     `json:"userDrawerHidden,omitempty"`
@@ -621,6 +626,30 @@ func run(opts options) (visualResult, error) {
 	if err := captureScreenshot(cdp, result.Screenshots.MobileUserHome); err != nil {
 		return result, err
 	}
+	if _, err := cdp.call("Emulation.setDeviceMetricsOverride", map[string]any{
+		"width":             390,
+		"height":            430,
+		"deviceScaleFactor": 2,
+		"mobile":            true,
+	}); err != nil {
+		return result, err
+	}
+	mobileUserChatKeyboard, err := evalFlags(cdp, userChatKeyboardExpression)
+	if err != nil {
+		return result, err
+	}
+	result.Screenshots.MobileUserChatKeyboard = filepath.Join(cache, "visual-mobile-user-chat-keyboard-"+runID+".png")
+	if err := captureScreenshot(cdp, result.Screenshots.MobileUserChatKeyboard); err != nil {
+		return result, err
+	}
+	if _, err := cdp.call("Emulation.setDeviceMetricsOverride", map[string]any{
+		"width":             390,
+		"height":            844,
+		"deviceScaleFactor": 2,
+		"mobile":            true,
+	}); err != nil {
+		return result, err
+	}
 	mobileUserAppDetail, err := evalFlags(cdp, userAppDetailExpression)
 	if err != nil {
 		return result, err
@@ -690,12 +719,13 @@ func run(opts options) (visualResult, error) {
 		"desktopUserAppDetail":    desktopUserAppDetail,
 		"desktopUserInfraDetail":  desktopUserInfraDetail,
 		"mobileUserHome":          mobileUserHome,
+		"mobileUserChatKeyboard":  mobileUserChatKeyboard,
 		"mobileUserAppDetail":     mobileUserAppDetail,
 		"mobileUserInfraDetail":   mobileUserInfraDetail,
 		"mobileUserDrawer":        mobileUserDrawer,
 		"mobileDrawerClose":       mobileUserDrawerClose,
 	}
-	if err := assertVisualFlags(overview, serverFlags, router, apps, incidents, diagnostics, queue, admin, settings, agentRepair, monitorCustomization, mobileOverview, mobileRouter, mobileApps, mobileIncidents, mobileDiagnostics, mobileQueue, mobileAdmin, mobileSettings, desktopUserPromptAction, desktopUserAppDetail, desktopUserInfraDetail, mobileUserHome, mobileUserAppDetail, mobileUserInfraDetail, mobileUserDrawer, mobileUserDrawerClose); err != nil {
+	if err := assertVisualFlags(overview, serverFlags, router, apps, incidents, diagnostics, queue, admin, settings, agentRepair, monitorCustomization, mobileOverview, mobileRouter, mobileApps, mobileIncidents, mobileDiagnostics, mobileQueue, mobileAdmin, mobileSettings, desktopUserPromptAction, desktopUserAppDetail, desktopUserInfraDetail, mobileUserHome, mobileUserChatKeyboard, mobileUserAppDetail, mobileUserInfraDetail, mobileUserDrawer, mobileUserDrawerClose); err != nil {
 		return result, err
 	}
 
@@ -826,7 +856,7 @@ func captureScreenshot(cdp *cdpClient, path string) error {
 	return os.WriteFile(path, data, 0o644)
 }
 
-func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, queue, admin, settings, agentRepair, customization, mobileOverview, mobileRouter, mobileApps, mobileIncidents, mobileDiagnostics, mobileQueue, mobileAdmin, mobileSettings, desktopUserPromptAction, desktopUserAppDetail, desktopUserInfraDetail, mobileUserHome, mobileUserAppDetail, mobileUserInfraDetail, mobileUserDrawer, mobileUserDrawerClose flags) error {
+func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, queue, admin, settings, agentRepair, customization, mobileOverview, mobileRouter, mobileApps, mobileIncidents, mobileDiagnostics, mobileQueue, mobileAdmin, mobileSettings, desktopUserPromptAction, desktopUserAppDetail, desktopUserInfraDetail, mobileUserHome, mobileUserChatKeyboard, mobileUserAppDetail, mobileUserInfraDetail, mobileUserDrawer, mobileUserDrawerClose flags) error {
 	var failures []string
 	if !overview.DashboardVisible {
 		failures = append(failures, "dashboard was not visible after login")
@@ -1037,6 +1067,24 @@ func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, q
 	}
 	if mobileUserHome.ElementBoundsOverflow {
 		failures = append(failures, "general user mobile component bounds overflow detected: "+mobileUserHome.ElementBoundsOffender)
+	}
+	if !mobileUserChatKeyboard.UserChatKeyboardMode {
+		failures = append(failures, "general user chat keyboard mode did not activate")
+	}
+	if !mobileUserChatKeyboard.UserChatComposerVisible {
+		failures = append(failures, "general user chat composer was not visible in keyboard mode")
+	}
+	if !mobileUserChatKeyboard.UserChatOutputVisible {
+		failures = append(failures, "general user chat answer area was not visible in keyboard mode")
+	}
+	if !mobileUserChatKeyboard.UserChatChromeCollapsed {
+		failures = append(failures, "general user chat header/tabs did not collapse in keyboard mode")
+	}
+	if mobileUserChatKeyboard.BodyHorizontalOverflow || mobileUserChatKeyboard.ButtonTextOverflow {
+		failures = append(failures, "general user chat keyboard layout overflow detected")
+	}
+	if mobileUserChatKeyboard.ElementBoundsOverflow {
+		failures = append(failures, "general user chat keyboard component bounds overflow detected: "+mobileUserChatKeyboard.ElementBoundsOffender)
 	}
 	for name, detail := range map[string]flags{
 		"desktop app detail":   desktopUserAppDetail,
@@ -1527,6 +1575,80 @@ const generalUserExpression = `(async () => {
   };
 })()`
 
+const userChatKeyboardExpression = `(async () => {
+  const waitFor = async (predicate, timeout = 3000) => {
+    const started = Date.now();
+    let value = predicate();
+    while (!value && Date.now() - started < timeout) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      value = predicate();
+    }
+    return value;
+  };
+  const chatPanel = document.querySelector('.panel.user-chat');
+  const chatTab = document.querySelector('#user-chat-open');
+  const input = document.querySelector('#user-chat-input');
+  const send = document.querySelector('#user-chat-send');
+  chatPanel?.setAttribute('data-chat-available', 'true');
+  if (chatTab) chatTab.disabled = false;
+  if (input) input.disabled = false;
+  if (send) send.disabled = false;
+  if (typeof setCompactView === 'function') {
+    setCompactView('chat');
+  } else {
+    chatTab?.click();
+  }
+  chatTab?.click();
+  await waitFor(() => document.body.dataset.compactView === 'chat');
+  const root = document.documentElement;
+  root.classList.add('is-keyboard-open');
+  root.classList.add('visual-keyboard-test');
+  root.style.setProperty('--visual-viewport-height', '430px');
+  root.style.setProperty('--visual-viewport-top', '0px');
+  root.style.setProperty('--keyboard-inset-bottom', '414px');
+  const output = document.querySelector('#user-chat-output');
+  if (output) {
+    output.classList.remove('chat-empty', 'muted');
+    output.classList.add('chat-result');
+    output.replaceChildren(
+      Object.assign(document.createElement('strong'), { textContent: 'Answer' }),
+      Object.assign(document.createElement('p'), { textContent: 'The server storage needs attention. This is a long enough answer to prove the chat text remains visible while the keyboard is open.' })
+    );
+  }
+  if (input) input.value = 'What is wrong right now?';
+  input?.focus({ preventScroll: true });
+  if (typeof scheduleCompactChatIntoView === 'function') scheduleCompactChatIntoView();
+  await new Promise((resolve) => setTimeout(resolve, 180));
+  root.classList.add('is-keyboard-open');
+  root.classList.add('visual-keyboard-test');
+  root.style.setProperty('--visual-viewport-height', '430px');
+  root.style.setProperty('--visual-viewport-top', '0px');
+  root.style.setProperty('--keyboard-inset-bottom', '414px');
+  await new Promise((resolve) => requestAnimationFrame(resolve));
+  const panel = document.querySelector('.panel.user-chat');
+  const topbar = [...document.querySelectorAll('.topbar')].find((element) => element.closest('#user-home') || visibleElement(element));
+  const tabs = document.querySelector('#user-view-tabs');
+  const inputRect = input?.getBoundingClientRect() || { top: 9999, bottom: 9999, width: 0, height: 0 };
+  const sendRect = send?.getBoundingClientRect() || { top: 9999, bottom: 9999, width: 0, height: 0 };
+  const outputRect = output?.getBoundingClientRect() || { top: 9999, bottom: 9999, width: 0, height: 0 };
+  const panelRect = panel?.getBoundingClientRect() || { top: 9999, bottom: 9999, width: 0, height: 0 };
+  const visibleBottom = 430;
+  const topbarCollapsed = !topbar || getComputedStyle(topbar).display === 'none';
+  const tabsCollapsed = !tabs || getComputedStyle(tabs).display === 'none';
+  const mobileAudit = await auditMobileShell();
+  return {
+    pageTitle: document.querySelector('#page-title')?.textContent || '',
+    userChatVisible: !!(panel && visibleElement(panel)),
+    userChatKeyboardMode: (root.classList.contains('is-keyboard-open') || root.classList.contains('visual-keyboard-test')) && document.body.dataset.compactView === 'chat',
+    userChatComposerVisible: inputRect.height >= 44 && sendRect.height >= 44 && inputRect.bottom <= visibleBottom + 1 && sendRect.bottom <= visibleBottom + 1 && inputRect.top >= 0 && sendRect.top >= 0,
+    userChatOutputVisible: outputRect.height >= 72 && outputRect.top >= 0 && outputRect.bottom <= inputRect.top,
+    userChatChromeCollapsed: topbarCollapsed && tabsCollapsed && panelRect.bottom <= visibleBottom + 1,
+    bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
+    buttonTextOverflow: hasButtonTextOverflow(),
+    ...mobileAudit
+  };
+})()`
+
 const userPromptActionExpression = `(async () => {
   const waitFor = async (predicate, timeout = 3000) => {
     const started = Date.now();
@@ -1610,6 +1732,16 @@ const userPromptActionExpression = `(async () => {
 })()`
 
 const userAppDetailExpression = `(async () => {
+  document.documentElement.classList.remove('is-keyboard-open');
+  document.documentElement.classList.remove('visual-keyboard-test');
+  document.documentElement.style.setProperty('--visual-viewport-height', window.innerHeight + 'px');
+  document.documentElement.style.setProperty('--visual-viewport-top', '0px');
+  document.documentElement.style.setProperty('--keyboard-inset-bottom', '0px');
+  document.querySelector('#user-status-open')?.click();
+  const statusStarted = Date.now();
+  while (document.body.dataset.compactView !== 'status' && Date.now() - statusStarted < 3000) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
   const card = document.querySelector('#user-apps .user-app-card');
   window.__visualLastDetailTrigger = card;
   card?.focus();
