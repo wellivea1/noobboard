@@ -170,6 +170,8 @@ type InfrastructureStatus struct {
 	UnraidShareCount        int          `json:"unraid_share_count,omitempty"`
 	UnraidShareNames        []string     `json:"unraid_share_names,omitempty"`
 	UnraidArrayState        string       `json:"unraid_array_state"`
+	UnraidArrayFSState      string       `json:"unraid_array_fs_state,omitempty"`
+	UnraidArrayMDState      string       `json:"unraid_array_md_state,omitempty"`
 	UnraidArrayHealthy      bool         `json:"unraid_array_healthy"`
 	ArrayDiskCount          int          `json:"array_disk_count,omitempty"`
 	ArrayDiskWarningCount   int          `json:"array_disk_warning_count,omitempty"`

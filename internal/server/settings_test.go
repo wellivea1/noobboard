@@ -2643,7 +2643,7 @@ func TestUserDiagnoseSuggestsRepairWhenModelMissesSingleVisibleDownApp(t *testin
 	}
 }
 
-func TestUserDiagnoseOffersLLMOnlyArrayStartWhenArrayStoppedEvenWhenNASStatusHidden(t *testing.T) {
+func TestUserDiagnoseOffersLLMOnlyArrayStartWhenStorageNotReadyEvenWhenNASStatusHidden(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Database.Path = serverCacheTestPath(t, "compact-diagnose-array-start")
 	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
@@ -2661,7 +2661,9 @@ func TestUserDiagnoseOffersLLMOnlyArrayStartWhenArrayStoppedEvenWhenNASStatusHid
 		RouterReachable:        true,
 		NASReachable:           true,
 		UnraidAPIReachable:     true,
-		UnraidArrayState:       "stopped",
+		UnraidArrayState:       "started",
+		UnraidArrayFSState:     "starting",
+		UnraidArrayMDState:     "started",
 		UnraidArrayHealthy:     false,
 		DockerServiceAvailable: false,
 		LastCheckedAt:          now,
@@ -2669,6 +2671,7 @@ func TestUserDiagnoseOffersLLMOnlyArrayStartWhenArrayStoppedEvenWhenNASStatusHid
 	}
 	started := stopped
 	started.UnraidArrayState = "started"
+	started.UnraidArrayFSState = "started"
 	started.UnraidArrayHealthy = true
 	started.DockerServiceAvailable = true
 	collector := &recordingUnraidCollector{infra: stopped, afterStart: started}
