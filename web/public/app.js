@@ -1525,13 +1525,11 @@ function setChatError(output, message) {
 }
 
 function renderThinkingLoader(message) {
-  return node("div", { class: "thinking-loader thinking-container synapse-concept", role: "status", "aria-live": "polite" },
-    node("div", { class: "synapse-network", "aria-hidden": "true" },
-      node("div", { class: "synapse-node n1" }),
-      node("div", { class: "synapse-line l1" }),
-      node("div", { class: "synapse-node n2" }),
-      node("div", { class: "synapse-line l2" }),
-      node("div", { class: "synapse-node n3" }),
+  return node("div", { class: "thinking-loader thinking-bubble skeleton-spark-concept", role: "status", "aria-live": "polite" },
+    node("div", { class: "skeleton-spark-container", "aria-hidden": "true" },
+      node("div", { class: "skeleton-row r1" }),
+      node("div", { class: "skeleton-row r2" }),
+      node("div", { class: "spark-cursor" }),
     ),
     node("span", { class: "thinking-label", text: message }),
   );
