@@ -3808,12 +3808,12 @@ function renderLLMSettings(item, data) {
     settingChoice(authMethodName, "api_key", "API key", "Uses a saved OpenAI API key.", selectedAuthMethod === "api_key"),
   ];
   const openAIModel = settingSelectField("OpenAI API model", knownModelValue(OPENAI_MODEL_OPTIONS, settings.openai_model, "gpt-5.5"), OPENAI_MODEL_OPTIONS);
-  const chatGPTModel = settingSelectField("ChatGPT model", knownModelValue(CHATGPT_MODEL_OPTIONS, settings.openai_model, "gpt-5.5"), CHATGPT_MODEL_OPTIONS);
+  const chatGPTModel = settingSelectField("ChatGPT account model", knownModelValue(CHATGPT_MODEL_OPTIONS, settings.openai_model, "gpt-5.5"), CHATGPT_MODEL_OPTIONS);
   const anthropicModel = settingSelectField("Anthropic model", knownModelValue(ANTHROPIC_MODEL_OPTIONS, settings.anthropic_model, "claude-sonnet-4-5"), ANTHROPIC_MODEL_OPTIONS);
   const timeout = durationSecondsField("Timeout", settings.timeout || 45000000000);
-  const agentControlEnabled = settingToggle("Allow admin-approved fixes", !!settings.agent_control_enabled);
-  const agentAutoRepairEnabled = settingToggle("Allow automatic restart after diagnosis", !!settings.agent_auto_repair_enabled);
-  const agentArmDuration = durationSecondsField("Enabled session duration", settings.agent_arm_duration || settings.agent_readiness?.agent_arm_duration || 600000000000);
+  const agentControlEnabled = settingToggle("Allow admin-approved app fixes", !!settings.agent_control_enabled);
+  const agentAutoRepairEnabled = settingToggle("Allow automatic admin restart after diagnosis", !!settings.agent_auto_repair_enabled);
+  const agentArmDuration = durationSecondsField("Temporary fix access duration", settings.agent_arm_duration || settings.agent_readiness?.agent_arm_duration || 600000000000);
   const actionAutoReviewEnabled = settingToggle("Require reviewer before fixes", !!settings.action_auto_review_enabled);
   const actionAutoReviewModel = settingSelectField("Reviewer model", settings.action_auto_review_model || "same", actionReviewModelOptions(settings));
   const actionAutoReviewReasoning = settingSelectField("Reviewer reasoning", settings.action_auto_review_reasoning || "", [
@@ -3854,7 +3854,7 @@ function renderLLMSettings(item, data) {
     node("div", { class: "settings-choice-list" }, authChoices.map((choice) => choice.element)),
     browserMessage,
     headlessMessage,
-    node("p", { class: "muted", text: "API-key mode uses OpenAI API models. ChatGPT login uses current GPT models through the ChatGPT account connector; unsupported saved values fall back before a request is sent." }),
+    node("p", { class: "muted", text: "API-key mode uses OpenAI API model access. ChatGPT login uses the ChatGPT account connector, which has different account-scoped model support; Codex-only model IDs are not offered here and unsupported saved values fall back before a request is sent." }),
     node("div", { class: "settings-field-grid" }, openAIModel.element, chatGPTModel.element),
     apiKeyBlock,
     clearChatGPT.element,
@@ -3989,20 +3989,20 @@ function renderLLMAgentReadiness(readiness, options = {}) {
     "data-glyph": armed ? "x" : "v",
     disabled: !controlEnabled,
     onclick: () => setAgentArm(!armed, armSeconds, armAction),
-    text: armed ? "Disable" : "Enable",
+    text: armed ? "Disable fixes" : "Enable fixes",
   });
   return node("section", { class: "settings-subsection agent-readiness" },
     node("div", { class: "settings-section-title-row" },
-      node("h4", { text: "App fixes" }),
-      settingsStatePill(readiness.mutating_tools_available ? "available" : "locked", readiness.mutating_tools_available ? "Actions available" : "Actions locked"),
+      node("h4", { text: "Admin app fixes" }),
+      settingsStatePill(readiness.mutating_tools_available ? "available" : "locked", readiness.mutating_tools_available ? "Fix path available" : "Fix path locked"),
     ),
     options.controls?.length ? node("div", { class: "settings-field-grid" }, options.controls) : null,
     node("div", { class: "settings-status-list" },
       settingsStatusRow("Read-only live tools", activeText, readiness.admin_tools_enabled ? "available" : "locked", readOnlyNames || "No read-only tools are registered."),
-      settingsStatusRow("This session", agentArmStatusText(readiness), armed ? "armed" : controlEnabled ? "planned" : "locked", agentArmDetailText(readiness), armAction),
-      settingsStatusRow("Approved fixes", readiness.mutating_tools_available ? "Approval available" : "Locked", readiness.mutating_tools_available ? "available" : "locked", readiness.mutating_tools_available ? agentRepairLimitDetail(readiness) : "Chat cannot change apps or infrastructure yet."),
+      settingsStatusRow("Temporary fix access", agentArmStatusText(readiness), armed ? "armed" : controlEnabled ? "planned" : "locked", agentArmDetailText(readiness), armAction),
+      settingsStatusRow("Approval popup", readiness.agent_control_enabled ? "Ready after temporary access" : "Off", readiness.agent_control_enabled ? "planned" : "locked", readiness.agent_control_enabled ? agentRepairLimitDetail(readiness) : "Turn on admin-approved app fixes before chat can ask to change an app."),
       settingsStatusRow("Safety reviewer", autoReview.enabled ? "Available" : agentModeStatusText(autoReview.status), autoReview.status || "locked", autoReviewDetail(reference)),
-      settingsStatusRow("Automatic restart", agentModeStatusText(autoAction.status), autoAction.status || "locked", autoActionDetail(autoAction, readiness)),
+      settingsStatusRow("Automatic admin restart", agentModeStatusText(autoAction.status), autoAction.status || "locked", autoActionDetail(autoAction, readiness)),
     ),
     node("p", { class: "muted agent-reference-note", text: reference.design_finding || "Future repair actions require schema validation, audit policy, and explicit approval." }),
   );
@@ -4013,8 +4013,8 @@ function autoActionDetail(autoAction, readiness) {
   if (!readiness?.agent_control_enabled) return "Turn on admin-approved fixes first.";
   const status = String(autoAction.status || "").toLowerCase();
   if (status === "review_required") return "Requires the safety reviewer so a separate model can veto the restart.";
-  if (status === "armed") return "Enabled for this session. Only non-online opted-in apps can be restarted automatically.";
-  return "Enable fixes for this session before diagnosis can run an automatic restart.";
+  if (status === "armed") return "Temporary access is enabled. Only non-online opted-in apps can be restarted automatically.";
+  return "Enable temporary fix access before diagnosis can run an automatic restart.";
 }
 
 function autoReviewDetail(reference) {
@@ -4039,9 +4039,9 @@ function agentArmStatusText(readiness) {
 }
 
 function agentArmDetailText(readiness) {
-  if (!readiness.agent_control_enabled) return "Turn on admin-approved fixes and save before this session can run app fixes.";
+  if (!readiness.agent_control_enabled) return "Turn on admin-approved app fixes and save before temporary access can be enabled.";
   if (readiness.agent_armed && readiness.agent_armed_until) return `This admin session can run app fixes until ${timeOnly(readiness.agent_armed_until)}.`;
-  return "Enable only when you are ready to approve or supervise a specific app fix.";
+  return "Enable only when you are ready to approve or supervise a specific app fix. It expires automatically.";
 }
 
 function timeOnly(value) {
@@ -4064,14 +4064,14 @@ async function setAgentArm(armed, durationSeconds, button) {
   const originalText = button?.textContent || "";
   if (button) {
     button.disabled = true;
-    button.textContent = armed ? "Enabling" : "Disabling";
+    button.textContent = armed ? "Enabling fixes" : "Disabling fixes";
   }
   try {
     await api("/api/admin/agent/arm", {
       method: "POST",
       body: JSON.stringify({ armed: !!armed, duration_seconds: durationSeconds || 0 }),
     });
-    showNotice(armed ? "App fixes enabled for this admin session." : "App fixes disabled for this admin session.");
+    showNotice(armed ? "Temporary app fix access enabled." : "Temporary app fix access disabled.");
     await loadSettings();
   } catch (error) {
     showNotice(error.message, "error");
@@ -4118,7 +4118,7 @@ function agentModeStatusText(status) {
     case "available":
       return "Available";
     case "planned":
-      return "Planned";
+      return "Not enabled";
     case "armed":
       return "Enabled";
     case "review_required":

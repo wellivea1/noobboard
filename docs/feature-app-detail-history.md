@@ -404,7 +404,7 @@ Each PR is independently shippable and leaves the app working.
 
 # Automatic server repair — path to deployable quality
 
-The chat agent can already *diagnose* and *recommend* a fix, and the approval/arm
+The chat agent can already *diagnose* and *recommend* a fix, and the approval/temporary-access
 plumbing exists, but execution is hard-locked. This section plans the remaining
 work to let an admin let the agent actually perform a repair (initially: restart
 a crashed container) from chat, safely.
@@ -422,7 +422,7 @@ weakening it.
 ## Defense-in-depth gates (all must hold to execute)
 
 1. `LLM.AgentControlEnabled` is **on** (admin setting, default **off**).
-2. The admin enabled fixes for this session (`AgentArmDuration` <= 1h, auto-expires).
+2. The admin enabled temporary fix access for this session (`AgentArmDuration` <= 1h, auto-expires).
 3. A valid, **single-use**, unexpired approval token bound to actor + action +
    target.
 4. The action is in the **executable allowlist** (v1: `restart` only).
@@ -574,7 +574,7 @@ executed as a command.
   approve/deny that runs through the **existing** approval+execution path
   (`recordAgentApproval` generalized to accept a request-originated approval, or a
   sibling endpoint). Approving still requires the admin gates (`AgentControlEnabled`,
-  arm) so nothing changes the execution trust model.
+  temporary fix access) so nothing changes the execution trust model.
 - Feed the outcome back to the requester (notification + history note).
 
 ### Path B — Direct general-user restart (per-app opt-in)
@@ -585,7 +585,7 @@ executed as a command.
   executes a restart **only** when the app is visible to the role, has
   `RestartAllowedGeneralUser`, is not blacklisted, and passes the shared
   cooldown/rate-limit; audited with `actor = general user`, `via:"user_direct"`;
-  same verification + outcome. **No admin arm required** (the admin pre-authorized
+  same verification + outcome. **No admin temporary access required** (the admin pre-authorized
   it via the per-app opt-in); the LLM is not in the loop (the user taps a button
   on a resolved app).
 - Compact UI: a confirm-gated **"Restart now"** on directly-repairable apps
