@@ -252,3 +252,15 @@ docs/agent-roadmap.md  Planned workstreams and design notes
 
 Read `AGENTS.md` first for the app's purpose and the invariants that keep the two surfaces
 safe. Planned work and design decisions live in `docs/agent-roadmap.md`.
+
+## License
+
+NoobBoard is free software: you can redistribute it and/or modify it under the terms of the
+**GNU General Public License v3.0** as published by the Free Software Foundation. See the
+[`LICENSE`](LICENSE) file for the full text.
+
+    Copyright (C) 2026 wellivea1
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
+without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+See the GNU General Public License for more details.
