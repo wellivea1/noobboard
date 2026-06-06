@@ -51,6 +51,8 @@ Development bootstrap users:
 
 Change these before real LAN or WAN-proxied use by setting `NOOBBOARD_BOOTSTRAP_ADMIN_USERNAME` and `NOOBBOARD_BOOTSTRAP_ADMIN_PASSWORD` before the first run, then create named users from Admin -> Settings -> Role Access.
 
+If you seed the admin login during `install.ps1`, the bootstrap password is written in plaintext to the service `config.yaml` (ACL-restricted to Administrators/SYSTEM). It is hashed into the database on first run but is not removed from the file; delete the `bootstrap_admin_password` line after first sign-in if you want it gone.
+
 For reverse-proxy deployment:
 
 - Set `NOOBBOARD_BIND_ADDRESS=0.0.0.0` only behind a trusted firewall or reverse proxy.
