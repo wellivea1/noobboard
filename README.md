@@ -209,21 +209,17 @@ real WAN access. To restrict to the private profile only, add the rule manually 
 New-NetFirewallRule -DisplayName "NoobBoard" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8787,8788 -Profile Private
 ```
 
-## Security Notes
+## Security
 
-- Do not commit `.env`, `config.local.yaml`, API keys, SSH keys, database files, logs, or `.cache`.
-- Admin APIs are only registered on the admin port.
-- Compact web app requests to `/api/admin/*` return `404`.
-- Mutating requests require CSRF tokens and same-origin checks.
-- App logs, audit entries, notification text, and LLM context are redacted before use.
-- Docker controls are admin-only and audited.
-- OpenAI and Anthropic are the only supported LLM providers.
-- If you set the admin login during install, the bootstrap password is stored in plain text
-  in `config.yaml` (restricted to Administrators/SYSTEM). It is hashed into the database on
-  first run but is not removed from the file; delete the `bootstrap_admin_password` line
-  after first sign-in if you want it gone.
+NoobBoard is built for a trusted LAN or a private HTTPS reverse proxy — not the open
+internet. The admin API is served only on the admin port (the compact app returns `404`
+for `/api/admin/*`), mutating requests require CSRF + same-origin checks, logs/notifications/
+LLM context are redacted, and Docker controls and agent repairs are admin-gated and audited.
+Secrets and local state (`.env`, `config.yaml`, key files, `data/`, `logs/`) are git-ignored —
+never commit them, and change the default `admin` password before any real use.
 
-See `docs/security.md` for the full list of controls.
+See [`docs/security.md`](docs/security.md) for the full list of controls and the
+reverse-proxy hardening checklist.
 
 ## Useful Commands
 
