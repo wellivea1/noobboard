@@ -218,7 +218,7 @@ LLM context are redacted, and Docker controls and agent repairs are admin-gated 
 Secrets and local state (`.env`, `config.yaml`, key files, `data/`, `logs/`) are git-ignored —
 never commit them, and change the default `admin` password before any real use.
 
-See [`docs/security_doc.md`](docs/security_doc.md) for the full list of controls and the
+See [`docs/security.md`](docs/security.md) for the full list of controls and the
 reverse-proxy hardening checklist.
 
 ## Useful Commands
