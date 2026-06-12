@@ -197,6 +197,11 @@ button.command[data-glyph="r"]::before {
   font-size: 1.08rem;
 }
 
+button.command[data-glyph="logout"]::before {
+  content: "\21aa";
+  font-size: 1.08rem;
+}
+
 /* Spin the glyph while a refresh/reload is in flight; stops when the class is removed. */
 @keyframes nb-spin {
   to { transform: rotate(360deg); }
@@ -347,11 +352,10 @@ pre {
 
 .notice {
   position: fixed;
-  top: calc(12px + var(--safe-top));
-  left: 50%;
+  right: max(16px, var(--safe-right));
+  bottom: calc(16px + var(--safe-bottom));
   z-index: 10;
   max-width: min(640px, calc(100vw - 24px));
-  transform: translateX(-50%);
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 10px 14px;
@@ -728,6 +732,13 @@ label {
 
 .tabs button.active:hover {
   border-color: var(--accent-strong);
+}
+
+.tabs button:focus-visible:not(.active) {
+  border-color: transparent;
+  background: transparent;
+  outline: 3px solid rgba(199, 215, 230, 0.34);
+  outline-offset: -3px;
 }
 
 .segmented button.active {
@@ -1183,6 +1194,23 @@ label {
   width: min(100%, 360px);
 }
 
+.user-app-control-row .command {
+  min-width: 0;
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+
+.user-app-control-row .command:disabled {
+  border-color: var(--border-soft);
+  background: var(--surface-alt);
+  color: var(--muted);
+  opacity: 0.55;
+}
+
+.user-app-control-row .command:disabled::before {
+  color: var(--muted);
+}
+
 .detail-actions .command {
   min-height: 44px;
 }
@@ -1576,7 +1604,7 @@ label {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
-  gap: 3px 14px;
+  gap: 5px 7px;
   min-width: 0;
 }
 
@@ -1594,7 +1622,11 @@ label {
   align-items: center;
   gap: 5px;
   min-width: 0;
-  min-height: 20px;
+  min-height: 24px;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: var(--surface-alt);
   color: var(--muted);
   max-width: 100%;
 }
@@ -1918,6 +1950,27 @@ button.command.monitor-hide {
   gap: 3px;
 }
 
+.incident-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 12px;
+}
+
+.incident-row-meta span + span {
+  position: relative;
+}
+
+.incident-row-meta span + span::before {
+  content: "";
+  position: absolute;
+  left: -7px;
+  top: 0.55em;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
 .toolbar {
   justify-content: space-between;
   align-items: end;
@@ -2020,8 +2073,8 @@ button.command.app-control {
   display: inline-grid;
   place-items: center;
   min-width: var(--control-height);
-  border-color: transparent;
-  background: transparent;
+  border-color: var(--border-soft);
+  background: var(--button-bg);
   color: var(--muted);
 }
 
@@ -2374,14 +2427,25 @@ button.command.app-control:focus-visible {
 }
 
 .settings-footer {
+  position: sticky;
+  top: max(8px, var(--safe-top));
+  z-index: 3;
   display: flex;
   align-items: center;
-  justify-content: flex-start;
+  justify-content: flex-end;
   flex-wrap: wrap;
   gap: 12px;
-  margin-top: 4px;
-  border-top: 1px solid var(--border-soft);
-  padding-top: 12px;
+  margin: 0 0 2px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  backdrop-filter: blur(8px);
+}
+
+.settings-footer.is-dirty {
+  border-color: color-mix(in srgb, var(--accent-strong) 68%, var(--border-soft));
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.2);
 }
 
 .audit-filter {
@@ -2565,12 +2629,21 @@ button.command.app-control:focus-visible {
 }
 
 .setting-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   min-height: 42px;
   border: 1px solid var(--border-soft);
   border-radius: 6px;
   padding: 6px 10px;
   background: var(--surface-alt);
   color: var(--text);
+}
+
+.setting-toggle input {
+  order: 2;
+  flex: 0 0 auto;
 }
 
 .settings-choice {
@@ -2655,10 +2728,37 @@ button.command.app-control:focus-visible {
   min-height: 42px;
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   padding: 0 10px;
   cursor: pointer;
   color: var(--text);
   font-weight: 820;
+  list-style: none;
+}
+
+.settings-advanced summary::-webkit-details-marker,
+.settings-policy-advanced summary::-webkit-details-marker,
+body.compact-view .user-technical-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.settings-advanced summary::after,
+.settings-policy-advanced summary::after,
+body.compact-view .user-technical-details summary::after {
+  content: "\203a";
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 1.3rem;
+  line-height: 1;
+  transform: rotate(90deg);
+  transition: transform 140ms ease;
+}
+
+.settings-advanced[open] summary::after,
+.settings-policy-advanced[open] summary::after,
+body.compact-view .user-technical-details[open] summary::after {
+  transform: rotate(-90deg);
 }
 
 .settings-advanced > .settings-field-grid,
@@ -2918,7 +3018,7 @@ button.command.app-control:focus-visible {
 
 .settings-policy-main .setting-toggle {
   min-width: 118px;
-  justify-content: start;
+  justify-content: space-between;
 }
 
 .settings-policy {
@@ -2978,6 +3078,20 @@ button.command.app-control:focus-visible {
 
 .settings-save-state[data-tone="error"] {
   color: var(--bad-text);
+}
+
+.settings-save-state[data-tone="info"] {
+  color: var(--accent-strong);
+}
+
+.settings-provider-inactive {
+  margin: 0;
+  border-left: 3px solid var(--warn-text);
+  padding: 9px 10px;
+  background: var(--warn-bg);
+  color: var(--text);
+  font-size: 0.84rem;
+  line-height: 1.4;
 }
 
 .role-access {
@@ -4261,7 +4375,10 @@ body.compact-view .assistant-toggle {
 @media (max-width: 520px) {
   .notice {
     top: auto;
+    right: auto;
+    left: 50%;
     bottom: calc(12px + var(--safe-bottom));
+    transform: translateX(-50%);
   }
 
   .openai-auth-backdrop {
@@ -4354,8 +4471,8 @@ body.compact-view .assistant-toggle {
     width: 44px;
     min-width: 44px;
     min-height: 44px;
-    border-color: transparent;
-    background: transparent;
+    border-color: var(--border-soft);
+    background: var(--button-bg);
     padding: 0;
     font-size: 0;
     border-radius: 5px;
@@ -4484,12 +4601,12 @@ body.compact-view .assistant-toggle {
     grid-area: meta;
     justify-content: flex-start;
     width: 100%;
-    gap: 2px 10px;
-    overflow: hidden;
+    gap: 4px 6px;
+    overflow: visible;
   }
 
   .overview-metric {
-    min-height: 18px;
+    min-height: 24px;
   }
 
   .overview-metric span {
@@ -5230,9 +5347,12 @@ body.compact-view .user-technical-details summary {
   min-height: 44px;
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   cursor: pointer;
   font-size: 0.84rem;
   font-weight: 700;
+  list-style: none;
 }
 
 body.compact-view .user-technical-details[open] .user-status-grid {
@@ -5439,7 +5559,7 @@ body.user-menu-open .user-drawer {
 .user-notification-list {
   display: grid;
   gap: 0;
-  border-block: 1px solid var(--border-soft);
+  border-top: 1px solid var(--border-soft);
 }
 
 .user-notification-row {
@@ -5763,6 +5883,7 @@ body.compact-view[data-compact-view="chat"] .agent-plan-actions .command {
 body.compact-view[data-compact-view="chat"] .panel.user-chat .chat-auto-repair {
   grid-column: 1 / -1;
   grid-row: 3;
+  justify-self: stretch;
   min-height: 36px;
   padding: 0 12px;
   border-bottom: 1px solid var(--border-soft);

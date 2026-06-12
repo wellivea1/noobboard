@@ -86,6 +86,7 @@ type flags struct {
 	ReviewQueueVisible          bool     `json:"reviewQueueVisible,omitempty"`
 	ReviewQueueOutputVisible    bool     `json:"reviewQueueOutputVisible,omitempty"`
 	ReviewQueueCopyAuditOnly    bool     `json:"reviewQueueCopyAuditOnly,omitempty"`
+	ActiveTabCount              int      `json:"activeTabCount,omitempty"`
 	AuditTableRowCount          int      `json:"auditTableRowCount,omitempty"`
 	RawSnapshotCollapsed        bool     `json:"rawSnapshotCollapsed,omitempty"`
 	AssistantOverlapCount       int      `json:"assistantOverlapCount,omitempty"`
@@ -101,6 +102,7 @@ type flags struct {
 	AgentRepairStatusText       string   `json:"agentRepairStatusText,omitempty"`
 	AgentRepairOutcomeVisible   bool     `json:"agentRepairOutcomeVisible,omitempty"`
 	AgentRepairOutcomeRecovered bool     `json:"agentRepairOutcomeRecovered,omitempty"`
+	AgentApprovalActionVisible  bool     `json:"agentApprovalActionVisible,omitempty"`
 	UserHomeVisible             bool     `json:"userHomeVisible,omitempty"`
 	UserHeroVisible             bool     `json:"userHeroVisible,omitempty"`
 	UserStatusCardCount         int      `json:"userStatusCardCount,omitempty"`
@@ -116,6 +118,7 @@ type flags struct {
 	UserRepairActionVisible     bool     `json:"userRepairActionVisible,omitempty"`
 	UserRepairDirectActionCount int      `json:"userRepairDirectActionCount,omitempty"`
 	UserRepairActionLabel       string   `json:"userRepairActionLabel,omitempty"`
+	DetailActionTextWrapped     bool     `json:"detailActionTextWrapped,omitempty"`
 	UserPromptTryAgainVisible   bool     `json:"userPromptTryAgainVisible,omitempty"`
 	UserPromptInlineSuccess     bool     `json:"userPromptInlineSuccess,omitempty"`
 	UserChatKeyboardMode        bool     `json:"userChatKeyboardMode,omitempty"`
@@ -152,6 +155,8 @@ type flags struct {
 	MonitorHideRestored         bool     `json:"monitorHideRestored,omitempty"`
 	BodyHorizontalOverflow      bool     `json:"bodyHorizontalOverflow"`
 	ButtonTextOverflow          bool     `json:"buttonTextOverflow"`
+	NoticeTitleOverlap          bool     `json:"noticeTitleOverlap"`
+	RawTransportErrorVisible    bool     `json:"rawTransportErrorVisible"`
 	ElementBoundsOverflow       bool     `json:"elementBoundsOverflow"`
 	ElementBoundsOffender       string   `json:"elementBoundsOffender,omitempty"`
 }
@@ -900,6 +905,9 @@ func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, q
 	if !queue.ReviewQueueCopyAuditOnly || !mobileQueue.ReviewQueueCopyAuditOnly {
 		failures = append(failures, "review queue did not explain direct actions are audit-only")
 	}
+	if queue.ActiveTabCount != 1 || mobileQueue.ActiveTabCount != 1 {
+		failures = append(failures, "review queue navigation did not keep exactly one active tab")
+	}
 	if admin.AuditTableRowCount < 1 || mobileAdmin.AuditTableRowCount < 1 {
 		failures = append(failures, "admin audit log did not render as a table")
 	}
@@ -950,6 +958,12 @@ func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, q
 	}
 	if !agentRepair.AgentRepairOutcomeVisible || !agentRepair.AgentRepairOutcomeRecovered {
 		failures = append(failures, "agent repair outcome did not render as recovered")
+	}
+	if agentRepair.AgentApprovalActionVisible {
+		failures = append(failures, "agent repair kept an approval action visible after completion")
+	}
+	if agentRepair.NoticeTitleOverlap {
+		failures = append(failures, "agent repair notice overlapped the title block")
 	}
 	if agentRepair.BodyHorizontalOverflow || agentRepair.ButtonTextOverflow || agentRepair.ElementBoundsOverflow {
 		failures = append(failures, "agent repair UI layout overflow detected: "+agentRepair.ElementBoundsOffender)
@@ -1106,6 +1120,15 @@ func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, q
 		}
 		if detail.BodyHorizontalOverflow || detail.ButtonTextOverflow {
 			failures = append(failures, name+" layout overflow detected")
+		}
+		if detail.DetailActionTextWrapped {
+			failures = append(failures, name+" action label wrapped across lines")
+		}
+		if detail.NoticeTitleOverlap {
+			failures = append(failures, name+" notice overlapped the title block")
+		}
+		if detail.RawTransportErrorVisible {
+			failures = append(failures, name+" exposed raw HTTP error wording")
 		}
 		if detail.ElementBoundsOverflow {
 			failures = append(failures, name+" component bounds overflow detected: "+detail.ElementBoundsOffender)
@@ -1453,6 +1476,7 @@ const queueExpression = `(async () => {
     reviewQueueVisible: !!panel && visibleElement(panel),
     reviewQueueOutputVisible: !!output && visibleElement(output),
     reviewQueueCopyAuditOnly: copy.includes('Direct admin or LLM app actions') && copy.includes('audit log'),
+    activeTabCount: document.querySelectorAll('.tabs button.active').length,
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow: hasButtonTextOverflow(),
     ...mobileAudit
@@ -1764,6 +1788,7 @@ const userAppDetailExpression = `(async () => {
   const repairActionLabel = repairActions.map((element) => (element.textContent || element.getAttribute('aria-label') || '').trim()).filter(Boolean).join('|');
   const directActionNames = new Set(repairActions.map((element) => (element.textContent || element.getAttribute('aria-label') || '').trim().toLowerCase())
     .filter((text) => ['start', 'restart', 'stop'].includes(text)));
+  const detailActionTextWrapped = repairActions.some((element) => elementTextWraps(element));
   const emptyNodes = panel ? [...panel.querySelectorAll('.detail-empty')] : [];
   const emptyStateVisible = emptyNodes
     .some((element) => visibleElement(element) && /no changes recorded yet/i.test(element.textContent || ''));
@@ -1777,7 +1802,10 @@ const userAppDetailExpression = `(async () => {
     userRepairActionVisible: /\b(ask admin|restart now|start|restart|stop)\b/i.test(repairActionLabel),
     userRepairDirectActionCount: directActionNames.size,
     userRepairActionLabel: repairActionLabel,
+    detailActionTextWrapped,
     bannedTermCount: bannedMatches.length,
+    noticeTitleOverlap: noticeOverlapsTitle(),
+    rawTransportErrorVisible: rawTransportErrorVisible(),
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow: hasButtonTextOverflow(),
     ...mobileAudit
@@ -2019,6 +2047,28 @@ function hasButtonTextOverflow() {
   });
 }
 
+function elementTextWraps(element) {
+  if (!element || !visibleElement(element)) return false;
+  const range = document.createRange();
+  range.selectNodeContents(element);
+  const tops = [...range.getClientRects()]
+    .filter((rect) => rect.width > 0 && rect.height > 0)
+    .map((rect) => Math.round(rect.top));
+  return new Set(tops).size > 1;
+}
+
+function noticeOverlapsTitle() {
+  const notice = document.querySelector('#notice');
+  const title = document.querySelector('.title-block');
+  return !!(notice && title && visibleElement(notice) && visibleElement(title) && rectsIntersect(notice.getBoundingClientRect(), title.getBoundingClientRect()));
+}
+
+function rawTransportErrorVisible() {
+  const notice = document.querySelector('#notice');
+  if (!notice || !visibleElement(notice)) return false;
+  return /\b(not found|forbidden|conflict|unauthorized|bad request|internal server error|service unavailable|gateway timeout)\b/i.test(notice.textContent || '');
+}
+
 function componentBoundsOverflow() {
   return componentBoundsOffender() !== '';
 }
@@ -2190,7 +2240,9 @@ const agentRepairExpression = `(async () => {
     agentRepairProgressVisible: progressVisible,
     agentRepairStatusText: statusText,
     agentRepairOutcomeVisible: !!outcome && visibleElement(outcome),
-    agentRepairOutcomeRecovered: !!outcome && outcome.classList.contains('recovered') && (outcome.textContent || '').includes('offline -> online'),
+    agentRepairOutcomeRecovered: !!outcome && outcome.classList.contains('recovered') && (outcome.textContent || '').includes('offline → online'),
+    agentApprovalActionVisible: [...document.querySelectorAll('.agent-plan-actions button')].some((element) => visibleElement(element) && /open approval/i.test(element.textContent || '')),
+    noticeTitleOverlap: noticeOverlapsTitle(),
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow: hasButtonTextOverflow(),
     ...mobileAudit

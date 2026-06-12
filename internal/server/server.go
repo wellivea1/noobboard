@@ -3217,6 +3217,7 @@ func (a *App) executeGeneralUserAppAction(ctx context.Context, user users.User, 
 	if appID == "" {
 		return empty, newUserAppActionFailure(http.StatusBadRequest, "target_unresolved", errors.New("app id is required"))
 	}
+	requestedAction := action
 	actionDef, ok := userAppControlActionDefinition(action)
 	if !ok {
 		return empty, newUserAppActionFailure(http.StatusBadRequest, "not_actionable", errors.New("app action is not supported"))
@@ -3245,11 +3246,16 @@ func (a *App) executeGeneralUserAppAction(ctx context.Context, user users.User, 
 	if !ok {
 		return empty, newUserAppActionFailure(http.StatusNotFound, "target_unresolved", errors.New("app is not available in the current snapshot"))
 	}
+	if action == docker.ActionRestart && app.DockerState == models.DockerExited {
+		action = docker.ActionStart
+		actionDef, _ = userAppControlActionDefinition(action)
+	}
 	details := map[string]interface{}{
-		"app_id":       app.AppID,
-		"requester_id": user.ID,
-		"via":          via,
-		"action":       string(action),
+		"app_id":           app.AppID,
+		"requester_id":     user.ID,
+		"via":              via,
+		"action":           string(action),
+		"requested_action": string(requestedAction),
 	}
 	if !isDockerRepairTarget(app) {
 		details["reason"] = "not_docker_target"
@@ -3434,9 +3440,6 @@ func validateGeneralUserAppActionState(action docker.ContainerAction, app models
 			return errors.New("this app is already stopped")
 		}
 	case docker.ActionRestart:
-		if app.DockerState == models.DockerExited {
-			return errors.New("this app is stopped; use Start")
-		}
 	default:
 		return errors.New("app action is not supported")
 	}

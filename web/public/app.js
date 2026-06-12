@@ -625,6 +625,19 @@ function showNotice(message, tone = "info") {
   }, 4200);
 }
 
+function compactSurfaceErrorMessage(error, fallback = "That could not be completed right now.") {
+  console.warn("Compact surface request failed", error);
+  const status = Number(error?.status || 0);
+  if (status === 404) return "That item is not available anymore. Check again to refresh the page.";
+  if (status === 403) return "You do not have access to do that.";
+  if (status === 409) return "The app status changed. Check again and try once more.";
+  if (status === 429) return "Too many requests were made. Wait a moment and try again.";
+  if (/deadline|timeout|timed out/i.test(String(error?.message || ""))) {
+    return "The server took too long to respond. Check its status and try again.";
+  }
+  return fallback;
+}
+
 async function api(path, options = {}) {
   const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
   if (state.csrf && options.method && options.method !== "GET") {
@@ -748,8 +761,8 @@ function setCompactView(view) {
   const titles = {
     status: "Home status",
     chat: "Ask what's wrong",
-    "app-detail": "App details",
-    "infra-detail": "Internet details",
+    "app-detail": "Details",
+    "infra-detail": "Details",
   };
   $("page-title").textContent = titles[state.userView] || titles.status;
   const statusButton = $("user-status-open");
@@ -799,7 +812,7 @@ async function refresh() {
       await loadUserNotificationRecords({ notify: true });
     }
   } catch (error) {
-    showNotice(error.message, "error");
+    showNotice(hasAdminSurface() ? error.message : compactSurfaceErrorMessage(error, "NoobBoard could not refresh right now. Try again shortly."), "error");
   } finally {
     // Keep the spinner visible long enough to read, even on a fast LAN.
     const minSpinMs = 500;
@@ -1104,7 +1117,7 @@ async function loadCompactNotificationPreferences() {
     state.notificationPreferences = new Map((Array.isArray(prefs) ? prefs : []).map((pref) => [String(pref.app_id || ""), pref]));
     state.notificationPreferencesLoaded = true;
   } catch (error) {
-    showNotice(error.message, "error");
+    showNotice(compactSurfaceErrorMessage(error, "Notification settings could not be loaded. Try again."), "error");
   } finally {
     state.notificationPreferencesLoading = false;
     if (isUserMenuOpen()) renderUserDrawer();
@@ -1709,7 +1722,6 @@ async function loadAppDetail(appID, options = {}) {
       api(`/api/apps/${encoded}/history?window=7d&limit=50`),
     ]);
     body.replaceChildren(renderAppDetail(app, history));
-    $("page-title").textContent = appDisplayName(app);
     if (options.focus) $("user-app-detail-back")?.focus({ preventScroll: true });
   } catch (error) {
     body.replaceChildren(
@@ -1718,7 +1730,7 @@ async function loadAppDetail(appID, options = {}) {
         node("p", { text: "Go back and try again." }),
       ),
     );
-    showNotice(error.message, "error");
+    showNotice(compactSurfaceErrorMessage(error, "Those app details could not be loaded. Check again and retry."), "error");
   }
 }
 
@@ -1739,7 +1751,6 @@ async function loadInfraDetail(subject, options = {}) {
   try {
     const history = await api(`/api/infrastructure/history?subject=${encodeURIComponent(subject)}&window=7d&limit=50`);
     body.replaceChildren(renderInfraDetail(history));
-    $("page-title").textContent = plainInfraSubjectName(subject);
     if (options.focus) $("user-infra-detail-back")?.focus({ preventScroll: true });
   } catch (error) {
     body.replaceChildren(
@@ -1748,7 +1759,7 @@ async function loadInfraDetail(subject, options = {}) {
         node("p", { text: "Go back and try again." }),
       ),
     );
-    showNotice(error.message, "error");
+    showNotice(compactSurfaceErrorMessage(error, "Those connection details could not be loaded. Check again and retry."), "error");
   }
 }
 
@@ -1841,7 +1852,6 @@ function userAppControlDisabledReason(action, app) {
   const dockerState = String(app?.docker_state || "").toLowerCase();
   if (action === "start" && (dockerState === "running" || status === "online" || status === "degraded")) return "Already running";
   if (action === "stop" && (dockerState === "exited" || (status === "offline" && dockerState !== "running"))) return "Already stopped";
-  if (action === "restart" && dockerState === "exited") return "Stopped; use Start";
   return "";
 }
 
@@ -1907,7 +1917,7 @@ async function runUserAppAction(app, action, button = null, options = {}) {
       }
     }
   } catch (error) {
-    showNotice(error.message, "error");
+    showNotice(compactSurfaceErrorMessage(error, `${actionLabel} could not be completed. Check the app status and try again.`), "error");
   } finally {
     if (button?.isConnected && keepButtonState) {
       button.disabled = false;
@@ -2077,7 +2087,10 @@ function infraStatusSummary(status) {
 function uptimeText(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return "Not enough history yet.";
-  return `Working ${Math.max(0, Math.min(100, number)).toFixed(number >= 99 ? 1 : 0)}% of the time.`;
+  const bounded = Math.max(0, Math.min(100, number));
+  if (bounded === 0) return "Has not worked during this period.";
+  const rounded = bounded >= 99.95 ? "100" : bounded.toFixed(1).replace(/\.0$/, "");
+  return `Working ${rounded}% of the time.`;
 }
 
 function relativeTime(value) {
@@ -2338,11 +2351,17 @@ function overviewMetric(label, value, type = "metric") {
   const status = normalizeStatus(value);
   const statusish = type === "status";
   const showValue = !statusish || statusValueNeedsText(value);
+  const displayValue = statusish ? displayLabel(value) : value;
   return node("span", { class: `overview-metric${statusish ? ` overview-metric-status ${status}` : ""}` },
     statusish ? statusIndicator(value, status, "status-dot-only") : null,
     node("span", { text: label }),
-    showValue ? node("strong", { text: value }) : null,
+    showValue ? node("strong", { text: displayValue }) : null,
   );
+}
+
+function displayLabel(value) {
+  const text = String(value || "").trim().replaceAll("_", " ");
+  return text.replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function statusListRow(id, label, value, note) {
@@ -2444,13 +2463,13 @@ function renderIncidentSummaryRow(incident) {
     incident.id || incident.type,
     incident.affected_services?.length ? `Affected: ${incident.affected_services.join(", ")}` : "",
     incident.evidence?.length ? incident.evidence[0] : "",
-  ].filter(Boolean).join(" - ");
+  ].filter(Boolean);
   return node("article", { class: "incident-card incident-row" },
     node("header", {},
       node("h3", { text: incident.summary || incident.type }),
       node("span", { class: `severity ${incident.severity || "none"}`, text: incident.severity || "none" }),
     ),
-    details ? node("p", { class: "muted", text: details }) : null,
+    details.length ? node("p", { class: "muted incident-row-meta" }, details.map((detail) => node("span", { text: detail }))) : null,
   );
 }
 
@@ -2755,7 +2774,7 @@ async function savePreferenceDirect(appID, options = {}) {
     await refresh();
     return true;
   } catch (error) {
-    showNotice(error.message, "error");
+    showNotice(compactSurfaceErrorMessage(error, "That notification preference could not be saved. Try again."), "error");
     return false;
   }
 }
@@ -2855,7 +2874,7 @@ async function runDiagnosis(question, output, options = {}) {
 }
 
 function renderAgentPlanPrompt(plan) {
-  const requiresApproval = !!plan.requires_admin_approval;
+  const requiresApproval = !!plan.requires_admin_approval && !plan.outcome && !plan.auto_executed;
   const statusText = agentPlanStatusText(plan);
   const statusTone = agentPlanStatusTone(plan);
   const targetText = agentPlanTargetText(plan);
@@ -2877,7 +2896,7 @@ function renderAgentPlanPrompt(plan) {
       node("button", {
         type: "button",
         class: "command",
-        "data-glyph": "?",
+        "data-glyph": "v",
         onclick: () => openAgentApprovalDialog(plan),
         text: "Open approval",
       }),
@@ -3005,8 +3024,9 @@ async function runArrayStartAction(plan, button = null) {
     }
     await refresh();
   } catch (error) {
-    markAgentRepairProgress(plan, "failed", error.message || "NoobBoard could not start the array.");
-    showNotice(error.message, "error");
+    const message = compactSurfaceErrorMessage(error, "NoobBoard could not start storage. Check the server status and try again.");
+    markAgentRepairProgress(plan, "failed", message);
+    showNotice(message, "error");
     if (button?.isConnected) {
       button.disabled = false;
       button.setAttribute("aria-disabled", "false");
@@ -3037,7 +3057,7 @@ async function requestAdminRepair(plan, diagnosis = {}, button = null) {
     if (button) button.textContent = "Sent";
     refreshCompactRepairStatus();
   } catch (error) {
-    showNotice(error.message, "error");
+    showNotice(compactSurfaceErrorMessage(error, "The request could not be sent to the admin. Try again."), "error");
     if (button) {
       button.disabled = false;
       button.textContent = original;
@@ -3412,13 +3432,14 @@ async function submitAgentApproval(plan, choice, button) {
       closeAgentApprovalDialog();
     }
   } catch (error) {
-    if (allowed) markAgentRepairProgress(plan, "failed", error.message || "NoobBoard could not run the approved fix.");
+    const message = hasAdminSurface() ? error.message : compactSurfaceErrorMessage(error, "NoobBoard could not run the approved fix. Check again and retry.");
+    if (allowed) markAgentRepairProgress(plan, "failed", message);
     if (dialog?.statusNode?.isConnected) {
       dialog.dialog?.classList.remove("is-running");
       dialog.statusNode.dataset.tone = "bad";
-      dialog.statusNode.textContent = error.message || "NoobBoard could not run the approved fix.";
+      dialog.statusNode.textContent = message;
     }
-    showNotice(error.message, "error");
+    showNotice(message, "error");
   } finally {
     if (button?.isConnected) {
       button.disabled = false;
@@ -3482,7 +3503,7 @@ function appendAgentRepairOutcome(outcome, plan = null) {
   prompt.classList.add("agent-plan-active");
   prompt.querySelector(".agent-repair-progress")?.remove();
   prompt.querySelector(".agent-repair-outcome")?.remove();
-  setAgentPlanActionsDisabled(prompt, true);
+  prompt.querySelector(".agent-plan-actions")?.remove();
   setAgentPlanPromptStatus(prompt, outcome?.recovered ? "Fixed" : outcome?.verified ? "Still down" : "Sent", outcome?.recovered ? "state-ok" : "state-warn");
   prompt.append(renderAgentRepairOutcome(outcome));
   focusAgentPlanPrompt(prompt);
@@ -3503,7 +3524,7 @@ function renderAgentRepairOutcome(outcome) {
   const message = cleanChatText(outcome?.message) || (verified ? "Repair verification completed." : "Repair was sent, but verification did not complete.");
   return node("div", { class: `agent-repair-outcome ${recovered ? "recovered" : verified ? "unresolved" : "unverified"}` },
     node("strong", { text: recovered ? "Recovered" : verified ? "Still needs attention" : "Verification incomplete" }),
-    node("span", { text: `${before} -> ${after}` }),
+    node("span", { text: `${before} \u2192 ${after}` }),
     node("small", { text: message }),
   );
 }
@@ -3578,7 +3599,7 @@ async function notifyAdmin(message) {
     });
     showNotice("Admin notification queued.");
   } catch (error) {
-    showNotice(error.message, "error");
+    showNotice(compactSurfaceErrorMessage(error, "The admin could not be notified. Try again."), "error");
   }
 }
 
@@ -3618,7 +3639,7 @@ async function loadUserRepairRequests(options = {}) {
     if (options.render !== false) refreshCompactRepairStatus();
   } catch (error) {
     state.userRepairRequests = [];
-    if (!options.quiet) showNotice(error.message, "error");
+    if (!options.quiet) showNotice(compactSurfaceErrorMessage(error, "Repair requests could not be loaded. Try again."), "error");
   }
 }
 
@@ -4323,19 +4344,33 @@ function renderSettingsCard(item, data) {
 
 function settingsCard(item, body, save) {
   const status = node("span", { class: "settings-save-state muted", "aria-live": "polite" });
+  const footer = node("footer", { class: "settings-footer" });
   const saveButton = save ? node("button", {
     type: "button",
     class: "primary command",
     "data-glyph": "v",
-    onclick: () => save(status),
+    onclick: async () => {
+      const saved = await save(status);
+      if (saved !== undefined) footer.classList.remove("is-dirty");
+    },
     text: "Save",
   }) : null;
+  if (save) {
+    footer.append(status, saveButton);
+    const markDirty = () => {
+      footer.classList.add("is-dirty");
+      status.textContent = "Unsaved changes";
+      status.dataset.tone = "info";
+    };
+    body.addEventListener("input", markDirty);
+    body.addEventListener("change", markDirty);
+  }
   return node("article", { class: "settings-card settings-section", "data-settings-section": item.section },
     node("header", {},
       node("h3", { text: item.title }),
     ),
+    save ? footer : null,
     body,
-    save ? node("footer", { class: "settings-footer" }, saveButton, status) : null,
   );
 }
 
@@ -4619,6 +4654,7 @@ function renderLLMSettings(item, data) {
     ),
     clearAnthropic.element,
   );
+  const providerInactive = node("p", { class: "settings-provider-inactive", role: "status", text: "Diagnosis is inactive until a provider is selected. You can configure the options below before enabling it." });
   const syncLLMVisibility = () => {
     const selectedProvider = provider.input.value;
     const method = authChoices.find((choice) => choice.input.checked)?.input.value || "api_key";
@@ -4629,6 +4665,7 @@ function renderLLMSettings(item, data) {
     chatGPTModel.element.hidden = method === "api_key";
     browserMessage.hidden = selectedProvider !== "openai" || method !== "chatgpt_browser" || !browserMessage.textContent;
     headlessMessage.hidden = selectedProvider !== "openai" || method !== "chatgpt_headless";
+    providerInactive.hidden = selectedProvider !== "disabled";
     for (const choice of authChoices) choice.element.classList.toggle("selected", choice.input.checked);
   };
   provider.input.addEventListener("change", syncLLMVisibility);
@@ -4638,6 +4675,7 @@ function renderLLMSettings(item, data) {
       node("h4", { text: "Diagnosis provider" }),
       node("div", { class: "settings-field-grid" }, provider.element),
       node("div", { class: "settings-toggle-grid" }, enabled.element),
+      providerInactive,
     ),
     openAISection,
     anthropicSection,
@@ -4740,8 +4778,8 @@ function renderLLMAgentReadiness(readiness, options = {}) {
     node("div", { class: "settings-status-list" },
       settingsStatusRow("Read-only live tools", activeText, readiness.admin_tools_enabled ? "available" : "locked", readOnlyNames || "No read-only tools are registered."),
       settingsStatusRow("Approval popup", readiness.agent_control_enabled ? "Ready" : "Off", readiness.agent_control_enabled ? "available" : "locked", readiness.agent_control_enabled ? agentRepairLimitDetail(readiness) : "Turn on admin-approved app fixes before chat can ask to change an app."),
-      settingsStatusRow("Safety reviewer", autoReview.enabled ? "Available" : agentModeStatusText(autoReview.status), autoReview.status || "locked", autoReviewDetail(reference)),
-      settingsStatusRow("Chat auto-fix", agentModeStatusText(autoAction.status), autoAction.status || "locked", autoActionDetail(autoAction, readiness)),
+      settingsStatusRow("Safety reviewer", autoReview.enabled ? "Available" : "Off", autoReview.enabled ? (autoReview.status || "available") : "locked", autoReviewDetail(reference)),
+      settingsStatusRow("Chat auto-fix", autoAction.enabled ? agentModeStatusText(autoAction.status) : "Off", autoAction.enabled ? (autoAction.status || "available") : "locked", autoActionDetail(autoAction, readiness)),
     ),
     node("p", { class: "muted agent-reference-note", text: reference.design_finding || "Future repair actions require schema validation, audit policy, and explicit approval." }),
   );
@@ -5272,7 +5310,7 @@ function policyMeta(name) {
 }
 
 function policyDisplayName(name) {
-  return String(name || "").replaceAll("_", " ");
+  return String(name || "").replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function uniqueOptions(options) {
