@@ -50,37 +50,53 @@ verbatim). General users should never see transport-level wording.
 - Accept: no HTTP-status words (`Not Found`, `Forbidden`, `Conflict`, …) in any
   compact-surface toast; add to the banned-term list for the compact audit.
 
-### 4. Two side-nav items can look active at once
-On `desktopQueue`, **Diagnostics** still shows the active accent bar while
-**Review Queue** is the open tab (also highlighted). Either the `active` class
-isn't cleared on programmatic navigation or a stale `:focus-visible` style
-mimics it.
+### 4. Focused side-nav item looks active after navigation
+On `desktopQueue`, **Diagnostics** retains keyboard focus while **Review Queue**
+is the active tab. `setActiveTab` correctly leaves only one `.active` class, but
+the focused button's left border and background are too similar to the active
+state, so both appear selected.
 
-- Fix: verify single-active in `setTab`/nav click handling in `app.js`; make
-  focus style visually distinct from active (ring vs filled).
-- Accept: exactly one `.tabs button.active` after any navigation path.
+- Fix: make `.tabs button:focus-visible` visually distinct from
+  `.tabs button.active` (outline/ring for focus; accent bar and fill for active).
+- Accept: exactly one `.tabs button.active` after any navigation path, and a
+  separately focused tab cannot be mistaken for the selected tab.
 
-### 5. Stray empty row in the compact drawer
+### 5. Stacked dividers create a stray row in the compact drawer
 `mobileUserDrawer`: between the notification toggle and the ACCOUNT section
-there's an empty gap bounded by two hairlines — an empty container still
-rendering its borders.
+there is an empty-looking band bounded by two hairlines. It is not an empty DOM
+container: `.user-notification-list` supplies a bottom border while the next
+`.user-settings-section` adds margin, padding, and another top border.
 
-- Fix: hide the container when it has no rows (`:empty` rule or conditional
-  render in `app.js`).
+- Fix: use one section divider between the notification list and Account;
+  remove the redundant list bottom border or the following section top border.
 - Accept: no double hairline / blank band in the drawer at any state.
 
 ### 6. Partial-width divider under "Auto-fix if safe"
 `mobileUserChatKeyboard`: the hairline under the auto-fix checkbox stops
 mid-panel instead of spanning like the other separators.
 
-- Fix: make the divider span the composer width (or remove it — the checkbox
-  row reads fine without it).
+- Cause: `.chat-auto-repair` is `inline-flex` with `justify-self: start`, but the
+  keyboard layout applies `border-bottom` directly to that label.
+- Fix: stretch the row to the composer width, or remove the divider — the
+  checkbox row reads fine without it.
+
+### 7. Restart is disabled based on app state instead of role permission
+`mobileUserAppDetail` disables **Restart** when Docker reports the app as
+exited (`userAppControlDisabledReason` returns "Stopped; use Start"). This
+conflicts with the requested compact-control rule: Restart should be available
+whenever Start/Stop controls are enabled for the user's role and app. The
+server can map a restart of an exited app to the supported start/restart path.
+
+- Fix: gate Restart by role/app permission and in-flight state, not by current
+  running state. Keep Start/Stop state-aware.
+- Accept: an opted-in stopped app exposes an actionable Restart; disabling the
+  compact controls for the role/app disables all three actions consistently.
 
 ---
 
 ## P2 — consistency and affordance
 
-### 7. Mobile admin topbar actions are bare, scattered glyphs
+### 8. Mobile admin topbar actions are bare, scattered glyphs
 `mobileOverview` (admin): Refresh/Diagnostics/Sign-out collapse to borderless
 `↺ ? ✕` glyphs with uneven gaps. They've lost button chrome entirely, the
 spacing looks accidental, and **✕ reads as "close", not "sign out"** — a
@@ -92,27 +108,28 @@ destructive-feeling mystery button.
 - Accept: topbar actions visually consistent with desktop, evenly spaced, no
   bare ✕ for sign-out.
 
-### 8. App-detail action row: three buttons, three different greys
+### 9. App-detail action row: three buttons, three different greys
 `mobileUserAppDetail`: Start (light, enabled), Restart (mid-grey), Stop (dark)
 — three distinct visual weights where only enabled/disabled exist. Mid-grey
 Restart looks half-enabled.
 
-- Fix: one shared disabled treatment (same bg + reduced opacity). Better:
-  don't show non-applicable actions at all — a stopped app shows **Start** only,
-  a running app shows **Restart / Stop** (matches the server rule that stopped
-  apps must use Start).
+- Fix: after correcting Restart availability in finding 7, use one shared
+  disabled treatment for state-inapplicable Start/Stop buttons (same background
+  and opacity), or hide only those state-inapplicable actions.
 - Accept: at most one visual style for disabled; or non-applicable actions
   hidden.
 
-### 9. Desktop apps inventory: Docker controls are unlabeled bare icons
+### 10. Desktop apps inventory: Docker controls are visually unlabeled
 `desktopApps`: per-app controls render as tiny `▶ ↺ ■` glyphs with no button
-boundary, no labels/tooltips, faint disabled distinction — inconsistent with
-the adjacent bordered "Image" button, and small targets even for mouse use.
+boundary and faint disabled distinction — inconsistent with the adjacent
+bordered "Image" button, and small targets even for mouse use. The buttons do
+have `title` and `aria-label` attributes, but native hover tooltips do not fix
+the weak visual affordance and are unavailable on touch.
 
 - Fix: same `.command` chrome as everywhere else (border + glyph + short label
   or `title` tooltip); one disabled treatment.
 
-### 10. Settings: two different toggle paradigms on one page
+### 11. Settings: two different toggle paradigms on one page
 `desktopSettings` (LLM): top half uses full-width checkbox rows ("Use LLM
 diagnosis", "Allow admin-approved app fixes"); the WHO CAN ASK section uses
 right-aligned "Enabled" checkbox chips. Same meaning, two looks.
@@ -121,33 +138,32 @@ right-aligned "Enabled" checkbox chips. Same meaning, two looks.
   scannable lists; the full-width row works for top-level switches — pick one
   and apply to both groups).
 
-### 11. Status pills should state, not alarm
+### 12. Status pills should state, not alarm
 "Chat auto-fix — Off…" carries an orange **NEEDS REVIEW** pill; reads as an
 alert when the real state is just "Off". Pills should describe state
 (`On` / `Off` / `Ready`), with warn colors reserved for misconfiguration.
 
-### 12. Contradictory LLM controls visible simultaneously
-Provider = **Disabled** while "Use LLM diagnosis" is checked and the whole
-fixes/reviewer stack below is fully interactive. Dim/disable dependent controls
-when the provider is disabled, with one line of copy ("Select a provider to
-enable diagnosis features").
+### 13. Disabled provider does not clearly communicate effective state
+Provider = **Disabled** while "Use LLM diagnosis" is checked and readiness rows
+below still show configured capabilities. This is confusing, but the controls
+should remain editable so an admin can configure them before selecting a
+provider.
 
-### 13. Disclosures have no affordance
+- Fix: show one clear inactive-state callout ("Diagnosis is inactive until a
+  provider is selected") and distinguish configured settings from currently
+  available runtime features. Do not blanket-disable the configuration form.
+
+### 14. Disclosures have no affordance
 "Technical details" (compact home), "Advanced context and redaction",
 "Advanced request timing" (settings) render as plain bold text/boxes — nothing
 signals tappable. Add a chevron marker (rotate on open) to all
 `details > summary` styles.
 
-### 14. Live Status metric pairs are ragged
+### 15. Live Status metric pairs are ragged
 Overview rows: `Incidents 1   Facts 1`, `Total 1  Offline 1  Degraded 0`,
 `● Array  started` — uneven gaps, and the lowercase `started` value reads like
 a stray word. Render each pair as a small label:value chip (or right-aligned
 tabular columns), and pill-style the array state (`Started`).
-
-### 15. Status indicator shape varies without meaning
-OVERALL/APPS use red squares; SERVER/ROUTER and all inline chips use dots. If
-square ≠ dot carries no semantics, use dots everywhere; if it does (aggregate
-vs check), apply it consistently (SERVER/ROUTER are aggregates too).
 
 ### 16. Post-fix "Open approval" ghost button
 `desktopAgentRepair`: after a successful auto-fix, a disabled "Open approval"
@@ -160,6 +176,13 @@ Compact detail pages repeat the title: topbar says "Emby" / "Internet details"
 and the body header repeats it immediately below. Keep the body header (it has
 the icon + status pill) and set the topbar to a generic "Details", or drop the
 body duplicate.
+
+### Intentional behavior to preserve
+
+Status-indicator shapes are an accessibility feature, not an inconsistency:
+online is circular, offline is square, degraded/warning is triangular, and
+unknown is outlined. Text accompanies the shape. Do not normalize these to
+dots during the visual cleanup.
 
 ---
 
@@ -185,13 +208,13 @@ body duplicate.
 
 ## Suggested PR slices
 
-1. **P1 fixes** (#1–#6): CSS + small JS; add the two new harness asserts
+1. **P1 fixes** (#1–#7): CSS + small JS; add the two new harness asserts
    (detail-row overflow at desktop width, toast/title intersection).
-2. **Button chrome pass** (#7–#9): topbar mobile actions, app-detail
+2. **Button chrome pass** (#8–#10): topbar mobile actions, app-detail
    action row, apps-inventory controls — one consistent `.command` treatment +
    disabled rule.
-3. **Settings coherence** (#10–#13, #16, #20–#21).
-4. **Status display polish** (#14–#15, #17–#19, #22–#23).
+3. **Settings coherence** (#11–#14, #16, #20–#21).
+4. **Status display polish** (#15, #17–#19, #22–#23).
 
 Each slice keeps `go test ./...` + `cmd/visualcheck` green; slices 1–2 are the
 visible-quality wins and should land first.
