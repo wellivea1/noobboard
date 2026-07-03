@@ -404,16 +404,14 @@ the repair capability changes.
 
 ## Workstream D — Admin panel polish
 
-**Status:** `in-progress` (several `docs/ux-admin.md` items shipped — audit-log table,
-horizontal settings tabs, mobile header/toast fixes, control chrome via the June 2026 GUI
-review. Still open: floating-chat overlap, consolidated diagnosis entry points, contextual
-page subtitles, sticky settings save — see `docs/strategy-review-2026-06.md` Part 2.)
+**Status:** `in-progress` (several `docs/ux-admin.md` items shipped: audit-log table,
+horizontal settings tabs, mobile header/toast fixes, consolidated diagnosis entry points,
+assistant overlap fixes, and Settings dirty-state protection.)
 **Goal:** Targeted fixes to the admin surface (port `8787`). The admin panel is allowed to be
-dense/technical, so this is a punch-list, not a redesign. Top items from the review: the
-floating chat overlaps interactive controls; three overlapping diagnosis entry points; the
-Admin tab is raw-JSON (turn the audit log into a filterable table); the overall-status string
-is repeated as a subtitle on every tab; mobile header crowding/truncation. Full prioritized
-findings, acceptance criteria, harness additions, and file pointers are in **`docs/ux-admin.md`**.
+dense/technical, so this is a punch-list, not a redesign. Keep future work focused on
+clearer page context, discoverable review-queue state, easier settings search, and reducing
+remaining mobile crowding. Baseline prioritized findings, acceptance criteria, harness
+additions, and file pointers are in **`docs/ux-admin.md`**.
 
 ---
 
