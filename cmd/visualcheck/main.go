@@ -90,10 +90,14 @@ type flags struct {
 	AuditTableRowCount          int      `json:"auditTableRowCount,omitempty"`
 	RawSnapshotCollapsed        bool     `json:"rawSnapshotCollapsed,omitempty"`
 	AssistantOverlapCount       int      `json:"assistantOverlapCount,omitempty"`
+	AssistantDockVisible        bool     `json:"assistantDockVisible,omitempty"`
+	AssistantPanelUsable        bool     `json:"assistantPanelUsable,omitempty"`
 	SettingsEditorCount         int      `json:"settingsEditorCount,omitempty"`
 	SettingsControlCount        int      `json:"settingsControlCount,omitempty"`
 	SettingsMenuButtonCount     int      `json:"settingsMenuButtonCount,omitempty"`
 	VisibleSettingsSections     int      `json:"visibleSettingsSections,omitempty"`
+	SettingsDirtyPromptBlocked  bool     `json:"settingsDirtyPromptBlocked,omitempty"`
+	SettingsDirtyCleared        bool     `json:"settingsDirtyCleared,omitempty"`
 	AgentRepairToggleCount      int      `json:"agentRepairToggleCount,omitempty"`
 	AgentReadinessLimitVisible  bool     `json:"agentReadinessLimitVisible,omitempty"`
 	AgentApprovalDialogVisible  bool     `json:"agentApprovalDialogVisible,omitempty"`
@@ -218,6 +222,9 @@ func run(opts options) (visualResult, error) {
 	}
 	if err := os.WriteFile(result.Artifacts["config"], []byte(strings.Join([]string{
 		"llm:",
+		"  provider: openai",
+		"  openai_auth_method: api_key",
+		"  openai_api_key: sk-visual-local",
 		"  agent_control_enabled: true",
 		"app_catalog:",
 		"  general_user_restarts_enabled: true",
@@ -920,6 +927,12 @@ func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, q
 	if overview.AssistantOverlapCount > 0 || settings.AssistantOverlapCount > 0 || mobileSettings.AssistantOverlapCount > 0 {
 		failures = append(failures, "assistant launcher overlapped interactive controls")
 	}
+	if !overview.AssistantDockVisible || !settings.AssistantDockVisible {
+		failures = append(failures, "assistant launcher was not available with a configured diagnosis provider")
+	}
+	if !overview.AssistantPanelUsable {
+		failures = append(failures, "assistant popout was too narrow or off-screen")
+	}
 	if apps.BodyHorizontalOverflow {
 		failures = append(failures, "apps tab horizontal overflow detected")
 	}
@@ -937,6 +950,9 @@ func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, q
 	}
 	if settings.VisibleSettingsSections != 1 {
 		failures = append(failures, "settings should show exactly one active submenu")
+	}
+	if !settings.SettingsDirtyPromptBlocked || !settings.SettingsDirtyCleared || !mobileSettings.SettingsDirtyPromptBlocked || !mobileSettings.SettingsDirtyCleared {
+		failures = append(failures, "settings dirty-state navigation guard failed")
 	}
 	if settings.AgentRepairToggleCount == 0 {
 		failures = append(failures, "app repair opt-in toggle did not render in settings")
@@ -1325,6 +1341,17 @@ const loginExpression = `(async () => {
   const overviewRearrangeReady = rearrange?.getAttribute('aria-pressed') === 'true' &&
     [...document.querySelectorAll('#overview-cards .overview-card')].every((card) => card.getAttribute('draggable') === 'true');
   rearrange?.click();
+  const assistantDock = document.querySelector('#assistant-dock');
+  const assistantPanel = document.querySelector('#assistant-panel');
+  let assistantPanelUsable = true;
+  if (assistantDock && assistantPanel && visibleElement(assistantDock)) {
+    const wasHidden = assistantPanel.hidden;
+    assistantPanel.hidden = false;
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    const panelRect = assistantPanel.getBoundingClientRect();
+    assistantPanelUsable = panelRect.width >= 320 && panelRect.left >= 0 && panelRect.right <= window.innerWidth + 1;
+    assistantPanel.hidden = wasHidden;
+  }
   const buttonTextOverflow = hasButtonTextOverflow();
   return {
     dashboardVisible: visible(),
@@ -1335,6 +1362,9 @@ const loginExpression = `(async () => {
     overviewMoveButtonCount: document.querySelectorAll('.overview-move').length,
     overviewRearrangeReady,
     sourcePillText: document.querySelector('#source-pill')?.textContent || '',
+    assistantDockVisible: !!assistantDock && visibleElement(assistantDock),
+    assistantPanelUsable,
+    assistantOverlapCount: assistantControlOverlapCount(),
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow,
     elementBoundsOverflow: componentBoundsOverflow(),
@@ -2002,6 +2032,7 @@ const auditMobileShellExpression = `async function auditMobileShell() {
     userMenuToggleVisible: !!document.querySelector('#user-menu-toggle') && visibleElement(document.querySelector('#user-menu-toggle')),
     sourcePillText: document.querySelector('#source-pill')?.textContent || '',
     detailSectionCount: document.querySelectorAll('.detail-section').length,
+    assistantDockVisible: !!document.querySelector('#assistant-dock') && visibleElement(document.querySelector('#assistant-dock')),
     assistantOverlapCount: assistantControlOverlapCount(),
     elementBoundsOverflow: componentBoundsOverflow(),
     elementBoundsOffender: componentBoundsOffender()
@@ -2132,6 +2163,31 @@ const settingsExpression = `(async () => {
     .filter((element) => !element.hidden && getComputedStyle(element).display !== 'none').length;
   const settingsControlCount = document.querySelectorAll('.settings-card input,.settings-card select,.settings-card button').length;
   const readinessText = document.querySelector('.agent-readiness')?.textContent || '';
+  const dirtyControl = document.querySelector('#tab-settings .settings-section:not([hidden]) select');
+  let settingsDirtyPromptBlocked = false;
+  let settingsDirtyCleared = false;
+  if (dirtyControl) {
+    const originalConfirm = window.confirm;
+    const originalValue = dirtyControl.value;
+    const alternate = [...dirtyControl.options].map((option) => option.value).find((value) => value !== originalValue);
+    if (alternate) {
+      dirtyControl.value = alternate;
+      dirtyControl.dispatchEvent(new Event('change', { bubbles: true }));
+      window.confirm = () => false;
+      document.querySelector('[data-tab="overview"]')?.click();
+      settingsDirtyPromptBlocked = document.querySelector('#tab-settings')?.hidden === false;
+      window.confirm = () => true;
+      dirtyControl.value = originalValue;
+      dirtyControl.dispatchEvent(new Event('change', { bubbles: true }));
+      document.querySelector('#settings-refresh')?.click();
+      const reloadStarted = Date.now();
+      while (document.querySelector('#settings-grid .settings-footer.is-dirty') && Date.now() - reloadStarted < 5000) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      settingsDirtyCleared = !document.querySelector('#settings-grid .settings-footer.is-dirty');
+    }
+    window.confirm = originalConfirm;
+  }
   const buttonTextOverflow = hasButtonTextOverflow();
   const mobileAudit = await auditMobileShell();
   return {
@@ -2141,6 +2197,8 @@ const settingsExpression = `(async () => {
     settingsControlCount,
     settingsMenuButtonCount: document.querySelectorAll('#settings-menu [data-settings-section]').length,
     visibleSettingsSections,
+    settingsDirtyPromptBlocked,
+    settingsDirtyCleared,
     agentRepairToggleCount,
     agentReadinessLimitVisible: readinessText.includes('1 per app') && readinessText.includes('5 total'),
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,

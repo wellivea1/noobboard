@@ -3838,6 +3838,37 @@ body.compact-view .user-technical-details[open] summary::after {
   display: none !important;
 }
 
+@media (min-width: 861px) {
+  body.admin-view .assistant-dock {
+    right: auto;
+    bottom: calc(var(--space-6) + var(--safe-bottom) + var(--space-3));
+    left: max(calc(var(--space-5) + var(--space-3)), calc(var(--safe-left) + var(--space-3)));
+    z-index: 22;
+    width: calc(var(--nav-width) - (var(--space-3) * 2));
+  }
+
+  body.admin-view .assistant-toggle {
+    min-height: 44px;
+    padding: 0 12px;
+    border-radius: 6px;
+    font-size: 0.86rem;
+    font-weight: 800;
+  }
+
+  body.admin-view .assistant-panel {
+    position: absolute;
+    bottom: 0;
+    left: calc(100% + var(--space-3));
+    width: min(440px, calc(100vw - var(--nav-width) - var(--space-8) - var(--safe-left) - var(--safe-right)));
+  }
+}
+
+@media (max-width: 860px) {
+  body.admin-view .assistant-dock {
+    display: none !important;
+  }
+}
+
 body.admin-view.assistant-available .dashboard {
   padding-bottom: calc(84px + var(--safe-bottom));
 }

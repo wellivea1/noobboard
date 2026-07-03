@@ -14,6 +14,7 @@ const state = {
   roleApps: [],
   roleUsers: [],
   roleUsersOriginal: [],
+  roleDirty: false,
   selectedRole: "",
   selectedUser: "",
   auditEntries: [],
@@ -723,6 +724,9 @@ function setActiveTab(tabName) {
     setCompactView(state.userView || "status");
     return;
   }
+  if (state.activeTab === "settings" && tabName !== "settings" && settingsHasUnsavedChanges() && !confirm("Discard unsaved settings changes?")) {
+    return;
+  }
   state.activeTab = tabName;
   document.querySelectorAll("#tabs button").forEach((button) => {
     button.classList.toggle("active", button.dataset.tab === tabName);
@@ -750,7 +754,8 @@ function setActiveTab(tabName) {
   if (tabName === "admin") {
     loadAudit();
   }
-  if (tabName === "settings") loadSettings();
+  // Re-entering the tab must not silently rebuild the forms over unsaved edits.
+  if (tabName === "settings" && !settingsHasUnsavedChanges()) loadSettings();
 }
 
 function setCompactView(view) {
@@ -3762,15 +3767,37 @@ async function loadSettings() {
   await loadRoleSettings();
   const cards = [];
   for (const item of SETTINGS_ENDPOINTS) {
-    try {
-      const data = await api(item.path);
-      cards.push(renderSettingsCard(item, data));
-    } catch (error) {
-      cards.push(node("article", { class: "settings-card settings-section", "data-settings-section": item.section }, node("h3", { text: item.title }), node("p", { class: "muted", text: error.message })));
-    }
+    cards.push(await buildSettingsCard(item));
   }
   $("settings-grid").replaceChildren(...cards);
   setSettingsSection(state.settingsSection);
+}
+
+async function buildSettingsCard(item) {
+  try {
+    const data = await api(item.path);
+    return renderSettingsCard(item, data);
+  } catch (error) {
+    return node("article", { class: "settings-card settings-section", "data-settings-section": item.section }, node("h3", { text: item.title }), node("p", { class: "muted", text: error.message }));
+  }
+}
+
+// Rebuild only one settings card so a save (or connector login) does not
+// destroy unsaved edits sitting in the other sections.
+async function reloadSettingsSection(section) {
+  const item = SETTINGS_ENDPOINTS.find((entry) => entry.section === section);
+  const existing = document.querySelector(`#settings-grid .settings-section[data-settings-section="${section}"]`);
+  if (!item || !existing) {
+    await loadSettings();
+    return;
+  }
+  existing.replaceWith(await buildSettingsCard(item));
+  setSettingsSection(state.settingsSection);
+}
+
+function settingsHasUnsavedChanges() {
+  if (state.roleDirty) return true;
+  return !!document.querySelector("#settings-grid .settings-footer.is-dirty");
 }
 
 function setSettingsSection(section) {
@@ -3791,6 +3818,7 @@ async function loadRoleSettings() {
     state.roleApps = hydrateRoleApps(data.apps || []);
     state.roleUsers = data.users || [];
     state.roleUsersOriginal = clone(data.users || []);
+    state.roleDirty = false;
     renderRoleSettings();
   } catch (error) {
     $("role-settings").replaceChildren(node("div", { class: "empty", text: error.message }));
@@ -3968,6 +3996,7 @@ function renderRoleDetail(role, defaultRole, roles, visibility) {
             "data-glyph": "+",
             onclick: () => {
               role.hidden_app_ids = [];
+              state.roleDirty = true;
               renderRoleSettings();
             },
             text: "Show all",
@@ -3978,6 +4007,7 @@ function renderRoleDetail(role, defaultRole, roles, visibility) {
             "data-glyph": "x",
             onclick: () => {
               role.hidden_app_ids = state.roleApps.map((app) => String(app.app_id || app.container_name || app.display_name).toLowerCase()).filter(Boolean).sort();
+              state.roleDirty = true;
               renderRoleSettings();
             },
             text: "Hide all",
@@ -4960,7 +4990,7 @@ async function waitForChatGPTConnection(pollID, message, dialog = null) {
       message.textContent = "OpenAI is connected.";
       renderOpenAIAuthSuccess(dialog);
       showNotice("OpenAI connected.");
-      await loadSettings();
+      await reloadSettingsSection("llm");
       return;
     }
   }
@@ -4981,7 +5011,7 @@ async function pollOpenAIChatGPTHeadless(pollID, intervalSeconds, message, dialo
       message.textContent = "OpenAI is connected.";
       renderOpenAIAuthSuccess(dialog);
       showNotice("OpenAI connected.");
-      await loadSettings();
+      await reloadSettingsSection("llm");
       return;
     }
     if (data.interval_seconds) intervalSeconds = data.interval_seconds;
@@ -5334,7 +5364,8 @@ async function saveSettingsPayload(title, path, payload, status) {
     status.dataset.tone = "ok";
     showNotice(`${title} settings saved.`);
     await refresh();
-    await loadSettings();
+    const section = SETTINGS_ENDPOINTS.find((entry) => entry.path === path)?.section;
+    await reloadSettingsSection(section);
     return saved;
   } catch (error) {
     status.textContent = "Failed";
@@ -5514,10 +5545,23 @@ $("user-infra-detail-back").addEventListener("click", closeCompactDetail);
 $("audit-refresh").addEventListener("click", loadAudit);
 $("repair-requests-refresh").addEventListener("click", loadRepairRequests);
 $("audit-filter").addEventListener("input", renderAuditTable);
-$("settings-refresh").addEventListener("click", loadSettings);
+$("settings-refresh").addEventListener("click", () => {
+  if (settingsHasUnsavedChanges() && !confirm("Discard unsaved settings changes?")) return;
+  state.roleDirty = false;
+  loadSettings();
+});
 $("settings-menu").addEventListener("click", (event) => {
   const button = event.target.closest("[data-settings-section]");
   if (button) setSettingsSection(button.dataset.settingsSection);
+});
+// Role Access edits live in state (not a settings card), so track dirtiness here
+// for the reload guards; loadRoleSettings/save clear it on a fresh fetch.
+$("role-settings").addEventListener("input", () => { state.roleDirty = true; });
+$("role-settings").addEventListener("change", () => { state.roleDirty = true; });
+window.addEventListener("beforeunload", (event) => {
+  if (!hasAdminSurface() || !settingsHasUnsavedChanges()) return;
+  event.preventDefault();
+  event.returnValue = "";
 });
 $("overview-rearrange").addEventListener("click", () => {
   setOverviewRearrange(!state.overviewRearrange);
