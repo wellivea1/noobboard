@@ -179,7 +179,10 @@ complementary, and either can run first without breaking the other.
 
 ## Workstream B — Compact "noob" UX (redesign + easy customization)
 
-**Status:** `in-progress` (B1 spec written → `docs/ux-compact.md`; implementation not started)
+**Status:** `in-progress` (B1 redesign and B3 settings drawer are implemented and enforced by
+the `cmd/visualcheck` semantic audits — hero card, plain-language mapping, banned-term checks,
+notification opt-ins, app/infra detail pages. **B2 customization editor is not started**:
+no friendly rename, drag-and-drop ordering, icon picker, or live preview yet.)
 **Goal:** Make the compact surface genuinely usable by an extremely non-technical iPhone
 user (the redesign), and make it easy for an admin to tailor what that user sees (the
 customization editor). The redesign is the foundation; customization sits on top of it.
@@ -389,8 +392,8 @@ the repair capability changes.
 - [x] Redaction failures and invalid tool calls fail closed (no action taken).
 - [x] `docs/llm-policy.md` and `docs/security.md` updated to reflect the new capability.
 - [x] `go test ./...` and build pass for this repair slice.
-- [ ] `cmd/visualcheck` passes for the updated compact controls once Edge-based
-      visual verification is available in the local environment.
+- [x] `cmd/visualcheck` passes for the updated compact controls (Edge-based
+      verification runs locally and is green as of June 2026).
 
 ### Open questions
 - Which actions are safe enough for `auto` mode out of the box? Start with single-container
@@ -401,7 +404,10 @@ the repair capability changes.
 
 ## Workstream D — Admin panel polish
 
-**Status:** `in-progress` (review written → `docs/ux-admin.md`; implementation not started)
+**Status:** `in-progress` (several `docs/ux-admin.md` items shipped — audit-log table,
+horizontal settings tabs, mobile header/toast fixes, control chrome via the June 2026 GUI
+review. Still open: floating-chat overlap, consolidated diagnosis entry points, contextual
+page subtitles, sticky settings save — see `docs/strategy-review-2026-06.md` Part 2.)
 **Goal:** Targeted fixes to the admin surface (port `8787`). The admin panel is allowed to be
 dense/technical, so this is a punch-list, not a redesign. Top items from the review: the
 floating chat overlaps interactive controls; three overlapping diagnosis entry points; the
