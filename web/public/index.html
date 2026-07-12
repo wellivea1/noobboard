@@ -53,17 +53,13 @@
         <button id="nav-toggle" class="command nav-toggle" data-glyph="&#9776;" type="button" aria-label="Open menu" aria-controls="tabs" aria-expanded="false" data-admin-detail>Menu</button>
         <button id="user-menu-toggle" class="command nav-toggle" data-glyph="&#9776;" type="button" aria-label="Open menu" aria-haspopup="dialog" aria-controls="user-drawer" aria-expanded="false"></button>
         <div class="title-block">
-          <p class="eyebrow">NoobBoard</p>
           <h1 id="page-title">System overview</h1>
           <p id="summary">Loading current status...</p>
         </div>
         <div class="topbar-actions">
-          <span id="role-pill" class="pill">offline</span>
-          <span id="source-pill" class="pill source-pill" hidden></span>
           <button id="refresh" class="command" data-glyph="&#8635;" type="button">Refresh</button>
           <button id="quick-diagnose" class="command" data-glyph="?" type="button" data-admin-detail>Diagnostics</button>
           <button id="restore-monitors" class="command" data-glyph="+" type="button" data-admin-detail hidden>Restore monitors</button>
-          <button id="logout" class="command" data-glyph="logout" type="button" data-admin-detail>Sign out</button>
         </div>
       </header>
 
@@ -120,18 +116,30 @@
       <div id="nav-backdrop" class="nav-backdrop" hidden></div>
       <nav id="tabs" class="tabs side-nav" aria-label="Dashboard sections" data-admin-detail>
         <div class="side-nav-head">
-          <span>Sections</span>
+          <div class="side-nav-identity">
+            <img class="side-nav-logo" src="/icons/noobboard-logo.svg" alt="" width="30" height="30">
+            <span class="side-nav-wordmark">NoobBoard</span>
+          </div>
           <button id="nav-close" class="command monitor-hide" data-glyph="x" type="button" aria-label="Close menu">Close</button>
         </div>
-        <button type="button" data-tab="overview" class="active">Overview</button>
-        <button type="button" data-tab="server">Server</button>
-        <button type="button" data-tab="router">Router</button>
-        <button type="button" data-tab="apps">Apps</button>
-        <button type="button" data-tab="incidents">Incidents</button>
-        <button type="button" data-tab="diagnostics">Diagnostics</button>
-        <button type="button" data-tab="queue" data-admin-only>Review Queue</button>
-        <button type="button" data-tab="admin" data-admin-only>Admin</button>
-        <button type="button" data-tab="settings" data-admin-only>Settings</button>
+        <div class="side-nav-links">
+          <button type="button" data-tab="overview" class="active">Overview</button>
+          <button type="button" data-tab="server">Server</button>
+          <button type="button" data-tab="router">Router</button>
+          <button type="button" data-tab="apps">Apps</button>
+          <button type="button" data-tab="incidents">Incidents</button>
+          <button type="button" data-tab="diagnostics">Diagnostics</button>
+          <button type="button" data-tab="queue" data-admin-only>Review Queue</button>
+          <button type="button" data-tab="admin" data-admin-only>Admin</button>
+          <button type="button" data-tab="settings" data-admin-only>Settings</button>
+        </div>
+        <div class="side-nav-session">
+          <div class="side-nav-pills">
+            <span id="role-pill" class="pill">offline</span>
+            <span id="source-pill" class="pill source-pill" hidden></span>
+          </div>
+          <button id="logout" class="command" data-glyph="logout" type="button">Sign out</button>
+        </div>
       </nav>
 
       <section id="tab-overview" class="tab-panel" data-admin-detail>

@@ -670,23 +670,23 @@ label {
   background: rgba(0, 0, 0, 0.5);
 }
 
+/* Permanent app-shell sidebar: identity at the top, page links in the middle,
+   session context (role/source + sign out) pinned to the bottom. On mobile it
+   becomes the slide-in drawer (media query below). */
 .tabs.side-nav {
   position: fixed;
-  inset: calc(var(--space-6) + var(--safe-top)) auto calc(var(--space-6) + var(--safe-bottom)) max(var(--space-5), var(--safe-left));
+  inset: 0 auto 0 0;
   z-index: 21;
   display: flex;
   flex-direction: column;
   width: var(--nav-width);
-  padding: var(--space-3);
-  overflow-y: auto;
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  padding: calc(var(--space-4) + var(--safe-top)) var(--space-3) calc(var(--space-4) + var(--safe-bottom)) max(var(--space-3), var(--safe-left));
+  overflow: hidden;
+  border: 0 solid var(--border);
+  border-right-width: 1px;
   background: var(--surface);
-  box-shadow: var(--shadow);
   transform: none;
   transition: transform 140ms ease;
-  scrollbar-width: thin;
-  -webkit-overflow-scrolling: touch;
 }
 
 .nav-open .tabs.side-nav {
@@ -698,10 +698,71 @@ label {
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
-  padding: var(--space-2) var(--space-2) var(--space-3);
-  color: var(--muted);
+  flex: 0 0 auto;
+  margin-bottom: var(--space-3);
+  padding: var(--space-2) var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.side-nav-identity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.side-nav-logo {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-alt);
+}
+
+.side-nav-wordmark {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 1.02rem;
   font-weight: 800;
-  text-transform: uppercase;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.side-nav-links {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
+}
+
+.side-nav-session {
+  display: grid;
+  gap: var(--space-3);
+  flex: 0 0 auto;
+  margin-top: var(--space-3);
+  padding: var(--space-4) var(--space-2) 0;
+  border-top: 1px solid var(--border-soft);
+}
+
+.side-nav-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.side-nav-session button.command {
+  justify-content: center;
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid var(--border-soft);
+  border-radius: 5px;
 }
 
 .tabs button,
@@ -3839,12 +3900,18 @@ body.compact-view .user-technical-details[open] summary::after {
 }
 
 @media (min-width: 861px) {
+  /* The launcher renders as the bottom-most item of the permanent sidebar; the
+     sidebar reserves space for it below the session zone (rule further down). */
   body.admin-view .assistant-dock {
     right: auto;
-    bottom: calc(var(--space-6) + var(--safe-bottom) + var(--space-3));
-    left: max(calc(var(--space-5) + var(--space-3)), calc(var(--safe-left) + var(--space-3)));
+    bottom: calc(var(--space-4) + var(--safe-bottom));
+    left: max(var(--space-3), var(--safe-left));
     z-index: 22;
-    width: calc(var(--nav-width) - (var(--space-3) * 2));
+    width: calc(var(--nav-width) - var(--space-3) - max(var(--space-3), var(--safe-left)) - 1px);
+  }
+
+  body.admin-view.assistant-available .tabs.side-nav {
+    padding-bottom: calc(var(--space-4) + var(--safe-bottom) + 64px);
   }
 
   body.admin-view .assistant-toggle {
@@ -3930,7 +3997,6 @@ body.compact-view .title-block {
   gap: 3px;
 }
 
-body.compact-view .title-block .eyebrow,
 body.compact-view #role-pill,
 body.compact-view #source-pill {
   display: none;
@@ -4297,11 +4363,8 @@ body.compact-view .assistant-toggle {
   }
 
   .tabs.side-nav {
-    inset: 0 auto 0 0;
     width: min(320px, calc(100vw - 54px));
-    padding: calc(var(--space-4) + var(--safe-top)) var(--space-3) calc(var(--space-4) + var(--safe-bottom));
-    border-width: 0 1px 0 0;
-    border-radius: 0;
+    box-shadow: var(--shadow);
     transform: translateX(-104%);
   }
 
@@ -4472,10 +4535,6 @@ body.compact-view .assistant-toggle {
     padding-bottom: 6px;
   }
 
-  .title-block .eyebrow {
-    display: none;
-  }
-
   .nav-toggle {
     align-self: start;
     margin-top: 0;
@@ -4517,24 +4576,6 @@ body.compact-view .assistant-toggle {
 
   .topbar-actions button.command::before {
     margin: 0;
-  }
-
-  .topbar-actions .pill {
-    flex: 0 0 auto;
-    justify-self: start;
-    min-height: 24px;
-    padding: 0;
-    font-size: 0.74rem;
-  }
-
-  .topbar-actions #role-pill,
-  .topbar-actions #source-pill {
-    max-width: 100%;
-  }
-
-  .topbar-actions #source-pill {
-    justify-self: start;
-    max-width: 100%;
   }
 
   .topbar-actions #restore-monitors {
