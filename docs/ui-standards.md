@@ -1,0 +1,346 @@
+# NoobBoard UI standards
+
+This is the design system. Read it before adding, moving, or restyling anything
+in `web/public/`. It exists because the previous UI was not badly designed so
+much as *undesigned*: it accreted one component at a time, each locally
+reasonable, with no system tying them together, and every visual decision was
+made twice — once per surface — and drifted.
+
+The rules below are deliberately narrow. A system that permits three ways to
+show a state will be used in three ways.
+
+---
+
+## 0. Where the rules live
+
+| Layer | File | What it decides |
+|---|---|---|
+| Tokens | `web/public/styles.css` (`:root`) | Every colour, size, radius, duration |
+| Primitives | `web/public/styles.css` | Container roles, status label, controls |
+| Composition | `web/public/index.html` | Page skeletons, landmarks |
+| Behaviour | `web/public/app.js` | Rendering, filters, disclosure |
+| Enforcement | `cmd/visualcheck/main.go` | Automated audits of the rules below |
+
+`scripts/visual-check.ps1` is not optional. It renders both surfaces at desktop
+and 390×844, and fails the build on overflow, undersized touch targets, banned
+vocabulary on the compact surface, and the structural rules in §9.
+
+---
+
+## 1. References this system is built on
+
+These are the sources the rules are drawn from. Where they disagree, the order
+below is the tiebreak order.
+
+1. **WCAG 2.2** — the only hard floor. 1.4.3 Contrast (Minimum, AA) 4.5:1 for
+   body text and 3:1 for large text; 1.4.11 Non-text Contrast (AA) 3:1 for the
+   parts of a control that identify it; 2.4.7 Focus Visible; 2.5.8 Target Size
+   (Minimum, AA) 24×24 CSS px, with 2.5.5 (AAA) 44×44 as our own floor on
+   anything a finger touches; 1.4.1 Use of Colour — colour is never the only
+   carrier of meaning.
+2. **Apple Human Interface Guidelines** — 44×44 pt minimum hit target; the
+   compact surface's audience is on iPhones and this is the number they are
+   calibrated to. Material Design 3's 48×48 dp is compatible; we use 44.
+3. **Nielsen's 10 usability heuristics** — in particular *visibility of system
+   status* (the verdict line), *match between system and the real world* (plain
+   English on the compact surface), *recognition rather than recall* (settings
+   search), and *aesthetic and minimalist design* (empty states that step aside).
+4. **Gestalt grouping** — proximity and common region do the work that borders
+   used to. Whitespace groups; a box is a last resort.
+5. **Tufte, data-ink ratio** — every pixel that is not data has to justify
+   itself. Applied literally to the admin surface: a value in a table needs no
+   capsule around it.
+6. **Fitts's law** — the most frequent target is the largest and the closest.
+   On the compact surface the whole tile is the target, not a chevron inside it.
+7. **Refactoring UI** (Wathan & Schoger) — hierarchy comes from de-emphasising
+   the secondary, not from shouting the primary; limit the palette; use a
+   restricted, non-linear size scale.
+8. **GOV.UK Design System** — one thing per page, progressive disclosure, and
+   plain-language error and status copy.
+
+---
+
+## 2. Principles
+
+**P1. Colour means exactly one thing: state.**
+Interaction (hover, selection, the primary button) is expressed with the neutral
+ramp — fill, border, weight. Nothing that is not a status may use a status hue.
+The previous UI used one pale blue-grey simultaneously for active nav, primary
+button, link, "success", and "feature available", which left real status confined
+to 6px dots.
+
+**P2. Structure is carried by containers, not by text size.**
+Three container roles exist (§5). If everything is a rounded rect with a 1px
+border and a near-black fill, all hierarchy has to come from type, and no type
+scale is wide enough to carry it alone.
+
+**P3. A page answers one question.**
+Overview answers "is it okay right now". The answer is the first thing on the
+page, at the only display size in the product. Everything else on the page is
+support for that answer.
+
+**P4. The healthy state should be nearly empty.**
+Nothing is wrong ~95% of the time. Optimise for that: the verdict collapses to a
+sentence, and panels with nothing to say hide themselves rather than rendering
+"No disk data / No capacity data / No parity check data" as if those were values.
+
+**P5. A signal used everywhere is not a signal.**
+Uppercase has exactly one job (§4). There is one status label (§6). There are no
+decorative capsules.
+
+**P6. One component set, two surfaces.**
+The admin panel and the compact app run on two ports from two bundles and that
+security boundary does not move. But they share tokens and primitives, because
+most of the drift between them was never a design decision — it was two people
+solving the same problem twice.
+
+**P7. Navigation is not content.**
+A page title that repeats the nav item you just clicked is overhead. It renders
+only where the navigation is not on screen.
+
+---
+
+## 3. Tokens
+
+Never write a raw colour, size, radius, or duration in a rule. If no token fits,
+the design is drifting — change the design, not the token list. As of this
+document there are **zero** raw hex values in `styles.css` outside `:root`.
+
+### Surfaces
+
+| Token | Use |
+|---|---|
+| `--surface-canvas` | The page itself |
+| `--surface-sunken` | Wells: inputs, code blocks, logo plates |
+| `--surface-raised` | Panels, sidebar, cards, tiles |
+| `--surface-overlay` | Menus, dialogs, hovered rows |
+
+A container may sit **one** step above its parent. Two steps means the hierarchy
+is wrong, not that a third surface is needed. There are no shadows: elevation is
+a surface step plus a hairline.
+
+### Lines
+
+`--line` (default), `--line-soft` (peers inside one container), `--line-strong`
+(a boundary you are meant to notice), `--line-control`.
+
+`--line-control` is the only hairline WCAG 1.4.11 applies to, because it is the
+sole indicator of an input's boundary. It clears 3:1 against every surface. The
+others are decorative structure and are deliberately quieter.
+
+### Ink
+
+Three levels, and there is no fourth. If text needs to be quieter than `--ink-3`
+it should not be on the screen.
+
+| Token | Contrast on canvas / raised / overlay | Use |
+|---|---|---|
+| `--ink-1` | 17.0 / 15.9 / 14.4 | Content and answers |
+| `--ink-2` | 9.1 / 8.5 / 7.7 | Supporting copy, labels |
+| `--ink-3` | 6.0 / 5.6 / 5.1 | Timestamps, placeholders, keys |
+
+### Status
+
+Exactly four states. Everything in the product maps onto one of them, and
+nothing that is not a status may use these hues.
+
+| State | Meaning |
+|---|---|
+| `ok` | working / healthy / allowed |
+| `warn` | degraded / needs attention |
+| `bad` | not working / failed / denied |
+| `neutral` | unknown / not measured / not applicable |
+
+Each has three steps: the bare hue (indicators, ≥3:1 — **not** legible enough
+for text), `-ink` (any status rendered as a word, ≥10:1), and `-wash` (tile
+fills on the compact surface only).
+
+### Type scale
+
+Six steps. Each has one job. Do not add a seventh, and do not set a `font-size`
+outside the scale.
+
+| Token | Size | Job |
+|---|---|---|
+| `--text-display` | 1.75rem | The one answer a page exists to give. **Max one per screen.** |
+| `--text-title` | 1.0625rem | Section heading (`h2`) |
+| `--text-subtitle` | 0.9375rem | Sub-section heading (`h3`), card heading |
+| `--text-body` | 0.9375rem | Running text, control labels |
+| `--text-meta` | 0.8125rem | Secondary lines, table cells, metadata |
+| `--text-micro` | 0.75rem | Group headings and column labels only. Never a sentence. |
+
+The old scale had one 2.55rem `h1` and clustered everything else between
+0.78–0.9rem, which is why the containers were carrying all the hierarchy.
+
+### Space, shape, motion
+
+4px base (`--space-1` … `--space-10`). Gaps between peers use 2–4; between
+sections 5–6; `--space-10` is page-level only.
+
+`--radius-sm` controls and chips · `--radius-md` panels and cards ·
+`--radius-lg` compact tiles and dialogs · `--radius-pill` indicators only.
+
+`--motion-fast` (120ms) for state changes, `--motion-base` (180ms) for
+movement, both with `--ease`. Everything animated must be disabled under
+`prefers-reduced-motion`.
+
+---
+
+## 4. Capitals
+
+**Uppercase is used by exactly one rule in the stylesheet**, and that rule names
+a *group* of things — a settings group, a table column, a drawer section.
+
+It is never used for:
+
+- a field label (`NAS`, `UNRAID API`)
+- a metadata key (`DOCKER`, `IMAGE`, `SOURCE`)
+- a value or state word (`ONLINE`, `STARTED`, `READY`, `OFF`)
+
+To add a capitalised heading, join the shared selector list in `styles.css`. Do
+not restate the treatment locally.
+
+Everything else — headings, buttons, nav items, labels — is **sentence case**.
+"Server health", not "Server Health".
+
+---
+
+## 5. Container roles
+
+There are three. There is no fourth.
+
+**Panel** — a titled region of a page. One hairline, one surface step,
+`--radius-md`. **Panels do not nest.** A panel inside a panel is a structure
+error, not a styling problem; use a sub-section heading. The old Settings page
+was four levels deep (`Runtime settings` → `Runtime Settings` → `SETTINGS
+SECTIONS` → `LLM`) and none of the levels added information.
+
+**Row** — one member of a list inside a panel. No border and no fill of its own;
+peers are separated by a single hairline; the last row has none. Rows carry
+status, not chrome. Admin lists are rows.
+
+**Tile** — a large tappable summary object, **compact surface only**. Status is
+the tile's *fill*, so a tile needs no dot and no pill: the broken thing is the
+only saturated object on screen. Touch targets are large by construction,
+because the smallest tappable object is a whole tile.
+
+---
+
+## 6. The status label
+
+One object, three class names, identical treatment: a coloured indicator plus a
+sentence-case word, on no background and inside no box.
+
+- `.status` — a live state (online / degraded / offline / unknown)
+- `.severity` — an incident or fact severity
+- `.pill` — a standing fact about the session (role, data source)
+
+Shape carries the state as well as colour, satisfying WCAG 1.4.1: **circle** =
+ok, **triangle** = degraded, **square** = offline, **ring** = unknown. This is
+why `.status-dot-only` is safe to use in dense rows.
+
+**Do not add a filled or bordered variant.** The nine capsules this replaced
+(`NOT CONNECTED`, `FIX PATH AVAILABLE`, `ON, UP TO 2 CALLS`, `READY`, `OFF`,
+`SAVED`, `Medium`, `Admin`, `Fixture Data`) were the same concept in four shapes,
+which is how rows ended up triple-encoding one state.
+
+State a state **once per row**. A red square *and* an uppercase `OFFLINE` *and* a
+coloured capsule is three encodings of one fact.
+
+---
+
+## 7. Page patterns
+
+**Utility bar.** Global actions, right-aligned, no border. The page name renders
+only below 861px on the admin surface, where the sidebar has become a drawer.
+On the compact surface it always renders — that surface has no sidebar. The
+page description survives as `#summary`, visually hidden: a restatement of the
+title is useful to a screen reader and to nobody else.
+
+**Verdict.** The single display-size answer, plus one supporting line and at most
+two actions. Only Overview has one.
+
+**Two-column body.** Primary content left, "whatever is currently true" right.
+The right column and its panels hide when empty, and the layout collapses to one
+column — which is what fixed the 40–60% empty viewport, not more data.
+
+**Stream.** Aligned columns: time (tabular numerals, short form for today),
+kind indicator, what happened, actor. Expandable rows use `<details>`; the
+expanded body must not repeat what the summary row already shows.
+
+**Settings.** Search first, section list second, one focused section at a time.
+Long sections collapse into disclosure groups whose headings are the summaries;
+the first group is open. Search opens matching groups, and never moves the pane
+out from under an unsaved edit.
+
+**Empty states.** If a panel has nothing to say, hide the panel. Do not render
+"No X" styled exactly like a value.
+
+---
+
+## 8. Content and voice
+
+- Sentence case everywhere.
+- Name the thing. "Emby is not running", not "An error occurred".
+- Say what to do next, or say that there is nothing to do.
+- **Admin** may use precise technical vocabulary — array, container, WAN, parity.
+- **Compact must not.** Docker, container, Unraid, array, parity, endpoint,
+  GraphQL, WAN, API, SSH, probe and telemetry are banned from the default
+  compact view and belong to a collapsed "Technical details" disclosure at most.
+  `cmd/visualcheck` fails the build on these; app display names are exempted by
+  wrapping them in `[data-app-name]`.
+- Never present fixture data as live. The source label is not decoration.
+
+---
+
+## 9. What the harness enforces
+
+Changing these means changing `cmd/visualcheck/main.go` deliberately, not
+working around a failure.
+
+- No horizontal overflow on `body` at any tested width; no element escaping its
+  container.
+- No visible tappable control under 44×44 on the compact surface.
+- No banned technical vocabulary in the compact view or its drawer.
+- The assistant launcher never overlaps an interactive control.
+- The admin page title renders below 861px and does not render above it.
+- Exactly one active nav item; exactly one visible settings section.
+- Activity merges at least two sources; its filter and its search both narrow
+  the stream and restore it.
+- Settings search narrows the section list and restores it; the debug snapshot
+  exists in Settings → Advanced and is collapsed.
+- Buttons do not clip their own text.
+
+---
+
+## 10. Checklist for new UI
+
+1. Does this page answer one question, and is the answer first?
+2. Am I adding a container role, a type size, a status shape, or a capital
+   letter that does not already exist? If so, stop.
+3. Every colour, size, radius and duration from a token?
+4. Is any state encoded more than once in the same row?
+5. Panel inside a panel?
+6. Does the empty case hide, or does it render "No X" as data?
+7. Sentence case? Plain English if it can reach the compact surface?
+8. ≥44px for anything touchable; visible focus ring; not colour-only.
+9. Does it survive 390×844 and 1440×900 with no horizontal scroll?
+10. `go test ./...`, `go build`, **and** `scripts/visual-check.ps1`.
+
+---
+
+## 11. Known gaps
+
+Honest list of what this system does not yet cover.
+
+- **Light theme.** Tokens are semantic and a light theme is a token swap, but
+  the values are dark-only today and `index.html` still advertises a light
+  `theme-color`. Direction B in the design study was light-first; that was not
+  adopted, and the app is deliberately dark-only until the swap is built.
+- **Settings groups are collapsed, not separate sheets.** The LLM section fell
+  from a ~2,270px wall to ~650px collapsed, which is a large improvement but
+  not the "focused sheet per setting" the design study recommended.
+- **Compact tiles are applied to the app list only.** Infrastructure rows on the
+  compact surface are still list rows.
+- **No automated contrast check.** The ratios in §3 were computed by hand
+  against the four surfaces; nothing recomputes them when a token changes.
