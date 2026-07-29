@@ -202,6 +202,7 @@ component that needs a density exception is a component that is wrong.
 | `--pad-row` | 8px | 5px |
 | `--nav-width` | 220px | 184px |
 | Settings form row | label above control | label left in a `--label-col` column, control right |
+| Settings form width | full width | rows capped at `--form-max` |
 | Monitor row | name over summary | name and summary on one baseline |
 | App row | stacked card | one table row: identity · state · metadata · actions |
 
@@ -237,7 +238,10 @@ It is never used for:
 - a value or state word (`ONLINE`, `STARTED`, `READY`, `OFF`)
 
 To add a capitalised heading, join the shared selector list in `styles.css`. Do
-not restate the treatment locally.
+not restate the treatment locally — and *do* join it when you add a heading that
+names a group, including a `<summary>`. Every disclosure heading in Settings
+belongs to this list; the ones that were missing from it read as ordinary bold
+text and flattened the hierarchy they were supposed to create.
 
 Everything else — headings, buttons, nav items, labels — is **sentence case**.
 "Server health", not "Server Health".
@@ -323,10 +327,33 @@ list of destinations that must keep their labels and scroll when there is no
 room (`.settings-menu`). Reusing `.segmented` for the section tabs made them
 inherit `flex: 1 0 70px` and clip their own labels on a phone.
 
-**Form rows.** On a desktop admin pane a field is label-left in a fixed column,
-control right, hairline between rows, controls capped at 460px. Stacking a
-label over a full-width control is the touch layout, and it is what made a
-settings section 2,000px tall.
+**Form rows.** On a desktop admin pane a field is label-left in a fixed
+`--label-col` column, control right, hairline between rows. Stacking a label
+over a full-width control is the touch layout, and it is what made a settings
+section 2,000px tall.
+
+**Anchor the form, not the control.** The row is capped at `--form-max`, and
+the control fills what is left of it. Capping each control instead left
+dropdowns stranded mid-pane — starting after the label column, ending nowhere
+in particular, with no shared right edge to read down. Every control in a
+section now lands on the same two edges. It follows that every field container
+in Settings is **one column**: a multi-column grid of label-left rows squeezes
+the label against the control.
+
+**One boolean per row.** A grid of `label ▸ [x]` cells puts every checkbox
+immediately to the *left of the next label*, so "Status chat [x] Server health
+[x]" reads as the box belonging to the following label. Proximity beats
+alignment: one row each, hairline between, control on the same right edge as
+every other control. And a checkbox is always on the **right** — Settings had
+two boolean row types that read in opposite directions.
+
+**Section headers are a band, not a line of text.** A card title that is the
+same size and weight as the group headings under it, with nothing between them,
+is a floating title: the pane opens with three lines of near-identical text and
+no way to tell which one names it. The title is one step up in size, in
+full-contrast ink, over a rule that spans the card and that the Save control
+shares. Group headings below it take the uppercase micro-label (§4), which is
+what makes the two levels legible as levels.
 
 **Empty states.** If a panel has nothing to say, hide the panel. Do not render
 "No X" styled exactly like a value.

@@ -4750,9 +4750,14 @@ function collapseSettingsSubsections(body) {
     const details = node("details", { class: "settings-group", open: converted === 0 });
     const summary = node("summary", {});
     group.replaceWith(details);
-    if (titleRowIsInert) summary.append(titleRow);
-    else summary.append(node("h4", { text: heading.textContent }));
-    if (!titleRowIsInert && !titleRow) heading.remove();
+    if (titleRowIsInert) {
+      summary.append(titleRow);
+    } else {
+      summary.append(node("h4", { text: heading.textContent }));
+      // The heading is now in the summary, so the original has to go or the
+      // group renders its own name twice.
+      heading.remove();
+    }
     details.append(summary, group);
     converted += 1;
   }
@@ -5527,8 +5532,10 @@ function settingToggle(label, checked) {
   return { input, element: node("label", { class: "toggle-line setting-toggle" }, input, label) };
 }
 
+// The value is seconds and the field gave no unit, so "900" was unreadable
+// without knowing the wire format. The unit belongs in the label.
 function durationSecondsField(label, duration) {
-  return settingNumberField(label, durationToSeconds(duration), { min: 0, step: 1, inputmode: "numeric" });
+  return settingNumberField(`${label} (seconds)`, durationToSeconds(duration), { min: 0, step: 1, inputmode: "numeric" });
 }
 
 function durationToSeconds(duration) {

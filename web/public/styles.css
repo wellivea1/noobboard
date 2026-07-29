@@ -134,6 +134,7 @@
   --nav-width: 220px;
   --measure: 74ch;               /* max line length for running prose */
   --label-col: 220px;            /* label column in a settings form row */
+  --form-max: none;              /* width a settings form row is bounded to */
 
   /* --- Environment -------------------------------------------------------- */
   --safe-top: env(safe-area-inset-top, 0px);
@@ -214,6 +215,7 @@
     --gap-section: var(--space-3);
     --dot-size: 8px;
     --nav-width: 184px;
+    --form-max: 820px;
   }
 }
 
@@ -743,6 +745,10 @@ a.button-link.primary {
    --------------------------------------------------------------------------- */
 .eyebrow,
 .settings-subsection h4,
+.settings-group > summary h4,
+.settings-advanced > summary,
+.settings-policy-advanced > summary,
+.debug-disclosure > summary,
 .role-section-title h4,
 .user-form-head h4,
 .user-settings-section h3 {
@@ -3118,7 +3124,36 @@ button.command.app-control:focus-visible {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: var(--space-3);
+}
+
+/* The section title was floating: same size and weight as the group headings
+   under it, with nothing between them, so the pane opened with three lines of
+   near-identical text and no way to tell which one named the pane. It is now a
+   header band — one step up in size, full-contrast ink, and a rule across the
+   whole card that the Save control shares. */
+.settings-card > header,
+.settings-card > .settings-footer,
+.settings-section > .section-head {
+  align-self: stretch;
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--line);
+}
+
+/* The title and the Save control are two grid cells, so the rule under them has
+   to meet in the middle: no column gap on that row, and the title keeps its
+   breathing room as padding instead. */
+.settings-card {
+  column-gap: 0;
+}
+
+.settings-card > header {
+  padding-right: var(--space-3);
+}
+
+.settings-card > header h3 {
+  font-size: var(--text-title);
+  color: var(--ink-1);
 }
 
 /* Save bar. It stays with the reader as they scroll a long section, but while
@@ -3176,26 +3211,23 @@ button.command.app-control:focus-visible {
   gap: var(--space-1) var(--space-5);
 }
 
+/* Same disclosure as every other group: hairline row, no box. */
 .debug-disclosure {
-  border: 1px solid var(--border-soft);
-  background: var(--surface-alt);
+  border-top: 1px solid var(--line-soft);
 }
 
 .debug-disclosure summary {
   min-height: var(--control-height);
   display: flex;
   align-items: center;
-  padding: 0 12px;
+  padding: var(--pad-row) 0;
   cursor: pointer;
-  font-weight: var(--weight-medium);
 }
 
 .debug-disclosure pre {
-  margin: 0;
+  margin: 0 0 var(--space-3);
   max-height: 540px;
   overflow: auto;
-  border-top: 1px solid var(--border-soft);
-  padding: 12px;
 }
 
 .settings-actions {
@@ -3318,8 +3350,13 @@ button.command.app-control:focus-visible {
    list of values.
    --------------------------------------------------------------------------- */
 @media (min-width: 861px) {
+  /* Every field container in Settings is one column, because every field is a
+     label-left row. A multi-column grid of label-left rows squeezes the label
+     column against the control — the blacklist editors collapsed their Add
+     buttons to one letter per line before this. */
   body.admin-view .settings-field-grid,
-  body.admin-view .settings-two-col {
+  body.admin-view .settings-two-col,
+  body.admin-view .settings-blacklist-grid {
     grid-template-columns: minmax(0, 1fr);
     gap: 0;
   }
@@ -3339,13 +3376,31 @@ button.command.app-control:focus-visible {
     border-bottom: 0;
   }
 
-  /* A control does not need the whole pane; a value column reads better when it
-     stops where the values stop. */
-  body.admin-view #tab-settings input:not([type="checkbox"]),
-  body.admin-view #tab-settings select {
-    max-width: 460px;
+  /* Anchor the form instead of the control.
+
+     Capping each control at 460px left dropdowns stranded in the middle of a
+     1,177px pane — starting after the label column, ending nowhere in
+     particular, with no shared right edge to read down. Capping the ROW gives
+     every control in the section the same left and right edge, so the form is
+     one bounded column and the selects stop floating. Long inputs are also
+     harder to read than short ones, which is why the cap exists at all. */
+  body.admin-view #tab-settings label:not(.search-label),
+  body.admin-view #tab-settings .setting-toggle,
+  body.admin-view #tab-settings .permission-toggle,
+  body.admin-view #tab-settings .settings-list-row,
+  body.admin-view #tab-settings .settings-add-row,
+  body.admin-view #tab-settings .settings-kv-row {
+    max-width: var(--form-max);
   }
 
+  body.admin-view #tab-settings input:not([type="checkbox"]),
+  body.admin-view #tab-settings select,
+  body.admin-view #tab-settings textarea {
+    max-width: none;
+    width: 100%;
+  }
+
+  body.admin-view #tab-settings .search-inline,
   body.admin-view #tab-settings .search-inline input {
     max-width: none;
   }
@@ -3358,10 +3413,19 @@ button.command.app-control:focus-visible {
   min-width: 0;
 }
 
+/* Booleans are one per row.
+
+   They used to sit in an auto-fit grid of 180px columns with the label left and
+   the checkbox pushed to the right of its own cell — which put every checkbox
+   immediately to the LEFT of the next label. "Status chat [x] Server health [x]"
+   reads as the box belonging to the following label, and there was no rule
+   anywhere to say otherwise. Proximity beats alignment here: one row per
+   boolean, hairline between, control on the same right edge as every other
+   control in the form. */
 .settings-toggle-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 8px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
   min-width: 0;
 }
 
@@ -3542,14 +3606,16 @@ body.compact-view .user-technical-details[open] summary::after {
   min-width: 0;
 }
 
+/* A list of rows inside a settings group is a list of rows, not another card.
+   The rows already separate themselves with hairlines; a border and a fill
+   around them is the card-in-card the standard forbids. */
 .settings-list-items,
 .settings-row-list {
   display: grid;
   gap: 0;
   overflow: hidden;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-md);
-  background: var(--surface-alt);
+  border-top: 1px solid var(--line-soft);
+  background: transparent;
 }
 
 .settings-list-items:empty,
@@ -3594,11 +3660,11 @@ body.compact-view .user-technical-details[open] summary::after {
 }
 
 .settings-app-image-row {
-  grid-template-columns: 38px minmax(0, 0.9fr) minmax(220px, 1.1fr);
+  grid-template-columns: 34px minmax(0, 0.9fr) minmax(220px, 1.1fr);
   align-items: start;
   min-height: var(--control-height);
-  border-bottom: 1px solid var(--border-soft);
-  padding: 12px 8px;
+  border-bottom: 1px solid var(--line-soft);
+  padding: var(--space-2) 0;
 }
 
 .settings-app-controls {
@@ -3673,9 +3739,8 @@ body.compact-view .user-technical-details[open] summary::after {
 .settings-status-list {
   display: grid;
   overflow: hidden;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-md);
-  background: var(--surface-alt);
+  border-top: 1px solid var(--line-soft);
+  background: transparent;
 }
 
 .settings-status-row {
@@ -3894,24 +3959,31 @@ body.compact-view .user-technical-details[open] summary::after {
   align-items: start;
 }
 
+/* Already inside a .panel, so these carry no box of their own — the internal
+   rule between list and detail is all the structure they need. */
 .role-editor,
 .user-editor {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   overflow: hidden;
+}
+
+.user-editor {
+  border-top: 1px solid var(--line);
+  padding-top: var(--space-3);
 }
 
 .role-editor-head {
   grid-template-columns: minmax(0, 1fr) minmax(180px, 260px);
   align-items: center;
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--border-soft);
+  padding: 0 0 var(--space-2);
+  border-bottom: 1px solid var(--line-soft);
 }
 
 .user-editor > .section-head {
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--border-soft);
+  padding: 0 0 var(--space-2);
+  border-bottom: 1px solid var(--line-soft);
 }
 
 .role-workspace {
@@ -4140,10 +4212,13 @@ body.compact-view .user-technical-details[open] summary::after {
   font-weight: var(--weight-strong);
 }
 
+/* One boolean per row, for the same reason as .settings-toggle-grid: in two
+   columns each checkbox lands immediately left of the next label. */
 .role-options {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0 var(--space-6);
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  max-width: var(--form-max);
 }
 
 .toggle-line {
@@ -4215,12 +4290,22 @@ body.compact-view .user-technical-details[open] summary::after {
   opacity: 0.66;
 }
 
+/* Same order as every other row in the form: name on the left, control on the
+   right. This one used to put its checkbox first, so Settings had two boolean
+   rows that read in opposite directions. */
 .permission-toggle {
-  justify-content: flex-start;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-3);
   min-height: var(--control-height);
   padding: var(--pad-row) 0;
   border-bottom: 1px solid var(--line-soft);
   font-weight: var(--weight-medium);
+}
+
+.permission-toggle input {
+  order: 2;
 }
 
 .role-app-toggle .role-app-name,
