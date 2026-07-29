@@ -179,8 +179,8 @@
           <button id="activity-refresh" type="button" class="command" data-glyph="&#8635;">Reload</button>
         </div>
         <div class="toolbar">
-          <label class="search-label">
-            Search activity
+          <label class="search-label search-inline">
+            <span>Search activity</span>
             <input id="activity-search" placeholder="Filter by app, actor, or text">
           </label>
           <div id="activity-filters" class="segmented" aria-label="Activity filter">
@@ -218,8 +218,8 @@
 
       <section id="tab-apps" class="tab-panel" hidden data-admin-detail>
         <div class="toolbar">
-          <label class="search-label">
-            Search apps
+          <label class="search-label search-inline">
+            <span>Search apps</span>
             <input id="app-search" placeholder="Filter by app or status">
           </label>
           <div id="app-filters" class="segmented" aria-label="App status filter">
@@ -275,11 +275,7 @@
 
       <section id="tab-settings" class="tab-panel" hidden data-admin-detail>
         <div class="settings-workspace">
-          <div class="settings-nav">
-            <label class="search-label settings-search-label">
-              Search settings
-              <input id="settings-search" placeholder="Try &ldquo;reviewer&rdquo; or &ldquo;blacklist&rdquo;" autocomplete="off">
-            </label>
+          <div class="toolbar settings-toolbar">
             <nav id="settings-menu" class="settings-menu" aria-label="Settings sections">
               <button type="button" data-settings-section="roles" class="active">Role access</button>
               <button type="button" data-settings-section="visibility">Visibility</button>
@@ -290,9 +286,15 @@
               <button type="button" data-settings-section="notifications">Notifications</button>
               <button type="button" data-settings-section="advanced">Advanced</button>
             </nav>
-            <p id="settings-search-empty" class="settings-search-empty muted" hidden>No settings match that search.</p>
-            <button id="settings-refresh" type="button" class="command settings-reload" data-glyph="&#8635;">Reload settings</button>
+            <div class="toolbar-end">
+              <label class="search-label search-inline settings-search-label">
+                <span>Search settings</span>
+                <input id="settings-search" placeholder="Search settings" autocomplete="off">
+              </label>
+              <button id="settings-refresh" type="button" class="command settings-reload" data-glyph="&#8635;" aria-label="Reload settings" title="Reload settings"></button>
+            </div>
           </div>
+          <p id="settings-search-empty" class="settings-search-empty muted" hidden>No settings match that search.</p>
           <div class="settings-detail">
             <section class="panel role-access settings-section" data-settings-section="roles">
               <div class="section-head">

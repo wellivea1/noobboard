@@ -96,7 +96,16 @@ solving the same problem twice.
 
 **P7. Navigation is not content.**
 A page title that repeats the nav item you just clicked is overhead. It renders
-only where the navigation is not on screen.
+only where the navigation is not on screen. The same rule applies to nesting:
+one page never carries two levels of permanent navigation plus a third inside
+the pane. Settings broke this and cost 750px of a 1440px screen before any
+content began.
+
+**P8. Density follows the input device, not the brand.**
+A phone gets 44px targets and 15px type because a finger is imprecise and the
+screen is close. A desktop console gets 28px controls and 13px type because a
+mouse is precise and the operator wants a screenful of state. These are the
+same design at two densities, expressed entirely as token overrides — see §3.
 
 ---
 
@@ -157,28 +166,58 @@ fills on the compact surface only).
 
 ### Type scale
 
-Six steps. Each has one job. Do not add a seventh, and do not set a `font-size`
-outside the scale.
+Six steps. Each has one job. Do not add a seventh, and **do not set a
+`font-size` outside the scale** — the only exceptions in the stylesheet are
+`::before`/`::after` glyphs, which are icon metrics sized to their box.
 
-| Token | Size | Job |
-|---|---|---|
-| `--text-display` | 1.75rem | The one answer a page exists to give. **Max one per screen.** |
-| `--text-title` | 1.0625rem | Section heading (`h2`) |
-| `--text-subtitle` | 0.9375rem | Sub-section heading (`h3`), card heading |
-| `--text-body` | 0.9375rem | Running text, control labels |
-| `--text-meta` | 0.8125rem | Secondary lines, table cells, metadata |
-| `--text-micro` | 0.75rem | Group headings and column labels only. Never a sentence. |
+| Token | Touch | Desktop admin | Job |
+|---|---|---|---|
+| `--text-display` | 1.75rem | 1.25rem | The one answer a page exists to give. **Max one per screen.** |
+| `--text-title` | 1.0625rem | 0.9375rem | Section heading (`h2`) |
+| `--text-subtitle` | 0.9375rem | 0.875rem | Sub-section heading (`h3`), card heading |
+| `--text-body` | 0.9375rem | 0.8125rem | Running text, control labels |
+| `--text-meta` | 0.8125rem | 0.75rem | Secondary lines, table cells, metadata |
+| `--text-micro` | 0.75rem | 0.6875rem | Group headings and column labels only. Never a sentence. |
 
 The old scale had one 2.55rem `h1` and clustered everything else between
 0.78–0.9rem, which is why the containers were carrying all the hierarchy.
+
+### Weight
+
+Three: `--weight-normal` 400, `--weight-medium` 500, `--weight-strong` 600. The
+old sheet ran to 620–900 on ordinary labels and values, which is why everything
+read as emphasised and nothing read as important.
+
+### Density
+
+One media block in `styles.css` overrides tokens for `body.admin-view` at
+≥861px. Nothing else in the stylesheet knows which density it is in, and a
+component that needs a density exception is a component that is wrong.
+
+| | Touch (compact surface; admin <861px) | Desktop admin (≥861px) |
+|---|---|---|
+| `--control-height` | 44px | 28px |
+| control padding | 0.62rem / 0.72rem | 0.25rem / 0.45rem |
+| `--pad-panel` | 16px | 12px |
+| `--pad-row` | 8px | 5px |
+| `--nav-width` | 220px | 184px |
+| Settings form row | label above control | label left in a `--label-col` column, control right |
+| Monitor row | name over summary | name and summary on one baseline |
+| App row | stacked card | one table row: identity · state · metadata · actions |
+
+The 44px floor is a **touch** requirement (Apple HIG; WCAG 2.5.5) and the visual
+harness audits it exactly where a finger is the input device. With a mouse the
+floor is WCAG 2.5.8's 24px.
 
 ### Space, shape, motion
 
 4px base (`--space-1` … `--space-10`). Gaps between peers use 2–4; between
 sections 5–6; `--space-10` is page-level only.
 
-`--radius-sm` controls and chips · `--radius-md` panels and cards ·
-`--radius-lg` compact tiles and dialogs · `--radius-pill` indicators only.
+`--radius-sm` 3px controls and chips · `--radius-md` 5px panels and cards ·
+`--radius-lg` 12px compact tiles and dialogs · `--radius-pill` indicators only.
+Radii stay small deliberately: a large corner radius reads as consumer
+software, and this is an instrument panel.
 
 `--motion-fast` (120ms) for state changes, `--motion-base` (180ms) for
 movement, both with `--ease`. Everything animated must be disabled under
@@ -268,10 +307,26 @@ column — which is what fixed the 40–60% empty viewport, not more data.
 kind indicator, what happened, actor. Expandable rows use `<details>`; the
 expanded body must not repeat what the summary row already shows.
 
-**Settings.** Search first, section list second, one focused section at a time.
-Long sections collapse into disclosure groups whose headings are the summaries;
-the first group is open. Search opens matching groups, and never moves the pane
-out from under an unsaved edit.
+**Settings.** Section tabs and search share one toolbar row **across the top of
+the pane**, not down its side: the app already has a permanent sidebar, and the
+role editor carries its own list+detail, so a vertical settings rail made three
+columns of navigation. One focused section at a time, full pane width. Long
+sections collapse into disclosure groups whose headings are the summaries; the
+first group is open. Search opens matching groups, and never moves the pane out
+from under an unsaved edit. The section title and its Save control share the
+card's header row.
+
+**Tab strip vs. segmented control.** They look similar and are not the same
+component. A `.segmented` control divides one row between a fixed set of equal
+options and may stretch them (the Apps and Activity filters). A tab strip is a
+list of destinations that must keep their labels and scroll when there is no
+room (`.settings-menu`). Reusing `.segmented` for the section tabs made them
+inherit `flex: 1 0 70px` and clip their own labels on a phone.
+
+**Form rows.** On a desktop admin pane a field is label-left in a fixed column,
+control right, hairline between rows, controls capped at 460px. Stacking a
+label over a full-width control is the touch layout, and it is what made a
+settings section 2,000px tall.
 
 **Empty states.** If a panel has nothing to say, hide the panel. Do not render
 "No X" styled exactly like a value.
@@ -309,23 +364,27 @@ working around a failure.
   the stream and restore it.
 - Settings search narrows the section list and restores it; the debug snapshot
   exists in Settings → Advanced and is collapsed.
-- Buttons do not clip their own text.
+- Buttons do not clip their own text — and the failure names the offending
+  button, so it is an address rather than a boolean.
 
 ---
 
 ## 10. Checklist for new UI
 
 1. Does this page answer one question, and is the answer first?
-2. Am I adding a container role, a type size, a status shape, or a capital
-   letter that does not already exist? If so, stop.
-3. Every colour, size, radius and duration from a token?
+2. Am I adding a container role, a type size, a weight, a status shape, or a
+   capital letter that does not already exist? If so, stop.
+3. Every colour, font-size, weight, radius and duration from a token? (Glyph
+   metrics in `::before`/`::after` are the only exception.)
 4. Is any state encoded more than once in the same row?
 5. Panel inside a panel?
 6. Does the empty case hide, or does it render "No X" as data?
 7. Sentence case? Plain English if it can reach the compact surface?
 8. ≥44px for anything touchable; visible focus ring; not colour-only.
 9. Does it survive 390×844 and 1440×900 with no horizontal scroll?
-10. `go test ./...`, `go build`, **and** `scripts/visual-check.ps1`.
+10. At 1440×900, is the answer to "what is going on" above the fold without
+    scrolling?
+11. `go test ./...`, `go build`, **and** `scripts/visual-check.ps1`.
 
 ---
 
@@ -338,9 +397,16 @@ Honest list of what this system does not yet cover.
   `theme-color`. Direction B in the design study was light-first; that was not
   adopted, and the app is deliberately dark-only until the swap is built.
 - **Settings groups are collapsed, not separate sheets.** The LLM section fell
-  from a ~2,270px wall to ~650px collapsed, which is a large improvement but
+  from a ~2,270px wall to ~460px collapsed, which is a large improvement but
   not the "focused sheet per setting" the design study recommended.
 - **Compact tiles are applied to the app list only.** Infrastructure rows on the
   compact surface are still list rows.
 - **No automated contrast check.** The ratios in §3 were computed by hand
   against the four surfaces; nothing recomputes them when a token changes.
+- **No automated token check.** "Every value from a token" is a rule the harness
+  does not enforce; it is currently true (zero raw hex, zero raw weights, and
+  raw `font-size`/`border-radius` only on glyph and shape exceptions) but
+  nothing stops the next raw value from being added.
+- **The role editor still nests a list+detail inside a settings section.** It
+  now has the width for it, but a role picker plus one detail pane would be
+  simpler than a permanent second list.

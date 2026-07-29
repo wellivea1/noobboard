@@ -2653,9 +2653,11 @@ function renderAppCard(app) {
           node("p", { class: "muted", text: appSubtitle(app) }),
         ),
       ),
-      node("div", { class: "app-row-actions" },
-        ...actions,
-      ),
+    ),
+    // Controls are a sibling of the identity block, not a child of it, so the
+    // desktop layout can park them in their own column on the right edge.
+    node("div", { class: "app-row-actions" },
+      ...actions,
     ),
     node("p", { class: "app-summary", text: compactAppSummary(app) }),
     meta.length ? node("dl", { class: "app-meta-list" }, meta.map(([label, value]) => node("div", { class: "app-meta-item" },

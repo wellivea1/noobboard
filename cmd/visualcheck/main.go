@@ -164,6 +164,7 @@ type flags struct {
 	MonitorHideRestored         bool     `json:"monitorHideRestored,omitempty"`
 	BodyHorizontalOverflow      bool     `json:"bodyHorizontalOverflow"`
 	ButtonTextOverflow          bool     `json:"buttonTextOverflow"`
+	ButtonTextOverflowOffender  string   `json:"buttonTextOverflowOffender,omitempty"`
 	NoticeTitleOverlap          bool     `json:"noticeTitleOverlap"`
 	RawTransportErrorVisible    bool     `json:"rawTransportErrorVisible"`
 	ElementBoundsOverflow       bool     `json:"elementBoundsOverflow"`
@@ -1025,7 +1026,7 @@ func assertVisualFlags(overview, server, router, apps, activity, diagnostics, qu
 		failures = append(failures, "compact user menu was visible on admin mobile screens")
 	}
 	if mobileSettings.BodyHorizontalOverflow || mobileSettings.ButtonTextOverflow {
-		failures = append(failures, "mobile settings layout overflow detected")
+		failures = append(failures, "mobile settings layout overflow detected: "+firstNonEmpty(mobileSettings.ButtonTextOverflowOffender, "body scroll width"))
 	}
 	if customization.NormalRemoveButtonCount != 0 {
 		failures = append(failures, "overview remove controls were visible outside rearrange mode")
@@ -1392,6 +1393,7 @@ const loginExpression = `(async () => {
     assistantOverlapCount: assistantControlOverlapCount(),
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow,
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
     elementBoundsOverflow: componentBoundsOverflow(),
     elementBoundsOffender: componentBoundsOffender()
   };
@@ -1419,6 +1421,7 @@ const overviewExpression = `(async () => {
     overviewRearrangeReady,
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow,
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
     ...mobileAudit
   };
 })()`
@@ -1437,6 +1440,7 @@ const serverExpression = `(async () => {
     detailSectionCount: document.querySelectorAll('#server-detail-grid .detail-section').length,
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow,
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
     elementBoundsOverflow: componentBoundsOverflow(),
     elementBoundsOffender: componentBoundsOffender()
   };
@@ -1457,6 +1461,7 @@ const routerExpression = `(async () => {
     detailSectionCount: document.querySelectorAll('#router-detail-grid .detail-section').length,
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow,
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
     ...mobileAudit
   };
 })()`
@@ -1477,6 +1482,7 @@ const appsExpression = `(async () => {
     detailSectionCount: document.querySelectorAll('.detail-section').length,
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow,
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
     ...mobileAudit
   };
 })()`
@@ -1524,6 +1530,7 @@ const activityExpression = `(async () => {
     incidentCardCount,
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow: hasButtonTextOverflow(),
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
     ...mobileAudit
   };
 })()`
@@ -1541,6 +1548,7 @@ const diagnosticsExpression = `(async () => {
     diagnosticPanelCount: document.querySelectorAll('#tab-diagnostics .panel').length,
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow: hasButtonTextOverflow(),
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
     ...mobileAudit
   };
 })()`
@@ -1564,6 +1572,7 @@ const queueExpression = `(async () => {
     activeTabCount: document.querySelectorAll('.tabs button.active').length,
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow: hasButtonTextOverflow(),
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
     ...mobileAudit
   };
 })()`
@@ -1585,6 +1594,7 @@ const advancedExpression = `(async () => {
     rawSnapshotCollapsed: !!debug && !debug.open && visibleElement(debug),
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow: hasButtonTextOverflow(),
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
     ...mobileAudit
   };
 })()`
@@ -1627,6 +1637,7 @@ const monitorCustomizationExpression = `(async () => {
     monitorHideRestored: document.querySelectorAll('#overview-cards .overview-card').length === initialCount,
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow: hasButtonTextOverflow(),
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
     elementBoundsOverflow: componentBoundsOverflow(),
     elementBoundsOffender: componentBoundsOffender()
   };
@@ -1682,6 +1693,7 @@ const generalUserExpression = `(async () => {
     sourcePillText: document.querySelector('#source-pill')?.textContent || '',
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow,
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
     ...mobileAudit
   };
 })()`
@@ -1756,6 +1768,7 @@ const userChatKeyboardExpression = `(async () => {
     userChatChromeCollapsed: topbarCollapsed && tabsCollapsed && panelRect.bottom <= visibleBottom + 1,
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow: hasButtonTextOverflow(),
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
     ...mobileAudit
   };
 })()`
@@ -1838,6 +1851,7 @@ const userPromptActionExpression = `(async () => {
     userPromptInlineSuccess: resultVisible && message.includes('Emby started successfully.') && message.includes('Send another message or try again'),
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow: hasButtonTextOverflow(),
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
     ...mobileAudit
   };
 })()`
@@ -1895,6 +1909,7 @@ const userAppDetailExpression = `(async () => {
     rawTransportErrorVisible: rawTransportErrorVisible(),
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow: hasButtonTextOverflow(),
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
     ...mobileAudit
   };
 })()`
@@ -1934,6 +1949,7 @@ const userInfraDetailExpression = `(async () => {
     bannedTermCount: bannedMatches.length,
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow: hasButtonTextOverflow(),
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
     ...mobileAudit
   };
 })()`
@@ -1955,6 +1971,7 @@ const userDetailBackExpression = `(async () => {
     userDetailFocusReturned: !!trigger && document.activeElement === trigger,
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow: hasButtonTextOverflow(),
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
     ...mobileAudit
   };
 })()`
@@ -1967,6 +1984,7 @@ const userDrawerOpenExpression = `(async () => {
       userDrawerOpen: false,
       bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
       buttonTextOverflow: hasButtonTextOverflow(),
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
       elementBoundsOverflow: componentBoundsOverflow(),
       elementBoundsOffender: componentBoundsOffender()
     };
@@ -1987,6 +2005,7 @@ const userDrawerOpenExpression = `(async () => {
       userDrawerOpen: false,
       bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
       buttonTextOverflow: hasButtonTextOverflow(),
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
       elementBoundsOverflow: componentBoundsOverflow(),
       elementBoundsOffender: componentBoundsOffender()
     };
@@ -2034,6 +2053,7 @@ const userDrawerOpenExpression = `(async () => {
     notificationSignupPrimary,
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow: hasButtonTextOverflow(),
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
     elementBoundsOverflow: componentBoundsOverflow(),
     elementBoundsOffender: componentBoundsOffender()
   };
@@ -2058,6 +2078,7 @@ const userDrawerCloseExpression = `(async () => {
     userDrawerBodyUnlocked: !document.body.classList.contains('user-menu-open') && !(shell && shell.inert) && (!shell || shell.getAttribute('aria-hidden') !== 'true'),
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow: hasButtonTextOverflow(),
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
     elementBoundsOverflow: componentBoundsOverflow(),
     elementBoundsOffender: componentBoundsOffender()
   };
@@ -2125,8 +2146,8 @@ function visibleCompactText(root) {
   return parts.join(' ');
 }
 
-function hasButtonTextOverflow() {
-  return [...document.querySelectorAll('button')].some((element) => {
+function overflowingButton() {
+  return [...document.querySelectorAll('button')].find((element) => {
     if (!visibleElement(element)) return false;
     const style = getComputedStyle(element);
     const iconOnly = style.fontSize === '0px' ||
@@ -2134,7 +2155,24 @@ function hasButtonTextOverflow() {
       element.classList.contains('app-control');
     if (iconOnly) return false;
     return element.scrollWidth > element.clientWidth + 1;
-  });
+  }) || null;
+}
+
+function hasButtonTextOverflow() {
+  return !!overflowingButton();
+}
+
+// Naming the offender turns "something clips" into an address. Reported
+// alongside the boolean so a failure is actionable without a repro run.
+function buttonTextOverflowOffender() {
+  const element = overflowingButton();
+  if (!element) return '';
+  return [
+    element.id ? '#' + element.id : '',
+    element.className ? '.' + String(element.className).trim().replace(/\s+/g, '.') : '',
+    (element.getAttribute('aria-label') || element.textContent || '').trim().slice(0, 40),
+    element.scrollWidth + '>' + element.clientWidth
+  ].filter(Boolean).join(' ');
 }
 
 function elementTextWraps(element) {
@@ -2282,6 +2320,7 @@ const settingsExpression = `(async () => {
     agentReadinessLimitVisible: readinessText.includes('1 per app') && readinessText.includes('5 total'),
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow,
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
     ...mobileAudit
   };
 })()`
@@ -2382,6 +2421,7 @@ const agentRepairExpression = `(async () => {
     noticeTitleOverlap: noticeOverlapsTitle(),
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow: hasButtonTextOverflow(),
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
     ...mobileAudit
   };
 })()`
