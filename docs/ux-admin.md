@@ -1,5 +1,13 @@
 # Admin panel UX review
 
+> **Superseded in part.** This review was written against the pre-design-system
+> admin panel and its findings were implemented. The Incidents and Admin tabs it
+> refers to no longer exist: incidents, repair decisions and audit entries are
+> now one filterable stream on **Activity**, and the raw debug snapshot lives in
+> **Settings → Advanced**. The audit *table* finding (item 3 / checklist line 2)
+> is resolved by the Activity stream's aligned-column rows rather than by a
+> `<table>`. For current rules, see `docs/ui-standards.md`.
+
 A review of the **admin surface** (port `8787`) for an implementer agent (Codex). Unlike the
 compact surface (`docs/ux-compact.md`), the admin panel is for the technical owner and is
 *allowed* to be dense and use technical vocabulary. So this is a **targeted-improvement

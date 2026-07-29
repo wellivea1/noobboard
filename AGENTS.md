@@ -49,6 +49,10 @@ These invariants are easy to break and costly to walk back. Preserve them in any
   config, or explicitly configured key files (`internal/config/config.go`). Don't widen this.
 - **Mobile-first compact UI.** No horizontal scrolling, no dense tables, large touch targets
   (≥44px), readable on a 390×844 iPhone viewport.
+- **One design system.** `docs/ui-standards.md` is binding for anything under `web/public`.
+  Read it before adding UI. In short: tokens only (no raw colours or sizes), colour means
+  state and nothing else, three container roles, one status label, one uppercase treatment,
+  six type sizes. Adding a variant is a design change, not a styling detail.
 
 ## Before you push
 
@@ -76,4 +80,5 @@ fixtures/            Deterministic demo/test telemetry
 ```
 
 For roadmap, design specs, and policy detail, see `docs/agent-roadmap.md`,
-`docs/architecture.md`, `docs/security.md`, and `docs/llm-policy.md`.
+`docs/architecture.md`, `docs/security.md`, and `docs/llm-policy.md`. For anything
+visual, start with `docs/ui-standards.md`.

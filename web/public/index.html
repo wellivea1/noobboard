@@ -124,13 +124,12 @@
         </div>
         <div class="side-nav-links">
           <button type="button" data-tab="overview" class="active">Overview</button>
+          <button type="button" data-tab="activity">Activity</button>
           <button type="button" data-tab="server">Server</button>
           <button type="button" data-tab="router">Router</button>
           <button type="button" data-tab="apps">Apps</button>
-          <button type="button" data-tab="incidents">Incidents</button>
           <button type="button" data-tab="diagnostics">Diagnostics</button>
-          <button type="button" data-tab="queue" data-admin-only>Review Queue</button>
-          <button type="button" data-tab="admin" data-admin-only>Admin</button>
+          <button type="button" data-tab="queue" data-admin-only>Review queue</button>
           <button type="button" data-tab="settings" data-admin-only>Settings</button>
         </div>
         <div class="side-nav-session">
@@ -143,32 +142,65 @@
       </nav>
 
       <section id="tab-overview" class="tab-panel" data-admin-detail>
-        <div class="section-head overview-head">
-          <h2>Live Status</h2>
-          <button id="overview-rearrange" type="button" class="command" data-glyph="&#8645;" aria-pressed="false">Rearrange</button>
-        </div>
-        <div id="overview-cards" class="overview-cards"></div>
-        <div class="overview-grid">
+        <section id="verdict" class="verdict" aria-live="polite"></section>
+        <div class="overview-layout">
           <section class="panel">
-            <div class="section-head">
-              <h2>Current Incidents</h2>
-              <button type="button" class="command" data-glyph=">" data-tab-jump="incidents">View all</button>
+            <div class="section-head overview-head">
+              <h2>Monitors</h2>
+              <button id="overview-rearrange" type="button" class="command" data-glyph="&#8645;" aria-pressed="false">Rearrange</button>
             </div>
-            <div id="incident-strip" class="stack"></div>
+            <div id="overview-cards" class="overview-cards"></div>
           </section>
-          <section class="panel">
-            <div class="section-head">
-              <h2>Diagnostic Facts</h2>
-              <span id="fact-count" class="muted">0 facts</span>
-            </div>
-            <div id="facts" class="stack"></div>
-          </section>
+          <div class="overview-side">
+            <section id="overview-incidents" class="panel">
+              <div class="section-head">
+                <h2>Current incidents</h2>
+                <button type="button" class="command" data-glyph=">" data-tab-jump="activity">View all</button>
+              </div>
+              <div id="incident-strip" class="stack"></div>
+            </section>
+            <section id="overview-facts" class="panel">
+              <div class="section-head">
+                <h2>Diagnostic facts</h2>
+                <span id="fact-count" class="muted">0 facts</span>
+              </div>
+              <div id="facts" class="stack"></div>
+            </section>
+          </div>
         </div>
+      </section>
+
+      <section id="tab-activity" class="tab-panel" hidden data-admin-detail>
+        <div class="section-head">
+          <div class="section-head-copy">
+            <h2>Activity</h2>
+            <p>Incidents, repair decisions, and configuration changes in one stream.</p>
+          </div>
+          <button id="activity-refresh" type="button" class="command" data-glyph="&#8635;">Reload</button>
+        </div>
+        <div class="toolbar">
+          <label class="search-label search-inline">
+            <span>Search activity</span>
+            <input id="activity-search" placeholder="Filter by app, actor, or text">
+          </label>
+          <div id="activity-filters" class="segmented" aria-label="Activity filter">
+            <button type="button" data-activity-filter="all" class="active">All</button>
+            <button type="button" data-activity-filter="problem">Problems</button>
+            <button type="button" data-activity-filter="repair">Repairs</button>
+            <button type="button" data-activity-filter="change">Changes</button>
+          </div>
+        </div>
+        <section class="panel">
+          <div class="activity-meta">
+            <span id="activity-count" class="muted">0 events</span>
+          </div>
+          <div id="activity-stream" class="activity-stream"></div>
+        </section>
       </section>
 
       <section id="tab-server" class="tab-panel" hidden data-admin-detail>
         <div class="section-head">
-          <h2>Server Health</h2>
+          <h2>Server health</h2>
           <button type="button" class="command" data-glyph=">" data-tab-jump="apps">View apps</button>
         </div>
         <div id="server-health-grid" class="status-grid"></div>
@@ -177,7 +209,7 @@
 
       <section id="tab-router" class="tab-panel" hidden data-admin-detail>
         <div class="section-head">
-          <h2>Router And UniFi</h2>
+          <h2>Router and UniFi</h2>
           <button type="button" class="command" data-glyph="?" data-tab-jump="diagnostics">Diagnose</button>
         </div>
         <div id="router-status-grid" class="status-grid"></div>
@@ -186,8 +218,8 @@
 
       <section id="tab-apps" class="tab-panel" hidden data-admin-detail>
         <div class="toolbar">
-          <label class="search-label">
-            Search apps
+          <label class="search-label search-inline">
+            <span>Search apps</span>
             <input id="app-search" placeholder="Filter by app or status">
           </label>
           <div id="app-filters" class="segmented" aria-label="App status filter">
@@ -198,21 +230,19 @@
             <button type="button" data-filter="unknown">Unknown</button>
           </div>
         </div>
-        <div id="apps" class="apps"></div>
-      </section>
-
-      <section id="tab-incidents" class="tab-panel" hidden data-admin-detail>
-        <div class="section-head">
-          <h2>Incident History</h2>
-          <span id="incident-count" class="muted">0 incidents</span>
-        </div>
-        <div id="incident-list" class="incident-list"></div>
+        <section class="panel">
+          <div class="section-head">
+            <h2>Applications</h2>
+            <span id="app-count" class="muted">0 apps</span>
+          </div>
+          <div id="apps" class="apps"></div>
+        </section>
       </section>
 
       <section id="tab-diagnostics" class="tab-panel" hidden data-admin-detail>
         <div class="diagnostics-grid">
           <section class="panel">
-            <h2>Ask For A Diagnosis</h2>
+            <h2>Ask for a diagnosis</h2>
             <textarea id="diagnostic-question" rows="4">What is wrong right now?</textarea>
             <label id="diagnostic-auto-repair-wrap" class="chat-auto-repair">
               <input id="diagnostic-auto-repair" type="checkbox">
@@ -224,7 +254,7 @@
             </div>
           </section>
           <section class="panel">
-            <h2>Diagnosis Output</h2>
+            <h2>Diagnosis output</h2>
             <div id="diagnostic-output" class="diagnostic-output muted chat-empty">No diagnosis has been requested yet.</div>
           </section>
         </div>
@@ -234,8 +264,8 @@
         <section class="panel review-queue-panel">
           <div class="section-head">
             <div class="section-head-copy">
-              <h2>Actions Needing Review</h2>
-              <p>Standard-user repair requests wait here for an admin decision. Direct admin or LLM app actions are logged in the audit log instead of queued.</p>
+              <h2>Actions needing review</h2>
+              <p>Standard-user repair requests wait here for an admin decision. Direct admin or LLM app actions are recorded in Activity instead of queued.</p>
             </div>
             <button id="repair-requests-refresh" type="button" class="command" data-glyph="&#8635;">Reload</button>
           </div>
@@ -243,55 +273,46 @@
         </section>
       </section>
 
-      <section id="tab-admin" class="tab-panel" hidden data-admin-detail>
-        <div class="admin-grid">
-          <section class="panel">
-            <div class="section-head">
-              <h2>Audit Log</h2>
-              <button id="audit-refresh" type="button" class="command" data-glyph="&#8635;">Reload</button>
-            </div>
-            <label class="search-label audit-filter">
-              Filter audit log
-              <input id="audit-filter" placeholder="Actor, action, or detail">
-            </label>
-            <div class="audit-table-meta">
-              <span id="audit-row-count" class="muted">0 events</span>
-            </div>
-            <div id="audit-output" class="audit-table-wrap"></div>
-          </section>
-          <section class="panel">
-            <details class="debug-disclosure">
-              <summary>Developer / debug snapshot</summary>
-              <pre id="admin-output"></pre>
-            </details>
-          </section>
-        </div>
-      </section>
-
       <section id="tab-settings" class="tab-panel" hidden data-admin-detail>
-        <div class="section-head">
-          <h2>Runtime Settings</h2>
-          <button id="settings-refresh" type="button" class="command" data-glyph="&#8635;">Reload</button>
-        </div>
         <div class="settings-workspace">
-          <div class="settings-menu-head">Settings sections</div>
-          <nav id="settings-menu" class="settings-menu" aria-label="Settings sections">
-            <button type="button" data-settings-section="roles" class="active">Role Access</button>
-            <button type="button" data-settings-section="visibility">Visibility</button>
-            <button type="button" data-settings-section="blacklist">Blacklist</button>
-            <button type="button" data-settings-section="apps">Apps</button>
-            <button type="button" data-settings-section="llm">LLM</button>
-            <button type="button" data-settings-section="integrations">Integrations</button>
-            <button type="button" data-settings-section="notifications">Notifications</button>
-          </nav>
+          <div class="toolbar settings-toolbar">
+            <nav id="settings-menu" class="settings-menu" aria-label="Settings sections">
+              <button type="button" data-settings-section="roles" class="active">Role access</button>
+              <button type="button" data-settings-section="visibility">Visibility</button>
+              <button type="button" data-settings-section="blacklist">Blacklist</button>
+              <button type="button" data-settings-section="apps">Apps</button>
+              <button type="button" data-settings-section="llm">LLM</button>
+              <button type="button" data-settings-section="integrations">Integrations</button>
+              <button type="button" data-settings-section="notifications">Notifications</button>
+              <button type="button" data-settings-section="advanced">Advanced</button>
+            </nav>
+            <div class="toolbar-end">
+              <label class="search-label search-inline settings-search-label">
+                <span>Search settings</span>
+                <input id="settings-search" placeholder="Search settings" autocomplete="off">
+              </label>
+              <button id="settings-refresh" type="button" class="command settings-reload" data-glyph="&#8635;" aria-label="Reload settings" title="Reload settings"></button>
+            </div>
+          </div>
+          <p id="settings-search-empty" class="settings-search-empty muted" hidden>No settings match that search.</p>
           <div class="settings-detail">
             <section class="panel role-access settings-section" data-settings-section="roles">
               <div class="section-head">
-                <h2>Role Access</h2>
+                <h2>Role access</h2>
               </div>
               <div id="role-settings" class="role-settings"></div>
             </section>
             <div id="settings-grid" class="settings-grid"></div>
+            <section class="panel settings-section settings-advanced" data-settings-section="advanced">
+              <div class="section-head">
+                <h2>Advanced</h2>
+              </div>
+              <p class="muted">Raw collector output for troubleshooting. Nothing here is editable.</p>
+              <details class="debug-disclosure">
+                <summary>Developer / debug snapshot</summary>
+                <pre id="admin-output"></pre>
+              </details>
+            </section>
           </div>
         </div>
       </section>

@@ -18,6 +18,9 @@ const state = {
   selectedRole: "",
   selectedUser: "",
   auditEntries: [],
+  activityFilter: "all",
+  activitySearch: "",
+  settingsSearch: "",
   repairRequests: [],
   userRepairRequests: [],
   notificationPreferences: new Map(),
@@ -735,24 +738,24 @@ function setActiveTab(tabName) {
     panel.hidden = panel.id !== `tab-${tabName}`;
   });
   const titles = {
-    overview: "System overview",
+    overview: "Overview",
+    activity: "Activity",
     server: "Server health",
     router: "Router and UniFi",
-    apps: "Application inventory",
-    incidents: "Incidents and facts",
+    apps: "Apps",
     diagnostics: "Diagnostics",
     queue: "Review queue",
-    admin: "Admin workspace",
-    settings: "Runtime settings",
+    settings: "Settings",
   };
-  $("page-title").textContent = titles[tabName] || "System overview";
+  $("page-title").textContent = titles[tabName] || "Overview";
   renderPageSubtitle();
   closeNav();
   if (tabName === "queue") {
     loadRepairRequests();
   }
-  if (tabName === "admin") {
+  if (tabName === "activity") {
     loadAudit();
+    loadRepairRequests();
   }
   // Re-entering the tab must not silently rebuild the forms over unsaved edits.
   if (tabName === "settings" && !settingsHasUnsavedChanges()) loadSettings();
@@ -837,15 +840,16 @@ async function refresh() {
 function renderPageSubtitle() {
   if (!hasAdminSurface()) return;
   const snapshot = state.snapshot || {};
+  // Not rendered on screen: this is the accessible description of the page, which
+  // is the only place a restatement of the page title belongs.
   const copy = {
     overview: snapshot.server_summary || "Current status, incidents, and diagnostic facts.",
+    activity: "Incidents, repair decisions, and configuration changes in one stream.",
     server: "Storage, service, and collector health for the server.",
     router: "Internet, DNS, router, and UniFi health.",
     apps: "Search visible apps, review metadata, and use admin-only controls.",
-    incidents: "Current incidents and the facts behind them.",
     diagnostics: "Ask the configured diagnosis provider for a structured explanation.",
     queue: "Review standard-user repair requests that need an admin decision.",
-    admin: "Audit events and a collapsed debug snapshot for troubleshooting.",
     settings: "Configure roles, visibility, integrations, providers, and notifications.",
   };
   $("summary").textContent = copy[state.activeTab] || "Status loaded.";
@@ -877,12 +881,13 @@ function renderSnapshot(snapshot) {
     renderUserHome(snapshot);
     return;
   }
+  renderVerdict(snapshot);
   renderOverviewCards(snapshot);
   renderServerHealth(snapshot);
   renderRouterStatus(snapshot);
   renderFacts(snapshot.facts || []);
   renderIncidentStrip(snapshot.incidents || []);
-  renderIncidents(snapshot.incidents || []);
+  renderActivity();
   renderApps(snapshot.apps || []);
   $("admin-output").textContent = JSON.stringify(snapshot, null, 2);
 }
@@ -2185,6 +2190,125 @@ function compactRouterSummary(infra) {
   return "Internet checks look normal.";
 }
 
+/* ---------------------------------------------------------------------------
+   Overview verdict.
+
+   The Overview page exists to answer one question, so it opens by answering it
+   in a single display-size sentence. When nothing is wrong that sentence plus
+   the monitor rail is the whole page; when something is wrong the sentence
+   names it and carries the two actions worth taking.
+
+   The compact surface answers the same question through compactHero(). The two
+   share the shape deliberately, but not the words: this one is allowed to name
+   the array, the container service and the WAN, and the compact one is not.
+   --------------------------------------------------------------------------- */
+function renderVerdict(snapshot) {
+  const element = $("verdict");
+  if (!element) return;
+  const verdict = adminVerdict(snapshot);
+  element.className = `verdict ${verdict.tone}`;
+  element.replaceChildren(
+    node("p", { class: "verdict-state" }, statusIndicator(verdict.state, verdict.tone)),
+    node("h1", { class: "verdict-headline", text: verdict.headline }),
+    node("p", { class: "verdict-detail", text: verdict.detail }),
+    verdict.actions.length
+      ? node("div", { class: "verdict-actions" }, ...verdict.actions.map((action) => node("button", {
+        type: "button",
+        class: action.primary ? "primary command" : "command",
+        "data-glyph": action.glyph,
+        onclick: action.run,
+        text: action.label,
+      })))
+      : null,
+  );
+}
+
+function adminVerdict(snapshot) {
+  const infra = snapshot.infrastructure || {};
+  const apps = snapshot.apps || [];
+  const incidents = snapshot.incidents || [];
+  const offline = apps.filter((app) => normalizeStatus(app.current_status) === "offline");
+  const degraded = apps.filter((app) => normalizeStatus(app.current_status) === "degraded");
+  const checked = infra.last_checked_at ? ` · checked ${relativeTime(infra.last_checked_at)}` : "";
+  const askAction = { label: "Ask what happened", glyph: "?", run: () => setActiveTab("diagnostics") };
+  const activityAction = { label: "View activity", glyph: ">", run: () => setActiveTab("activity") };
+
+  if (infra.nas_reachable === false) {
+    return {
+      tone: "offline",
+      state: "Not working",
+      headline: "The NAS is unreachable.",
+      detail: `Nothing downstream of the NAS can be verified while it is offline${checked}.`,
+      actions: [{ ...askAction, primary: true }, activityAction],
+    };
+  }
+  if (hasHomeServerProblem(infra)) {
+    return {
+      tone: "offline",
+      state: "Not working",
+      headline: "The server needs attention.",
+      detail: `${serverSummary(infra)}${checked}`,
+      actions: [{ label: "Open server health", glyph: ">", primary: true, run: () => setActiveTab("server") }, askAction],
+    };
+  }
+  if (infra.internet_reachable === false) {
+    return {
+      tone: "degraded",
+      state: "Degraded",
+      headline: "The internet connection is down.",
+      detail: `The server itself is responding. ${routerSummary(infra)}${checked}`,
+      actions: [{ label: "Open router", glyph: ">", primary: true, run: () => setActiveTab("router") }, askAction],
+    };
+  }
+  if (offline.length === 1 && !degraded.length) {
+    const name = appDisplayName(offline[0]);
+    return {
+      tone: "degraded",
+      state: "Degraded",
+      headline: `${name} is not running.`,
+      detail: `Every other monitored service is healthy${checked}.`,
+      actions: [{ label: `Open ${name}`, glyph: ">", primary: true, run: () => setActiveTab("apps") }, askAction],
+    };
+  }
+  if (offline.length || degraded.length) {
+    const parts = [];
+    if (offline.length) parts.push(`${offline.length} offline`);
+    if (degraded.length) parts.push(`${degraded.length} degraded`);
+    return {
+      tone: "degraded",
+      state: "Degraded",
+      headline: `${offline.length + degraded.length} apps need attention.`,
+      detail: `${parts.join(", ")} of ${apps.length} monitored${checked}.`,
+      actions: [{ label: "Open apps", glyph: ">", primary: true, run: () => setActiveTab("apps") }, askAction],
+    };
+  }
+  if (incidents.length) {
+    return {
+      tone: "degraded",
+      state: "Degraded",
+      headline: `${incidents.length} open incident${incidents.length === 1 ? "" : "s"}.`,
+      detail: `${incidents[0].summary || incidents[0].type || "An incident is open"}${checked}.`,
+      actions: [{ ...activityAction, primary: true }, askAction],
+    };
+  }
+  if (!snapshot.overall_status && !apps.length && !infra.last_checked_at) {
+    return {
+      tone: "unknown",
+      state: "Checking",
+      headline: "Collecting status…",
+      detail: "No snapshot has been returned yet.",
+      actions: [],
+    };
+  }
+  return {
+    tone: "online",
+    state: "Working",
+    headline: "Everything is working.",
+    detail: `${apps.length} app${apps.length === 1 ? "" : "s"}, storage and internet all healthy${checked}.`,
+    actions: [],
+  };
+}
+
 function renderOverviewCards(snapshot) {
   const infra = snapshot.infrastructure || {};
   const apps = snapshot.apps || [];
@@ -2248,19 +2372,18 @@ function renderServerHealth(snapshot) {
     ["server.nas-link", "NAS Link", linkStatus(infra), linkNote(infra)],
   ];
   $("server-health-grid").replaceChildren(...rows.map(([id, label, value, note]) => statusListRow(id, label, value, note)).filter(Boolean));
-  const warnings = infra.storage_warnings?.length ? infra.storage_warnings.join("; ") : "No storage warnings";
   $("server-detail-grid").replaceChildren(...[
     detailSection("server.collectors", "Collectors", [
       detailRow("Unraid", sourceHealth(infra, "unraid")),
       detailRow("Docker", sourceHealth(infra, "docker")),
-      detailRow("Checked", formatTime(infra.last_checked_at)),
+      detailRow("Checked", infra.last_checked_at ? formatTime(infra.last_checked_at) : null),
     ]),
     detailSection("server.storage", "Storage", [
-      detailRow("Version", infra.unraid_version || "No version data"),
-      detailRow("Disks", infra.array_disk_count ? `${infra.array_disk_count} disk${infra.array_disk_count === 1 ? "" : "s"} (${infra.array_disk_warning_count || 0} warning${infra.array_disk_warning_count === 1 ? "" : "s"})` : "No disk data"),
-      detailRow("Capacity", infra.array_capacity_total_bytes ? `${formatBytes(infra.array_capacity_used_bytes)} used of ${formatBytes(infra.array_capacity_total_bytes)} (${formatPercent(infra.array_capacity_used_pct)})` : "No capacity data"),
-      detailRow("Parity", infra.parity_check_state || "No parity check data"),
-      detailRow("Warnings", warnings),
+      detailRow("Version", infra.unraid_version || null),
+      detailRow("Disks", infra.array_disk_count ? `${infra.array_disk_count} disk${infra.array_disk_count === 1 ? "" : "s"} (${infra.array_disk_warning_count || 0} warning${infra.array_disk_warning_count === 1 ? "" : "s"})` : null),
+      detailRow("Capacity", infra.array_capacity_total_bytes ? `${formatBytes(infra.array_capacity_used_bytes)} used of ${formatBytes(infra.array_capacity_total_bytes)} (${formatPercent(infra.array_capacity_used_pct)})` : null),
+      detailRow("Parity", infra.parity_check_state || null),
+      detailRow("Warnings", infra.storage_warnings?.length ? infra.storage_warnings.join("; ") : null),
     ]),
   ].filter(Boolean));
 }
@@ -2281,19 +2404,19 @@ function renderRouterStatus(snapshot) {
     detailSection("router.collectors", "Collectors", [
       detailRow("UniFi", sourceHealth(infra, "unifi")),
       detailRow("Probes", sourceHealth(infra, "probes")),
-      detailRow("Checked", formatTime(infra.last_checked_at)),
+      detailRow("Checked", infra.last_checked_at ? formatTime(infra.last_checked_at) : null),
     ]),
     detailSection("router.unifi", "UniFi", [
-      detailRow("Site", infra.unifi_site_name || infra.unifi_site_id || "No site data"),
-      detailRow("Devices", infra.unifi_device_count ? `${infra.unifi_device_count} device${infra.unifi_device_count === 1 ? "" : "s"} (${infra.unifi_offline_device_count || 0} offline)` : "No device data"),
-      detailRow("Clients", Number.isFinite(Number(infra.unifi_client_count)) ? `${infra.unifi_client_count}` : "No client data"),
-      detailRow("Updates", Number.isFinite(Number(infra.unifi_firmware_updates)) ? `${infra.unifi_firmware_updates}` : "No firmware data"),
-      detailRow("WANs", Number.isFinite(Number(infra.unifi_wan_count)) ? `${infra.unifi_wan_count}` : "No WAN data"),
-      detailRow("Warnings", infra.unifi_warnings?.length ? infra.unifi_warnings.join("; ") : "No UniFi warnings"),
+      detailRow("Site", infra.unifi_site_name || infra.unifi_site_id || null),
+      detailRow("Devices", infra.unifi_device_count ? `${infra.unifi_device_count} device${infra.unifi_device_count === 1 ? "" : "s"} (${infra.unifi_offline_device_count || 0} offline)` : null),
+      detailRow("Clients", Number.isFinite(Number(infra.unifi_client_count)) ? `${infra.unifi_client_count}` : null),
+      detailRow("Updates", Number.isFinite(Number(infra.unifi_firmware_updates)) ? `${infra.unifi_firmware_updates}` : null),
+      detailRow("WANs", Number.isFinite(Number(infra.unifi_wan_count)) ? `${infra.unifi_wan_count}` : null),
+      detailRow("Warnings", infra.unifi_warnings?.length ? infra.unifi_warnings.join("; ") : null),
     ]),
     detailSection("router.nas-link", "NAS Link", [
-      detailRow("Expected", infra.expected_nas_link_mbps ? `${infra.expected_nas_link_mbps} Mbps` : "No expectation configured"),
-      detailRow("Negotiated", infra.nas_link_speed_mbps ? `${infra.nas_link_speed_mbps} Mbps` : "No link data"),
+      detailRow("Expected", infra.expected_nas_link_mbps ? `${infra.expected_nas_link_mbps} Mbps` : null),
+      detailRow("Negotiated", infra.nas_link_speed_mbps ? `${infra.nas_link_speed_mbps} Mbps` : null),
     ]),
   ].filter(Boolean));
 }
@@ -2383,10 +2506,14 @@ function statusListRow(id, label, value, note) {
   ));
 }
 
+// A missing value is not a value. Pass null (not "No disk data") and the row
+// disappears; a section whose rows all disappear says so once instead of listing
+// five absences styled exactly like real readings.
 function detailRow(label, value) {
+  if (value === null || value === undefined || value === "") return null;
   return node("div", { class: "detail-row" },
     node("span", { class: "meta-label", text: label }),
-    node("strong", { text: value || "unknown" }),
+    node("strong", { text: value }),
   );
 }
 
@@ -2394,12 +2521,18 @@ function detailSection(id, title, children) {
   const childNodes = children.filter(Boolean);
   return visibleMonitor(id, node("section", { class: "detail-section monitor-shell" },
     node("h3", { text: title }),
-    node("div", { class: "detail-list" }, childNodes),
+    childNodes.length
+      ? node("div", { class: "detail-list" }, childNodes)
+      : node("p", { class: "detail-empty", text: "Nothing reported by this collector." }),
   ));
 }
 
 function renderFacts(facts) {
   $("fact-count").textContent = `${facts.length} fact${facts.length === 1 ? "" : "s"}`;
+  // An empty state rendered like data is still data on screen. When there is
+  // nothing to say, the whole panel steps aside instead of listing "no X".
+  const panel = $("overview-facts");
+  if (panel) panel.hidden = !facts.length;
   if (!facts.length) {
     $("facts").replaceChildren(node("div", { class: "empty", text: "No diagnostic facts are active." }));
     return;
@@ -2414,6 +2547,8 @@ function renderFacts(facts) {
 }
 
 function renderIncidentStrip(incidents) {
+  const panel = $("overview-incidents");
+  if (panel) panel.hidden = !incidents.length;
   if (!incidents.length) {
     $("incident-strip").replaceChildren(node("div", { class: "empty", text: "No current incidents." }));
     return;
@@ -2421,44 +2556,37 @@ function renderIncidentStrip(incidents) {
   $("incident-strip").replaceChildren(...incidents.slice(0, 3).map(renderIncidentSummaryRow));
 }
 
-function renderIncidents(incidents) {
-  $("incident-count").textContent = `${incidents.length} incident${incidents.length === 1 ? "" : "s"}`;
-  if (!incidents.length) {
-    $("incident-list").replaceChildren(node("div", { class: "empty", text: "No incidents are active in this snapshot." }));
-    return;
-  }
-  $("incident-list").replaceChildren(...incidents.map(renderIncidentCard));
-}
-
+// Rendered as the expanded body of an activity row, so it must not repeat the
+// summary, time or severity the row already shows.
 function renderIncidentCard(incident) {
   return node("article", { class: "incident-card" },
-    node("header", {},
-      node("div", {},
-        node("h3", { text: incident.summary || incident.type }),
-        node("p", { class: "muted", text: incident.id || incident.type }),
-      ),
-      node("span", { class: `severity ${incident.severity || "none"}`, text: incident.severity || "none" }),
-    ),
-    incident.affected_services?.length ? node("p", { text: `Affected services: ${incident.affected_services.join(", ")}` }) : null,
+    node("p", { class: "muted", text: `${incident.id || incident.type}${incident.affected_services?.length ? ` · affects ${incident.affected_services.join(", ")}` : ""}` }),
     incident.evidence?.length ? evidenceChips(incident.evidence) : null,
   );
 }
 
+// Evidence arrives either as key=value tokens or as a plain sentence. Only the
+// former is a labelled pair; splitting a sentence on whitespace and labelling
+// every word "Evidence" produced rows of noise.
 function evidenceChips(evidence) {
   const chips = [];
   for (const item of evidence || []) {
-    const parts = String(item || "").split(/\s+/).filter(Boolean);
-    for (const part of parts) {
-      const index = part.indexOf("=");
-      if (index <= 0) {
-        chips.push(["Evidence", part]);
-      } else {
-        chips.push([part.slice(0, index), part.slice(index + 1)]);
+    const text = String(item || "").trim();
+    if (!text) continue;
+    const tokens = text.split(/\s+/);
+    if (tokens.length > 1 && tokens.every((token) => token.indexOf("=") > 0)) {
+      for (const token of tokens) {
+        const index = token.indexOf("=");
+        chips.push([token.slice(0, index), token.slice(index + 1)]);
       }
+      continue;
     }
+    const index = tokens.length === 1 ? text.indexOf("=") : -1;
+    if (index > 0) chips.push([text.slice(0, index), text.slice(index + 1)]);
+    else chips.push(["", text]);
   }
   return node("div", { class: "evidence-chips" }, chips.map(([label, value]) => node("span", { class: "evidence-chip" },
-    node("strong", { text: label }),
+    label ? node("strong", { text: label }) : null,
     node("span", { text: value || "unknown" }),
   )));
 }
@@ -2485,6 +2613,8 @@ function renderApps(apps) {
     const text = [app.display_name, app.app_id, app.current_status, app.image_ref].join(" ").toLowerCase();
     return statusMatch && (!search || text.includes(search));
   });
+  const count = $("app-count");
+  if (count) count.textContent = `${visible.length} app${visible.length === 1 ? "" : "s"}${visible.length === apps.length ? "" : ` of ${apps.length}`}`;
   if (!visible.length) {
     $("apps").replaceChildren(node("div", { class: "empty", text: "No apps match the current filter." }));
     return;
@@ -2523,9 +2653,11 @@ function renderAppCard(app) {
           node("p", { class: "muted", text: appSubtitle(app) }),
         ),
       ),
-      node("div", { class: "app-row-actions" },
-        ...actions,
-      ),
+    ),
+    // Controls are a sibling of the identity block, not a child of it, so the
+    // desktop layout can park them in their own column on the right edge.
+    node("div", { class: "app-row-actions" },
+      ...actions,
     ),
     node("p", { class: "app-summary", text: compactAppSummary(app) }),
     meta.length ? node("dl", { class: "app-meta-list" }, meta.map(([label, value]) => node("div", { class: "app-meta-item" },
@@ -3613,11 +3745,10 @@ async function loadAudit() {
   try {
     const data = await api("/api/admin/audit");
     state.auditEntries = Array.isArray(data) ? [...data].sort((a, b) => String(b.time || "").localeCompare(String(a.time || ""))) : [];
-    renderAuditTable();
+    renderActivity();
   } catch (error) {
     state.auditEntries = [];
-    $("audit-row-count").textContent = "0 events";
-    $("audit-output").replaceChildren(node("div", { class: "empty", text: error.message }));
+    renderActivity(error.message);
   }
 }
 
@@ -3654,9 +3785,10 @@ function renderRepairRequests() {
   const requests = state.repairRequests || [];
   if (!requests.length) {
     output.replaceChildren(node("div", { class: "empty", text: "No repair requests." }));
-    return;
+  } else {
+    output.replaceChildren(...requests.map(renderRepairRequestRow));
   }
-  output.replaceChildren(...requests.map(renderRepairRequestRow));
+  renderActivity();
 }
 
 function renderRepairRequestRow(request) {
@@ -3715,32 +3847,188 @@ async function decideRepairRequest(id, choice, button = null) {
   }
 }
 
-function renderAuditTable() {
-  const filter = String($("audit-filter")?.value || "").trim().toLowerCase();
-  const entries = state.auditEntries.filter((entry) => auditEntryText(entry).includes(filter));
-  $("audit-row-count").textContent = `${entries.length} event${entries.length === 1 ? "" : "s"}`;
-  if (!entries.length) {
-    $("audit-output").replaceChildren(node("div", { class: "empty", text: filter ? "No audit events match the filter." : "No audit events recorded." }));
+/* ---------------------------------------------------------------------------
+   Activity — one typed stream instead of five destinations.
+
+   Incidents, repair requests and audit entries were three screens over the same
+   underlying history, each with its own layout, and the audit table was the only
+   one that was actually chronological. They are one stream here, classified into
+   three kinds so a filter replaces a page:
+
+     problem  something broke, or an action was refused or failed
+     repair   something was attempted, approved, denied or executed
+     change   configuration and account changes
+
+   Rows are aligned columns, not cards: time, kind, what happened. That keeps the
+   scanning density of the old audit table while making the entries readable.
+   --------------------------------------------------------------------------- */
+const ACTIVITY_SUBJECTS = [
+  ["settings.llm.chatgpt", "ChatGPT connection", "change"],
+  ["settings.roles", "Role access settings", "change"],
+  ["settings.visibility", "Visibility settings", "change"],
+  ["settings.blacklist", "Blacklist settings", "change"],
+  ["settings.apps", "App catalogue settings", "change"],
+  ["settings.llm", "LLM settings", "change"],
+  ["settings.integrations", "Integration settings", "change"],
+  ["settings.notifications", "Notification settings", "change"],
+  ["notification.preference", "Notification preference", "change"],
+  ["app.container.logs", "Container logs", "change"],
+  ["app.container", "Container control", "repair"],
+  ["app.icon", "App icon", "change"],
+  ["infra.unraid_array", "Storage array", "repair"],
+  ["llm.agent_auto_repair", "Automatic repair", "repair"],
+  ["llm.agent_plan", "Repair plan", "repair"],
+  ["llm.array_start", "Array start", "repair"],
+  ["llm.agent_tool", "Assistant tool call", "repair"],
+  ["llm.diagnosis", "Diagnosis", "change"],
+  ["llm.failed", "Diagnosis", "problem"],
+  ["repair_request", "Repair request", "repair"],
+  ["user.repair_request", "Repair request", "repair"],
+  ["user.notify_admin", "Admin notification", "change"],
+  ["user.saved", "Account", "change"],
+  ["auth", "Sign-in", "change"],
+];
+
+const ACTIVITY_VERBS = {
+  saved: "saved",
+  login: "succeeded",
+  failed: "failed",
+  throttled: "was throttled",
+  proposed: "proposed",
+  suggested: "suggested",
+  approved: "approved",
+  denied: "denied",
+  refused: "refused",
+  executed: "executed",
+  verified: "verified",
+  cleared: "cleared",
+  connected: "connected",
+  start: "started",
+  action: "ran",
+  logs: "read",
+  action_failed: "failed to run",
+  logs_failed: "failed to read",
+  execute_failed: "failed to execute",
+  verify_failed: "failed verification",
+  rate_limited: "was rate limited",
+  replay_blocked: "was blocked as a replay",
+  non_executable: "was not executable",
+  control_disabled: "was blocked: control disabled",
+  auto_review_refused: "was refused by the safety reviewer",
+  auto_reviewed: "passed the safety reviewer",
+  notify_user_failed: "could not notify the user",
+  notify_failed: "could not notify",
+  callback_error: "failed during callback",
+  array_start_suggested: "suggested starting the array",
+  created: "created",
+};
+
+// A failure or a refusal is a problem regardless of which namespace it came
+// from, so the suffix wins over the subject's default kind.
+const ACTIVITY_PROBLEM_SUFFIXES = /(failed|refused|rate_limited|replay_blocked|non_executable|control_disabled|throttled|error)$/;
+
+function activityKindForAction(action) {
+  const name = String(action || "");
+  if (ACTIVITY_PROBLEM_SUFFIXES.test(name)) return "problem";
+  const match = ACTIVITY_SUBJECTS.find(([prefix]) => name === prefix || name.startsWith(`${prefix}.`));
+  return match ? match[2] : "change";
+}
+
+function activityTitleForAction(action) {
+  const name = String(action || "unknown");
+  const match = ACTIVITY_SUBJECTS.find(([prefix]) => name === prefix || name.startsWith(`${prefix}.`));
+  if (!match) return sentenceCase(name.replace(/[._]/g, " "));
+  const subject = match[1];
+  const suffix = name === match[0] ? "" : name.slice(match[0].length + 1);
+  if (!suffix) return subject;
+  const verb = ACTIVITY_VERBS[suffix] || suffix.replace(/_/g, " ");
+  return `${subject} ${verb}`;
+}
+
+function activityEvents() {
+  const events = [];
+  for (const incident of state.snapshot?.incidents || []) {
+    events.push({
+      kind: "problem",
+      time: incident.detected_at || incident.started_at || state.snapshot?.infrastructure?.last_checked_at || "",
+      title: incident.summary || incident.type || "Incident",
+      actor: "monitor",
+      tone: incident.severity === "high" || incident.severity === "critical" ? "offline" : "degraded",
+      meta: incident.severity || "none",
+      body: () => renderIncidentCard(incident),
+      search: [incident.id, incident.type, incident.summary, (incident.affected_services || []).join(" ")].join(" "),
+    });
+  }
+  for (const request of state.repairRequests || []) {
+    const outcome = request.outcome || {};
+    events.push({
+      kind: "repair",
+      time: request.decided_at || request.created_at || "",
+      title: `Repair request — ${request.app_label || request.app_id || "app"}`,
+      actor: request.requester_name || "user",
+      tone: request.status === "pending" ? "degraded" : outcome.recovered ? "online" : "hidden",
+      meta: request.status || "pending",
+      detail: outcome.message || request.resolution_note || request.diagnosis_summary || "",
+      search: [request.app_id, request.app_label, request.requester_name, request.status, request.diagnosis_summary].join(" "),
+    });
+  }
+  for (const entry of state.auditEntries || []) {
+    const kind = activityKindForAction(entry.action);
+    events.push({
+      kind,
+      time: entry.time || "",
+      title: activityTitleForAction(entry.action),
+      actor: entry.actor || "unknown",
+      // "hidden" is the neutral/informational tone. An audit entry that simply
+      // records something happening is not an unknown state.
+      tone: kind === "problem" ? "offline" : "hidden",
+      meta: entry.redacted ? "redacted" : "",
+      details: entry.details,
+      search: auditEntryText(entry),
+    });
+  }
+  return events.sort((a, b) => String(b.time || "").localeCompare(String(a.time || "")));
+}
+
+function renderActivity(errorMessage = "") {
+  const stream = $("activity-stream");
+  if (!stream) return;
+  const search = state.activitySearch.trim().toLowerCase();
+  const events = activityEvents().filter((event) => {
+    if (state.activityFilter !== "all" && event.kind !== state.activityFilter) return false;
+    if (!search) return true;
+    return `${event.title} ${event.actor} ${event.detail || ""} ${event.search || ""}`.toLowerCase().includes(search);
+  });
+  $("activity-count").textContent = `${events.length} event${events.length === 1 ? "" : "s"}`;
+  if (errorMessage) {
+    stream.replaceChildren(node("div", { class: "empty", text: errorMessage }));
     return;
   }
-  $("audit-output").replaceChildren(node("table", { class: "audit-table" },
-    node("thead", {},
-      node("tr", {},
-        node("th", { text: "Time" }),
-        node("th", { text: "Actor" }),
-        node("th", { text: "Action" }),
-        node("th", { text: "Details" }),
-        node("th", { text: "Redacted" }),
-      ),
+  if (!events.length) {
+    stream.replaceChildren(node("div", { class: "empty", text: search || state.activityFilter !== "all" ? "No activity matches that filter." : "No activity recorded yet." }));
+    return;
+  }
+  stream.replaceChildren(...events.map(activityRow));
+}
+
+function activityRow(event) {
+  const expandable = Boolean(event.body || (event.details && Object.keys(event.details).length));
+  const row = node("article", { class: `activity-row kind-${event.kind}` },
+    node("time", { class: "activity-time", datetime: event.time || "", title: formatTime(event.time), text: formatStreamTime(event.time) }),
+    node("span", { class: `activity-kind ${event.tone || "unknown"}` }, statusIndicator(event.kind, event.tone || "unknown", "status-dot-only")),
+    node("div", { class: "activity-main" },
+      node("p", { class: "activity-title", text: event.title }),
+      event.detail ? node("p", { class: "activity-detail", text: event.detail }) : null,
     ),
-    node("tbody", {}, entries.map((entry) => node("tr", {},
-      node("td", { text: formatTime(entry.time) }),
-      node("td", { text: entry.actor || "unknown" }),
-      node("td", { text: entry.action || "unknown" }),
-      node("td", {}, auditDetails(entry.details)),
-      node("td", {}, node("span", { class: `severity ${entry.redacted ? "medium" : "none"}`, text: entry.redacted ? "Yes" : "No" })),
-    ))),
-  ));
+    node("span", { class: "activity-actor", text: event.actor }),
+    event.meta ? node("span", { class: "activity-meta-tag", text: event.meta }) : null,
+  );
+  if (!expandable) return row;
+  const body = node("div", { class: "activity-body" }, event.body ? event.body() : auditDetails(event.details));
+  return node("details", { class: `activity-entry kind-${event.kind}` },
+    node("summary", {}, row),
+    body,
+  );
 }
 
 function auditEntryText(entry) {
@@ -3771,6 +4059,7 @@ async function loadSettings() {
   }
   $("settings-grid").replaceChildren(...cards);
   setSettingsSection(state.settingsSection);
+  applySettingsSearch();
 }
 
 async function buildSettingsCard(item) {
@@ -3801,13 +4090,46 @@ function settingsHasUnsavedChanges() {
 }
 
 function setSettingsSection(section) {
-  const validSections = new Set(["roles", ...SETTINGS_ENDPOINTS.map((item) => item.section)]);
+  const validSections = new Set(["roles", "advanced", ...SETTINGS_ENDPOINTS.map((item) => item.section)]);
   state.settingsSection = validSections.has(section) ? section : "roles";
   document.querySelectorAll("#settings-menu [data-settings-section]").forEach((button) => {
     button.classList.toggle("active", button.dataset.settingsSection === state.settingsSection);
   });
   document.querySelectorAll("#tab-settings .settings-section").forEach((panel) => {
     panel.hidden = panel.dataset.settingsSection !== state.settingsSection;
+  });
+}
+
+/* Settings search. Settings grew ~10x past what a single scrolling form can
+   carry, and the section list only helps once you already know which section a
+   setting lives in. The search matches the rendered label text of every section,
+   hides the sections that cannot match, and moves to the first that can. */
+function settingsSectionSearchText(section) {
+  const panel = document.querySelector(`#tab-settings .settings-section[data-settings-section="${section}"]`);
+  const button = document.querySelector(`#settings-menu [data-settings-section="${section}"]`);
+  return `${button?.textContent || ""} ${panel?.textContent || ""}`.toLowerCase();
+}
+
+function applySettingsSearch() {
+  const query = state.settingsSearch.trim().toLowerCase();
+  let firstMatch = "";
+  document.querySelectorAll("#settings-menu [data-settings-section]").forEach((button) => {
+    const section = button.dataset.settingsSection;
+    const match = !query || settingsSectionSearchText(section).includes(query);
+    button.hidden = !match;
+    if (match && !firstMatch) firstMatch = section;
+  });
+  const empty = $("settings-search-empty");
+  if (empty) empty.hidden = Boolean(firstMatch);
+  // Never move the pane out from under an unsaved edit.
+  if (query && firstMatch && firstMatch !== state.settingsSection && !settingsHasUnsavedChanges()) {
+    setSettingsSection(firstMatch);
+  }
+  // A match hidden inside a collapsed group is not a match the reader can see.
+  document.querySelectorAll("#tab-settings .settings-section").forEach((section) => {
+    section.querySelectorAll(".settings-group").forEach((group, index) => {
+      group.open = query ? (group.textContent || "").toLowerCase().includes(query) : index === 0;
+    });
   });
 }
 
@@ -4395,6 +4717,7 @@ function settingsCard(item, body, save) {
     body.addEventListener("input", markDirty);
     body.addEventListener("change", markDirty);
   }
+  collapseSettingsSubsections(body);
   return node("article", { class: "settings-card settings-section", "data-settings-section": item.section },
     node("header", {},
       node("h3", { text: item.title }),
@@ -4402,6 +4725,42 @@ function settingsCard(item, body, save) {
     save ? footer : null,
     body,
   );
+}
+
+/* A section like LLM still runs to a couple of thousand pixels on its own, so
+   each labelled group inside it becomes a disclosure with its heading as the
+   summary. You see the shape of the section immediately and open only the group
+   you came for; the first group stays open so the pane never reads as empty.
+   Applied here rather than in each renderer so every section behaves the same
+   way and new ones get it for free. */
+function collapseSettingsSubsections(body) {
+  let converted = 0;
+  for (const group of [...body.querySelectorAll(".settings-subsection")]) {
+    // A group's heading is either a bare h4 or an h4 in a title row that also
+    // carries a state or an action; either way the whole thing becomes the
+    // summary, so the state stays readable while the group is closed.
+    const titleRow = group.querySelector(":scope > .settings-section-title-row");
+    const heading = titleRow?.querySelector(":scope > h4") || group.querySelector(":scope > h4");
+    // Skip groups with no heading (nothing to put in the summary) and groups
+    // already inside a disclosure, so nesting never doubles up.
+    if (!heading || group.closest("details")) continue;
+    // A control inside a <summary> would toggle the disclosure as well as doing
+    // its own job, so a title row that carries one stays in the group body.
+    const titleRowIsInert = titleRow && !titleRow.querySelector("button,input,select,textarea,a");
+    const details = node("details", { class: "settings-group", open: converted === 0 });
+    const summary = node("summary", {});
+    group.replaceWith(details);
+    if (titleRowIsInert) {
+      summary.append(titleRow);
+    } else {
+      summary.append(node("h4", { text: heading.textContent }));
+      // The heading is now in the summary, so the original has to go or the
+      // group renders its own name twice.
+      heading.remove();
+    }
+    details.append(summary, group);
+    converted += 1;
+  }
 }
 
 function renderVisibilitySettings(item, data) {
@@ -5173,8 +5532,10 @@ function settingToggle(label, checked) {
   return { input, element: node("label", { class: "toggle-line setting-toggle" }, input, label) };
 }
 
+// The value is seconds and the field gave no unit, so "900" was unreadable
+// without knowing the wire format. The unit belongs in the label.
 function durationSecondsField(label, duration) {
-  return settingNumberField(label, durationToSeconds(duration), { min: 0, step: 1, inputmode: "numeric" });
+  return settingNumberField(`${label} (seconds)`, durationToSeconds(duration), { min: 0, step: 1, inputmode: "numeric" });
 }
 
 function durationToSeconds(duration) {
@@ -5465,6 +5826,19 @@ function formatTime(value) {
   return date.toLocaleString();
 }
 
+// Timestamps in a scanning column: drop the date for today's entries so the
+// column stays narrow and the numerals line up.
+function formatStreamTime(value) {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  const time = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+  const today = new Date();
+  const sameDay = date.getFullYear() === today.getFullYear() && date.getMonth() === today.getMonth() && date.getDate() === today.getDate();
+  if (sameDay) return time;
+  return `${date.toLocaleDateString([], { day: "2-digit", month: "short" })} ${time}`;
+}
+
 function formatBytes(value) {
   const bytes = Number(value || 0);
   if (!bytes) return "0 B";
@@ -5542,9 +5916,28 @@ $("user-chat-input").addEventListener("keydown", (event) => submitOnEnter(event,
 $("user-notify-admin").addEventListener("click", () => notifyAdmin("A standard user reported a problem."));
 $("user-app-detail-back").addEventListener("click", closeCompactDetail);
 $("user-infra-detail-back").addEventListener("click", closeCompactDetail);
-$("audit-refresh").addEventListener("click", loadAudit);
+$("activity-refresh").addEventListener("click", () => {
+  loadAudit();
+  loadRepairRequests();
+});
 $("repair-requests-refresh").addEventListener("click", loadRepairRequests);
-$("audit-filter").addEventListener("input", renderAuditTable);
+$("activity-search").addEventListener("input", (event) => {
+  state.activitySearch = event.target.value || "";
+  renderActivity();
+});
+$("activity-filters").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-activity-filter]");
+  if (!button) return;
+  state.activityFilter = button.dataset.activityFilter;
+  document.querySelectorAll("#activity-filters button").forEach((entry) => {
+    entry.classList.toggle("active", entry === button);
+  });
+  renderActivity();
+});
+$("settings-search").addEventListener("input", (event) => {
+  state.settingsSearch = event.target.value || "";
+  applySettingsSearch();
+});
 $("settings-refresh").addEventListener("click", () => {
   if (settingsHasUnsavedChanges() && !confirm("Discard unsaved settings changes?")) return;
   state.roleDirty = false;

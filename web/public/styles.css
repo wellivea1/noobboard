@@ -1,45 +1,142 @@
+/* =============================================================================
+   NoobBoard design system — token layer
+   -----------------------------------------------------------------------------
+   Read docs/ui-standards.md before adding anything here. The short version:
+
+   1. Never write a raw colour, size, radius or duration in a rule. Use a token.
+      If no token fits, the design is drifting — fix the design, not the token.
+   2. Colour carries exactly one meaning: STATE. Interaction is expressed with
+      the neutral ramp (fill, border, weight), never with hue.
+   3. Elevation is a surface step plus a hairline. There are no shadows.
+   4. Six type sizes exist and each has one job. Do not invent a seventh.
+   ========================================================================== */
 :root {
   color-scheme: dark;
   font-family: "Segoe UI", "Segoe UI Variable", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-  background: #101111;
-  color: #f2f3f5;
-  --page: #101111;
-  --surface: #181919;
-  --surface-alt: #121313;
-  --surface-raised: #202222;
-  --border: #303334;
-  --border-soft: #252829;
-  --muted: #afb5b9;
-  --text: #f2f3f5;
+
+  /* --- Neutral ramp -------------------------------------------------------
+     Four surfaces, deepest to highest. A container may sit one step above its
+     parent. Two steps means the hierarchy is wrong, not that you need a third. */
+  --surface-canvas: #101111;   /* the page itself */
+  --surface-sunken: #0c0d0d;   /* wells: code blocks, inputs, empty states */
+  --surface-raised: #181919;   /* panels, sidebar, cards */
+  --surface-overlay: #202222;  /* menus, dialogs, hovered rows */
+
+  /* Hairlines. --line is the default; -soft separates peers inside one
+     container; -control is the edge of an input or select, and is the only one
+     WCAG 1.4.11 applies to because it is the sole indicator of the control's
+     boundary — it therefore clears 3:1 against every surface above. */
+  --line: #303334;
+  --line-soft: #252829;
+  --line-strong: #454b4e;
+  --line-control: #6b7276;
+
+  /* Three ink levels. There is no fourth. If text needs to be quieter than
+     --ink-3 it should not be on the screen. */
+  --ink-1: #f2f3f5;            /* content and answers          >= 14:1 */
+  --ink-2: #afb5b9;            /* supporting copy and labels   >=  7:1 */
+  --ink-3: #8b9298;            /* timestamps, placeholders     >=  5:1 */
+
+  /* --- Status ramp --------------------------------------------------------
+     Exactly four states. Every status in the product maps onto one of them;
+     nothing else in the UI is allowed to use these hues.
+       ok      working / healthy / allowed
+       warn    degraded / unknown-but-suspicious / needs attention
+       bad     not working / failed / denied
+       neutral unknown / not measured / not applicable                       */
+  --status-ok: #48bd72;
+  --status-ok-ink: #b8efc9;
+  --status-ok-wash: #10291b;
+  --status-warn: #d69b32;
+  --status-warn-ink: #f7d792;
+  --status-warn-wash: #33270f;
+  --status-bad: #e45764;
+  --status-bad-ink: #ffb5bd;
+  --status-bad-wash: #341317;
+  --status-neutral: #68727f;
+  --status-neutral-ink: #d5d9df;
+  --status-neutral-wash: #272d36;
+
+  /* --- Interaction --------------------------------------------------------
+     Deliberately colourless. The primary action is the highest-contrast thing
+     on screen, not the most colourful one. */
   --accent: #d3d6d2;
   --accent-strong: #e0e2dd;
-  --ok-bg: #10291b;
-  --ok-text: #b8efc9;
-  --ok-border: #48bd72;
-  --warn-bg: #33270f;
-  --warn-text: #f7d792;
-  --warn-border: #d69b32;
-  --bad-bg: #341317;
-  --bad-text: #ffb5bd;
-  --bad-border: #e45764;
-  --unknown-bg: #272d36;
-  --unknown-text: #d5d9df;
-  --unknown-border: #68727f;
-  --button-bg: rgba(255, 255, 255, 0.012);
-  --button-hover: rgba(255, 255, 255, 0.055);
-  --button-active: rgba(255, 255, 255, 0.085);
-  --shadow: none;
-  --control-height: 40px;
-  --control-height-touch: 44px;
-  --dot-size: 9px;
+  --accent-ink: #101214;
+  --control-bg: rgba(255, 255, 255, 0.012);
+  --control-hover: rgba(255, 255, 255, 0.055);
+  --control-active: rgba(255, 255, 255, 0.085);
+  --focus-ring: rgba(199, 215, 230, 0.26);
+
+  /* --- Type scale ---------------------------------------------------------
+     Six steps, each with one job. The old scale collapsed everything into
+     0.78-0.9rem and pushed all hierarchy onto a single 2.55rem h1; this scale
+     puts the hierarchy back into the type.
+       display  the one answer a page exists to give. Max one per screen.
+       title    section heading (h2)
+       subtitle sub-section heading (h3), card heading
+       body     default running text and control labels
+       meta     secondary lines under a body line, table cells, metadata
+       micro    eyebrows and column labels only. Never a full sentence.       */
+  --text-display: 1.75rem;
+  --text-title: 1.0625rem;
+  --text-subtitle: 0.9375rem;
+  --text-body: 0.9375rem;
+  --text-meta: 0.8125rem;
+  --text-micro: 0.75rem;
+  --leading-tight: 1.15;
+  --leading-snug: 1.3;
+  --leading-normal: 1.5;
+  --tracking-tight: -0.015em;
+  --tracking-wide: 0.06em;
+  /* Three weights. The old sheet ran to 620-900 on ordinary labels and values,
+     which is why everything read as emphasised and nothing read as important. */
+  --weight-normal: 400;
+  --weight-medium: 500;
+  --weight-strong: 600;
+
+  /* --- Space -------------------------------------------------------------
+     4px base. Gaps between peers use 2-4; gaps between sections use 5-6;
+     10 is page-level breathing room only. */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
   --space-5: 20px;
   --space-6: 24px;
+  --space-7: 28px;
   --space-8: 32px;
+  --space-10: 40px;
+
+  /* --- Shape and motion ---------------------------------------------------
+     Radii stay small. A large corner radius reads as consumer software; a
+     console reads as instrument panel. --radius-lg exists for the compact
+     surface's tiles and for dialogs, and for nothing else. */
+  --radius-sm: 3px;            /* controls, chips */
+  --radius-md: 5px;            /* panels, cards */
+  --radius-lg: 12px;           /* compact-surface tiles, dialogs */
+  --radius-pill: 999px;
+  --motion-fast: 120ms;
+  --motion-base: 180ms;
+  --ease: cubic-bezier(0.2, 0, 0.2, 1);
+
+  /* --- Sizing -------------------------------------------------------------
+     Mobile-first, so the base is the touch floor. --control-height is what
+     every interactive row and control actually uses; --control-height-touch is
+     the constant it must never fall below where a finger is the input device.
+     See the density block below. */
+  --control-height: 44px;
+  --control-height-touch: 44px;  /* the floor for anything tappable */
+  --pad-panel: var(--space-4);   /* padding inside a panel */
+  --pad-row: var(--space-2);     /* vertical padding inside a list row */
+  --gap-section: var(--space-4); /* between panels on a page */
+  --dot-size: 9px;
   --nav-width: 220px;
+  --measure: 74ch;               /* max line length for running prose */
+  --label-col: 220px;            /* label column in a settings form row */
+  --form-max: none;              /* width a settings form row is bounded to */
+
+  /* --- Environment -------------------------------------------------------- */
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-right: env(safe-area-inset-right, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
@@ -47,6 +144,79 @@
   --visual-viewport-height: 100svh;
   --visual-viewport-top: 0px;
   --keyboard-inset-bottom: 0px;
+
+  /* --- Compatibility aliases ----------------------------------------------
+     Older rules in this file still reference these names. They resolve to the
+     tokens above so there is one source of truth. Do not use them in new CSS;
+     they are removed as the rules that need them are rewritten. */
+  --page: var(--surface-canvas);
+  --surface: var(--surface-raised);
+  --surface-alt: var(--surface-sunken);
+  --border: var(--line);
+  --border-soft: var(--line-soft);
+  --muted: var(--ink-2);
+  --text: var(--ink-1);
+  --ok-bg: var(--status-ok-wash);
+  --ok-text: var(--status-ok-ink);
+  --ok-border: var(--status-ok);
+  --warn-bg: var(--status-warn-wash);
+  --warn-text: var(--status-warn-ink);
+  --warn-border: var(--status-warn);
+  --bad-bg: var(--status-bad-wash);
+  --bad-text: var(--status-bad-ink);
+  --bad-border: var(--status-bad);
+  --unknown-bg: var(--status-neutral-wash);
+  --unknown-text: var(--status-neutral-ink);
+  --unknown-border: var(--status-neutral);
+  --button-bg: var(--control-bg);
+  --button-hover: var(--control-hover);
+  --button-active: var(--control-active);
+  --shadow: none;
+
+  background: var(--surface-canvas);
+  color: var(--ink-1);
+}
+
+/* =============================================================================
+   Density
+   -----------------------------------------------------------------------------
+   The 44px control floor is a TOUCH requirement (Apple HIG; WCAG 2.5.5). It
+   holds wherever a finger is the input device — the compact surface at every
+   width, and the admin surface below 861px, which is the same stacked layout on
+   a phone. Those are the only places the visual harness audits it.
+
+   On a desktop admin console the input device is a mouse, the floor is WCAG
+   2.5.8's 24px, and the job is different: an operator wants a screenful of
+   state, not a screenful of padding. Everything here is a token override, so no
+   individual rule has to know which mode it is in. If a component needs a
+   density exception, the component is wrong.
+   ========================================================================== */
+@media (min-width: 861px) {
+  /* A control sized for a fingertip carries ~10px of vertical padding. At mouse
+     density that padding is what makes a 28px control render 48px tall, so it
+     shrinks with everything else. */
+  body.admin-view input,
+  body.admin-view textarea,
+  body.admin-view select {
+    padding: 0.25rem 0.45rem;
+  }
+
+  body.admin-view {
+    --text-display: 1.25rem;
+    --text-title: 0.9375rem;
+    --text-subtitle: 0.875rem;
+    --text-body: 0.8125rem;
+    --text-meta: 0.75rem;
+    --text-micro: 0.6875rem;
+    --leading-normal: 1.45;
+    --control-height: 28px;
+    --pad-panel: var(--space-3);
+    --pad-row: 5px;
+    --gap-section: var(--space-3);
+    --dot-size: 8px;
+    --nav-width: 184px;
+    --form-max: 820px;
+  }
 }
 
 * {
@@ -93,22 +263,22 @@ textarea {
 
 button {
   min-height: var(--control-height);
-  border: 1px solid var(--border-soft);
-  background: var(--button-bg);
-  color: var(--text);
-  border-radius: 5px;
+  border: 1px solid var(--line-control);
+  background: var(--control-bg);
+  color: var(--ink-1);
+  border-radius: var(--radius-sm);
   padding: 0.34rem 0.68rem;
   cursor: pointer;
-  font-size: 0.92rem;
-  font-weight: 620;
-  line-height: 1.15;
+  font-size: var(--text-body);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-tight);
   touch-action: manipulation;
-  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+  transition: background var(--motion-fast) var(--ease), border-color var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease);
 }
 
 button:hover {
-  border-color: #56606b;
-  background: var(--button-hover);
+  border-color: var(--ink-3);
+  background: var(--control-hover);
 }
 
 button:active {
@@ -130,7 +300,7 @@ textarea:focus-visible {
 button.primary {
   border-color: var(--accent-strong);
   background: var(--accent-strong);
-  color: #101214;
+  color: var(--accent-ink);
 }
 
 button.command {
@@ -144,7 +314,7 @@ button.command {
   padding-inline: 0.64rem;
   background: var(--button-bg);
   color: var(--text);
-  font-weight: 630;
+  font-weight: var(--weight-medium);
   line-height: 1.1;
   text-align: center;
   white-space: normal;
@@ -153,7 +323,7 @@ button.command {
 
 button.command:hover,
 button.command:focus-visible {
-  border-color: #56606b;
+  border-color: var(--ink-3);
   background: var(--button-hover);
 }
 
@@ -174,7 +344,7 @@ button.command[data-glyph]::before {
   border: 0;
   color: var(--accent-strong);
   font-size: 0.9rem;
-  font-weight: 820;
+  font-weight: var(--weight-strong);
   line-height: 1;
 }
 
@@ -245,11 +415,11 @@ button.command.is-refreshing[data-glyph]::before {
 button.command.primary {
   border-color: var(--accent-strong);
   background: var(--accent-strong);
-  color: #101214;
+  color: var(--accent-ink);
 }
 
 button.command.primary::before {
-  color: #101214;
+  color: var(--accent-ink);
 }
 
 button.ghost,
@@ -269,15 +439,20 @@ button.command.ghost:focus-visible {
 input,
 textarea {
   width: 100%;
-  min-height: 44px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  min-height: var(--control-height);
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-sm);
   padding: 0.62rem 0.72rem;
-  background: var(--surface-alt);
-  color: var(--text);
-  font-size: 1rem;
+  background: var(--surface-sunken);
+  color: var(--ink-1);
+  font-size: var(--text-subtitle);
   -webkit-appearance: none;
   appearance: none;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--ink-3);
 }
 
 input[type="checkbox"] {
@@ -291,12 +466,12 @@ input[type="checkbox"] {
 }
 
 select {
-  min-height: 44px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  min-height: var(--control-height);
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-sm);
   padding: 0.62rem 0.72rem;
-  background: var(--surface-alt);
-  color: var(--text);
+  background: var(--surface-sunken);
+  color: var(--ink-1);
   font: inherit;
 }
 
@@ -312,22 +487,34 @@ pre {
   margin: 0;
 }
 
+/* Type roles. h1 is the page's single display line, h2 is a section, h3 is a
+   sub-section. Nothing else may set a font-size outside the scale. */
 h1 {
-  font-size: 2.55rem;
-  line-height: 1.02;
-  font-weight: 500;
+  font-size: var(--text-display);
+  line-height: var(--leading-tight);
+  font-weight: var(--weight-strong);
+  letter-spacing: var(--tracking-tight);
   overflow-wrap: anywhere;
 }
 
 h2 {
-  font-size: 1.1rem;
-  line-height: 1.2;
-  font-weight: 700;
+  font-size: var(--text-title);
+  line-height: var(--leading-snug);
+  font-weight: var(--weight-strong);
+  letter-spacing: var(--tracking-tight);
 }
 
 h3 {
-  font-size: 1rem;
-  line-height: 1.25;
+  font-size: var(--text-subtitle);
+  line-height: var(--leading-snug);
+  font-weight: var(--weight-strong);
+}
+
+h4 {
+  margin: 0;
+  font-size: var(--text-meta);
+  line-height: var(--leading-snug);
+  font-weight: var(--weight-strong);
 }
 
 pre {
@@ -335,13 +522,13 @@ pre {
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
   padding: var(--space-3);
-  background: #0b0d11;
-  color: #f4f4f4;
-  font-size: 0.82rem;
-  line-height: 1.45;
+  background: var(--surface-sunken);
+  color: var(--ink-1);
+  font-size: var(--text-meta);
+  line-height: var(--leading-normal);
 }
 
 .shell {
@@ -357,7 +544,7 @@ pre {
   z-index: 10;
   max-width: min(640px, calc(100vw - 24px));
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 10px 14px;
   background: var(--surface);
   box-shadow: var(--shadow);
@@ -390,7 +577,7 @@ body.compact-notification-signup-open {
   max-height: calc(var(--visual-viewport-height) - 36px - var(--safe-top) - var(--safe-bottom));
   overflow: auto;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--surface);
   box-shadow: 0 18px 54px rgba(0, 0, 0, 0.42);
 }
@@ -417,7 +604,7 @@ body.compact-notification-signup-open {
 }
 
 .openai-auth-title-group h2 {
-  font-size: 1.22rem;
+  font-size: var(--text-display);
   line-height: 1.2;
 }
 
@@ -431,8 +618,8 @@ body.compact-notification-signup-open {
   border-radius: 50%;
   background: var(--surface-alt);
   color: var(--accent-strong);
-  font-size: 0.84rem;
-  font-weight: 820;
+  font-size: var(--text-body);
+  font-weight: var(--weight-strong);
 }
 
 .openai-auth-content {
@@ -454,9 +641,8 @@ body.compact-notification-signup-open {
 
 .openai-auth-label {
   color: var(--muted);
-  font-size: 0.78rem;
-  font-weight: 760;
-  text-transform: uppercase;
+  font-size: var(--text-meta);
+  font-weight: var(--weight-medium);
 }
 
 .openai-auth-code {
@@ -465,13 +651,13 @@ body.compact-notification-signup-open {
   justify-content: center;
   min-height: 70px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 12px;
   background: var(--surface-alt);
   color: var(--text);
   font-family: ui-monospace, "Cascadia Mono", "Segoe UI Mono", monospace;
-  font-size: 2rem;
-  font-weight: 820;
+  font-size: var(--text-display);
+  font-weight: var(--weight-strong);
   line-height: 1.1;
   overflow-wrap: anywhere;
 }
@@ -491,12 +677,12 @@ a.button-link.command {
   min-height: var(--control-height);
   min-width: var(--control-height);
   border: 1px solid var(--border-soft);
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   padding: 0.34rem 0.68rem;
   background: var(--button-bg);
   color: var(--text);
-  font-size: 0.92rem;
-  font-weight: 630;
+  font-size: var(--text-subtitle);
+  font-weight: var(--weight-medium);
   line-height: 1.1;
   text-align: center;
   text-decoration: none;
@@ -504,14 +690,14 @@ a.button-link.command {
 
 a.button-link.command:hover,
 a.button-link.command:focus-visible {
-  border-color: #56606b;
+  border-color: var(--ink-3);
   background: var(--button-hover);
 }
 
 a.button-link.primary {
   border-color: var(--accent-strong);
   background: var(--accent-strong);
-  color: #101214;
+  color: var(--accent-ink);
 }
 
 .openai-auth-status {
@@ -519,7 +705,7 @@ a.button-link.primary {
   border-top: 1px solid var(--border-soft);
   padding: 12px 20px;
   color: var(--muted);
-  font-size: 0.88rem;
+  font-size: var(--text-body);
   line-height: 1.35;
 }
 
@@ -550,11 +736,27 @@ a.button-link.primary {
   color: var(--muted);
 }
 
-.eyebrow {
-  color: var(--muted);
-  font-size: 0.8rem;
-  font-weight: 700;
-  letter-spacing: 0;
+/* ---------------------------------------------------------------------------
+   Micro-label — the ONLY uppercase treatment in the product.
+   It names a group of things (a settings section, a table column, a drawer
+   section). It never labels a single field and never renders a value. Every
+   selector that wants caps must join this list; do not restate the treatment
+   locally.
+   --------------------------------------------------------------------------- */
+.eyebrow,
+.settings-subsection h4,
+.settings-group > summary h4,
+.settings-advanced > summary,
+.settings-policy-advanced > summary,
+.debug-disclosure > summary,
+.role-section-title h4,
+.user-form-head h4,
+.user-settings-section h3 {
+  color: var(--ink-3);
+  font-size: var(--text-micro);
+  font-weight: var(--weight-strong);
+  letter-spacing: var(--tracking-wide);
+  line-height: var(--leading-snug);
   text-transform: uppercase;
 }
 
@@ -562,7 +764,7 @@ a.button-link.primary {
   display: grid;
   gap: var(--space-4);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: var(--space-5);
   background: var(--surface);
   box-shadow: var(--shadow);
@@ -570,10 +772,10 @@ a.button-link.primary {
 
 label {
   display: grid;
-  gap: 6px;
-  color: var(--muted);
-  font-size: 0.9rem;
-  font-weight: 700;
+  gap: var(--space-1);
+  color: var(--ink-2);
+  font-size: var(--text-meta);
+  font-weight: var(--weight-medium);
 }
 
 .login-remember {
@@ -581,7 +783,7 @@ label {
   align-items: start;
   gap: 10px;
   color: var(--text);
-  font-weight: 800;
+  font-weight: var(--weight-strong);
 }
 
 .login-remember input {
@@ -595,25 +797,40 @@ label {
   display: block;
   margin-top: 2px;
   color: var(--muted);
-  font-size: 0.78rem;
-  font-weight: 700;
+  font-size: var(--text-meta);
+  font-weight: var(--weight-medium);
 }
 
+/* ---------------------------------------------------------------------------
+   Utility bar (was: title bar).
+
+   It used to spend ~90px on an <h1> that repeated the sidebar item you had just
+   clicked, plus a subtitle restating it as a sentence. A page title is only
+   information when the navigation is not on screen, so:
+
+     admin, >=861px  the sidebar's active item is the title. No title renders;
+                     the bar is a slim right-aligned action row.
+     admin, <861px   the sidebar is a drawer, so the page name renders at title
+                     size beside the menu button.
+     compact         always titled — it has no sidebar at all.
+
+   The subtitle survives only as an accessible description (see #summary), which
+   is where a restatement of the page actually belongs.
+   --------------------------------------------------------------------------- */
 .topbar {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   grid-template-areas: "nav title actions";
-  align-items: start;
-  gap: var(--space-4) var(--space-5);
-  margin-bottom: var(--space-5);
-  padding-bottom: var(--space-5);
-  border-bottom: 2px solid var(--border-soft);
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+  min-height: var(--control-height);
+  margin-bottom: var(--space-4);
 }
 
 .title-block {
   grid-area: title;
   display: grid;
-  gap: var(--space-2);
+  gap: var(--space-1);
   min-width: 0;
 }
 
@@ -622,6 +839,28 @@ label {
 .title-block h1 {
   overflow-wrap: normal;
   word-break: normal;
+}
+
+/* The page name is a title, not a display line: the display size belongs to the
+   one answer a page gives, which on the admin surface is the Overview verdict. */
+body.admin-view .title-block h1 {
+  font-size: var(--text-title);
+  line-height: var(--leading-snug);
+}
+
+body.admin-view #summary {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+@media (min-width: 861px) {
+  body.admin-view .title-block {
+    display: none;
+  }
 }
 
 .nav-toggle {
@@ -699,9 +938,9 @@ label {
   justify-content: space-between;
   gap: var(--space-3);
   flex: 0 0 auto;
-  margin-bottom: var(--space-3);
-  padding: var(--space-2) var(--space-2) var(--space-4);
-  border-bottom: 1px solid var(--border-soft);
+  margin-bottom: var(--space-2);
+  padding: var(--space-1) var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--line-soft);
 }
 
 .side-nav-identity {
@@ -713,19 +952,19 @@ label {
 
 .side-nav-logo {
   flex: 0 0 auto;
-  width: 30px;
-  height: 30px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface-alt);
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
 }
 
 .side-nav-wordmark {
   overflow: hidden;
-  color: var(--text);
-  font-size: 1.02rem;
-  font-weight: 800;
-  letter-spacing: 0.01em;
+  color: var(--ink-1);
+  font-size: var(--text-title);
+  font-weight: var(--weight-strong);
+  letter-spacing: var(--tracking-tight);
   white-space: nowrap;
   text-overflow: ellipsis;
 }
@@ -743,26 +982,26 @@ label {
 
 .side-nav-session {
   display: grid;
-  gap: var(--space-3);
+  gap: var(--space-2);
   flex: 0 0 auto;
-  margin-top: var(--space-3);
-  padding: var(--space-4) var(--space-2) 0;
-  border-top: 1px solid var(--border-soft);
+  margin-top: var(--space-2);
+  padding: var(--space-3) var(--space-2) 0;
+  border-top: 1px solid var(--line-soft);
 }
 
 .side-nav-pills {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-2);
+  gap: var(--space-1) var(--space-3);
   min-width: 0;
 }
 
 .side-nav-session button.command {
   justify-content: center;
   width: 100%;
-  min-height: 44px;
-  border: 1px solid var(--border-soft);
-  border-radius: 5px;
+  min-height: var(--control-height);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
 }
 
 .tabs button,
@@ -772,11 +1011,14 @@ label {
 }
 
 .tabs button {
+  display: flex;
+  align-items: center;
   justify-content: flex-start;
-  min-height: 44px;
+  min-height: var(--control-height);
   border-width: 0 0 0 3px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding-inline: var(--space-3);
+  text-align: left;
 }
 
 .tabs button:hover {
@@ -817,7 +1059,7 @@ label {
 
 .tab-panel {
   display: grid;
-  gap: var(--space-4);
+  gap: var(--gap-section);
 }
 
 .user-home {
@@ -837,7 +1079,7 @@ label {
   gap: 0;
   overflow: hidden;
   border: 1px solid var(--border-soft);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding-inline: 16px;
   background: var(--surface);
 }
@@ -847,20 +1089,49 @@ label {
   background: transparent;
 }
 
-.status-list-row,
+/* ---------------------------------------------------------------------------
+   Container roles. There are three, and only three. The previous stylesheet
+   gave every object the same "rounded rect, 1px border, near-black fill", which
+   left the containers carrying no hierarchy at all.
+
+   PANEL  a titled region of a page: one hairline, one surface step, radius-md.
+          Panels do not nest. A panel inside a panel is a structure error, not a
+          styling problem — use a sub-section heading instead.
+   ROW    one member of a list inside a panel: no border and no fill of its own,
+          peers separated by a single hairline. Rows carry status, not chrome.
+   TILE   a large tappable summary object, compact surface only. Status is the
+          tile's fill, so a tile needs no dot and no pill.
+   --------------------------------------------------------------------------- */
 .panel,
+.settings-card,
+.detail-section {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+.status-list-row,
 .overview-card,
-.detail-section,
 .user-status-card,
 .user-app-card,
 .app-card,
 .incident-card,
-.settings-card,
 .fact-row {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface);
-  box-shadow: var(--shadow);
+  border: 0;
+  border-bottom: 1px solid var(--line-soft);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.status-list-row:last-child,
+.overview-card:last-child,
+.user-status-card:last-child,
+.user-app-card:last-child,
+.app-card:last-child,
+.incident-card:last-child,
+.fact-row:last-child {
+  border-bottom: 0;
 }
 
 .status-list-row {
@@ -868,9 +1139,9 @@ label {
   grid-template-columns: minmax(0, 1fr) auto;
   grid-template-areas: "main value";
   align-items: center;
-  gap: 14px;
-  min-height: 42px;
-  padding: 10px 0;
+  gap: var(--space-4);
+  min-height: var(--control-height);
+  padding: var(--pad-row) 0;
   border: 0;
   border-bottom: 1px solid var(--border-soft);
   background: transparent;
@@ -934,7 +1205,7 @@ label {
 .user-status-card .status {
   width: fit-content;
   min-height: 0;
-  font-size: 0.94rem;
+  font-size: var(--text-subtitle);
 }
 
 .user-status-card .status-note {
@@ -987,8 +1258,8 @@ label {
   justify-content: flex-end;
   justify-self: end;
   color: var(--muted);
-  font-size: 1rem;
-  font-weight: 900;
+  font-size: var(--text-subtitle);
+  font-weight: var(--weight-strong);
   line-height: 1;
 }
 
@@ -1013,7 +1284,7 @@ label {
 
 .detail-back {
   justify-self: start;
-  min-height: 44px;
+  min-height: var(--control-height);
 }
 
 .user-detail-body,
@@ -1045,7 +1316,7 @@ label {
 .detail-title h2 {
   margin: 0;
   overflow: hidden;
-  font-size: 1rem;
+  font-size: var(--text-subtitle);
   line-height: 1.18;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1073,14 +1344,14 @@ label {
 
 .detail-metric span {
   color: var(--muted);
-  font-size: 0.78rem;
-  font-weight: 820;
+  font-size: var(--text-meta);
+  font-weight: var(--weight-strong);
 }
 
 .detail-metric strong {
   min-width: 0;
   color: var(--text);
-  font-size: 0.88rem;
+  font-size: var(--text-body);
   line-height: 1.25;
 }
 
@@ -1091,7 +1362,7 @@ label {
 
 .detail-history h3 {
   margin: 0;
-  font-size: 0.9rem;
+  font-size: var(--text-body);
 }
 
 .history-list {
@@ -1107,7 +1378,7 @@ label {
   display: grid;
   grid-template-columns: 12px minmax(0, 1fr);
   gap: 10px;
-  min-height: 42px;
+  min-height: var(--control-height);
   padding: 8px 0;
   border-bottom: 1px solid var(--border-soft);
 }
@@ -1121,7 +1392,7 @@ label {
   width: 9px;
   height: 9px;
   margin-top: 4px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--unknown-text);
 }
 
@@ -1144,15 +1415,18 @@ label {
 }
 
 .history-copy strong {
-  font-size: 0.88rem;
+  font-size: var(--text-body);
   line-height: 1.2;
 }
 
 .history-copy small,
+/* An absence reads as an absence: ink-3, meta size, never the ink-1 bold weight
+   a real reading gets. */
 .detail-empty {
-  color: var(--muted);
-  font-size: 0.8rem;
-  line-height: 1.35;
+  margin: 0;
+  color: var(--ink-3);
+  font-size: var(--text-meta);
+  line-height: var(--leading-snug);
 }
 
 .user-chat {
@@ -1162,7 +1436,7 @@ label {
 .chat-output {
   min-height: 112px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: var(--space-4);
   background: var(--surface-alt);
   line-height: 1.45;
@@ -1218,11 +1492,11 @@ label {
 }
 
 .agent-plan-actions .command {
-  min-height: 46px;
+  min-height: var(--control-height);
   gap: 8px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding-inline: 14px;
-  font-weight: 760;
+  font-weight: var(--weight-medium);
   white-space: nowrap;
   overflow-wrap: normal;
 }
@@ -1233,9 +1507,9 @@ label {
 }
 
 .agent-plan-actions .primary.command::before {
-  color: #101214;
+  color: var(--accent-ink);
   font-size: 1.16rem;
-  font-weight: 900;
+  font-weight: var(--weight-strong);
 }
 
 .user-repair-prompt {
@@ -1273,7 +1547,7 @@ label {
 }
 
 .detail-actions .command {
-  min-height: 44px;
+  min-height: var(--control-height);
 }
 
 .user-repair-state {
@@ -1292,7 +1566,7 @@ label {
   gap: 12px;
   align-items: center;
   border: 1px solid var(--border-soft);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 12px;
   background: var(--surface-alt);
 }
@@ -1332,7 +1606,7 @@ label {
   gap: 4px;
   padding: 10px 12px;
   border: 1px solid var(--border-soft);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: rgba(255, 255, 255, 0.04);
 }
 
@@ -1358,7 +1632,7 @@ label {
   align-items: start;
   padding: 10px 12px;
   border: 1px solid var(--border-soft);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--surface-alt);
 }
 
@@ -1369,7 +1643,7 @@ label {
   margin-top: 2px;
   border: 2px solid color-mix(in srgb, var(--accent-strong) 26%, transparent);
   border-top-color: var(--accent-strong);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   animation: agent-progress-spin 800ms linear infinite;
 }
 
@@ -1384,7 +1658,7 @@ label {
   place-items: center;
   border: 0;
   color: var(--bad-text);
-  font-weight: 900;
+  font-weight: var(--weight-strong);
   animation: none;
 }
 
@@ -1412,7 +1686,7 @@ label {
   display: grid;
   gap: 6px;
   border: 1px solid var(--border-soft);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 12px;
   background: var(--surface-alt);
 }
@@ -1424,26 +1698,22 @@ label {
 
 .agent-approval-direct-action {
   justify-self: start;
-  border: 1px solid var(--accent-strong);
-  border-radius: 999px;
-  padding: 3px 8px;
-  color: var(--accent-strong);
-  font-size: 0.74rem;
-  font-weight: 860;
-  text-transform: uppercase;
+  color: var(--ink-1);
+  font-size: var(--text-meta);
+  font-weight: var(--weight-strong);
 }
 
 .agent-approval-cooldown {
   display: grid;
   gap: 3px;
   border: 1px solid var(--border-soft);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 10px 12px;
   background: var(--surface-alt);
 }
 
 .agent-approval-cooldown strong {
-  font-size: 0.82rem;
+  font-size: var(--text-body);
 }
 
 .agent-approval-cooldown small {
@@ -1473,11 +1743,11 @@ label {
 .agent-approval-steps li {
   min-height: 30px;
   border: 1px solid var(--border-soft);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 6px 8px;
   color: var(--muted);
-  font-size: 0.76rem;
-  font-weight: 780;
+  font-size: var(--text-meta);
+  font-weight: var(--weight-strong);
   text-align: center;
 }
 
@@ -1509,10 +1779,10 @@ label {
   grid-template-columns: 20px minmax(0, 1fr);
   align-items: start;
   gap: 10px;
-  min-height: var(--control-height-touch);
+  min-height: var(--control-height);
   padding: 10px 12px;
   border: 1px solid var(--border-soft);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--surface-alt);
   cursor: pointer;
 }
@@ -1550,12 +1820,12 @@ label {
 }
 
 .agent-approval-dialog .openai-auth-actions .command {
-  min-height: 48px;
+  min-height: var(--control-height);
   gap: 9px;
   justify-content: center;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding-inline: 16px;
-  font-weight: 780;
+  font-weight: var(--weight-strong);
   white-space: nowrap;
   overflow-wrap: normal;
 }
@@ -1564,21 +1834,21 @@ label {
   width: 1.15rem;
   height: 1.15rem;
   font-size: 1.06rem;
-  font-weight: 900;
+  font-weight: var(--weight-strong);
 }
 
 .agent-approval-dialog .openai-auth-actions .primary.command::before {
-  color: #101214;
+  color: var(--accent-ink);
 }
 
 .overview-card {
   display: grid;
-  grid-template-columns: 24px minmax(0, 1fr) minmax(156px, 0.42fr) auto;
+  grid-template-columns: 20px minmax(0, 1fr) auto auto;
   grid-template-areas: "icon main meta actions";
   align-items: center;
-  gap: 10px;
-  min-height: 38px;
-  padding: 8px 2px;
+  gap: var(--space-3);
+  min-height: var(--control-height);
+  padding: var(--pad-row) 0;
   border: 0;
   border-bottom: 1px solid var(--border-soft);
   border-radius: 0;
@@ -1621,7 +1891,8 @@ label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 0.86rem;
+  color: var(--ink-2);
+  font-size: var(--text-meta);
 }
 
 .overview-main {
@@ -1633,10 +1904,32 @@ label {
 
 .overview-label {
   grid-area: label;
-  color: var(--muted);
-  font-size: 0.72rem;
-  font-weight: 760;
-  text-transform: uppercase;
+  color: var(--ink-1);
+  font-size: var(--text-body);
+  font-weight: var(--weight-strong);
+}
+
+/* One monitor, one line. The name and its one-sentence summary are the same
+   fact, so on a desktop console they share a baseline instead of stacking and
+   doubling the height of the only table on the page. */
+@media (min-width: 861px) {
+  body.admin-view .overview-main {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+  }
+
+  body.admin-view .overview-main .status-title-line {
+    flex: 0 0 auto;
+    min-width: 88px;
+  }
+
+  /* basis 0, not auto: the summary must be the part that gives way when the
+     metric columns need room, and it ellipsises rather than colliding. */
+  body.admin-view .overview-summary {
+    flex: 1 1 0;
+    min-width: 0;
+  }
 }
 
 .overview-card > .overview-summary {
@@ -1661,54 +1954,52 @@ label {
   gap: var(--space-3);
 }
 
+/* Monitor metrics were pills: a rounded rect with a border and a fill, i.e. the
+   same object as a button, a nav item and a card. They are data, so they are
+   set as aligned columns separated by whitespace instead — the row's own
+   hairline is the only rule needed. */
 .overview-meta {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 5px 7px;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: max-content;
+  justify-content: end;
+  align-items: baseline;
+  gap: var(--space-5);
   min-width: 0;
 }
 
 .detail-section {
   min-width: 0;
   border: 1px solid var(--border-soft);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--surface);
   box-shadow: none;
 }
 
 .overview-metric {
-  display: inline-grid;
-  grid-template-columns: auto minmax(36px, auto) auto;
-  align-items: center;
-  gap: 5px;
+  display: grid;
+  grid-auto-flow: column;
+  align-items: baseline;
+  gap: var(--space-2);
   min-width: 0;
-  min-height: 24px;
-  border: 1px solid var(--border-soft);
-  border-radius: 999px;
-  padding: 2px 8px;
-  background: var(--surface-alt);
-  color: var(--muted);
-  max-width: 100%;
+  color: var(--ink-3);
+  white-space: nowrap;
 }
 
 .overview-metric span {
-  color: var(--muted);
-  font-size: 0.72rem;
-  font-weight: 650;
-  text-transform: none;
+  color: var(--ink-3);
+  font-size: var(--text-micro);
+  font-weight: var(--weight-medium);
 }
 
 .overview-metric strong {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 0.78rem;
-  text-align: right;
-}
-
-.overview-metric-status {
-  grid-template-columns: auto minmax(48px, auto) auto;
+  color: var(--ink-1);
+  font-size: var(--text-meta);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--weight-medium);
 }
 
 .overview-metric-status .status-dot-only {
@@ -1749,14 +2040,14 @@ label {
 .detail-section {
   display: grid;
   align-content: start;
-  gap: 6px;
-  padding: 14px 16px;
+  gap: var(--space-1);
+  padding: var(--pad-panel);
 }
 
 .detail-section h3 {
   margin: 0;
   color: var(--text);
-  font-size: 0.96rem;
+  font-size: var(--text-subtitle);
 }
 
 .detail-list {
@@ -1806,8 +2097,8 @@ label {
 .status-value {
   grid-area: value;
   color: var(--muted);
-  font-size: 0.78rem;
-  font-weight: 700;
+  font-size: var(--text-meta);
+  font-weight: var(--weight-medium);
   text-transform: capitalize;
   white-space: nowrap;
 }
@@ -1821,12 +2112,14 @@ label {
   opacity: 0.72;
 }
 
+/* Row labels are labels, not headings: sentence case, meta size, ink-2. Caps are
+   reserved for group headings (see .eyebrow) — a signal used everywhere is not
+   a signal. */
 .status-list-row span,
 .meta-label {
-  color: var(--muted);
-  font-size: 0.76rem;
-  font-weight: 800;
-  text-transform: uppercase;
+  color: var(--ink-2);
+  font-size: var(--text-meta);
+  font-weight: var(--weight-medium);
 }
 
 .status-row-label,
@@ -1847,7 +2140,7 @@ label {
 
 .status-note {
   color: var(--muted);
-  font-size: 0.86rem;
+  font-size: var(--text-body);
   line-height: 1.35;
 }
 
@@ -1898,26 +2191,288 @@ button.command.monitor-hide {
   font-size: 0.86rem;
 }
 
-.overview-grid,
-.diagnostics-grid,
-.admin-grid {
+.diagnostics-grid {
   display: grid;
-  /* Single column: the audit log is the primary content and needs full width so all table
-     columns (incl. Details/Redacted) are visible without horizontal scroll; the collapsed
-     debug snapshot stacks full-width below it. */
   grid-template-columns: minmax(0, 1fr);
   gap: var(--space-4);
 }
 
-.overview-grid .panel {
-  gap: 8px;
-  padding: 12px;
+/* ---------------------------------------------------------------------------
+   Overview.
+
+   The old layout put four summary cards in a fixed band at the top and left
+   40-60% of the viewport empty below, because a home server has 1-12 apps and
+   the page was designed as if data would fill it. Two columns that both start
+   at the top use the width instead: the monitors on the left, whatever is
+   currently true (incidents, facts) on the right. When the right column has
+   nothing to say its panels hide themselves entirely, and the monitors take the
+   full width.
+   --------------------------------------------------------------------------- */
+.overview-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(300px, 0.85fr);
+  gap: var(--space-5);
+  align-items: start;
+}
+
+.overview-side {
+  display: grid;
+  gap: var(--space-4);
+  align-content: start;
+  min-width: 0;
+}
+
+/* Nothing on the right to say: the monitors get the whole width. */
+.overview-side:not(:has(.panel:not([hidden]))) {
+  display: none;
+}
+
+.overview-layout:not(:has(.overview-side .panel:not([hidden]))) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (max-width: 1100px) {
+  .overview-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Verdict — the single answer the Overview page exists to give.
+
+   This is the only place in the product that uses the display type size. When
+   everything is healthy it is one sentence and the page is nearly empty on
+   purpose; when something is wrong it names the thing and carries the two
+   actions worth taking.
+   --------------------------------------------------------------------------- */
+.verdict {
+  display: grid;
+  gap: var(--space-2);
+  padding: 0 0 var(--space-4);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+/* On a desktop console the verdict is a status bar, not a hero: state, answer,
+   supporting clause and actions on one baseline. It reads left to right in the
+   order you need it and costs one row instead of four. */
+@media (min-width: 861px) {
+  body.admin-view .verdict {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-2) var(--space-4);
+    padding-bottom: var(--space-3);
+  }
+
+  body.admin-view .verdict-state {
+    flex: 0 0 auto;
+  }
+
+  /* The group body already sits under a hairline heading; it does not need a
+     second gap the size of a row. */
+  body.admin-view .settings-group > .settings-subsection {
+    padding-bottom: var(--space-3);
+  }
+
+  /* An app is one row of a table, not a stacked card: identity, one-line state
+     and metadata read as columns you can run your eye down, with the controls
+     parked on the right edge where they are in every console. */
+  body.admin-view .app-card {
+    grid-template-columns: minmax(200px, 0.85fr) minmax(0, 0.8fr) minmax(0, 1.1fr) auto;
+    grid-template-areas: "identity summary meta actions";
+    align-items: center;
+    gap: var(--space-4);
+  }
+
+  body.admin-view .app-card > header {
+    grid-area: identity;
+    min-width: 0;
+  }
+
+  body.admin-view .app-card > .app-row-actions {
+    grid-area: actions;
+  }
+
+  body.admin-view .app-card > .app-summary,
+  body.admin-view .app-card > .app-meta-list {
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  body.admin-view .app-card > .app-summary {
+    grid-area: summary;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  body.admin-view .app-card > .app-meta-list {
+    grid-area: meta;
+  }
+
+  body.admin-view .verdict-headline {
+    flex: 0 1 auto;
+  }
+
+  body.admin-view .verdict-detail {
+    flex: 1 1 240px;
+    min-width: 0;
+  }
+
+  body.admin-view .verdict-actions {
+    flex: 0 0 auto;
+    margin-top: 0;
+    align-self: center;
+  }
+}
+
+/* A state word is a value, so it is set in sentence case and carries its meaning
+   in colour and in the indicator beside it — not in capitals. */
+.verdict-state {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--ink-3);
+  font-size: var(--text-meta);
+  font-weight: var(--weight-strong);
+}
+
+.verdict.online .verdict-state { color: var(--status-ok); }
+.verdict.degraded .verdict-state { color: var(--status-warn); }
+.verdict.offline .verdict-state { color: var(--status-bad); }
+.verdict.unknown .verdict-state { color: var(--status-neutral); }
+
+.verdict-headline {
+  max-width: var(--measure);
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.verdict-detail {
+  max-width: var(--measure);
+  color: var(--ink-2);
+  font-size: var(--text-body);
+}
+
+.verdict-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+/* ---------------------------------------------------------------------------
+   Activity stream — aligned columns, one row per event.
+   --------------------------------------------------------------------------- */
+.activity-meta {
+  display: flex;
+  justify-content: flex-end;
+  min-height: 18px;
+}
+
+.activity-stream {
+  display: grid;
+}
+
+.activity-row {
+  display: grid;
+  grid-template-columns: max-content auto minmax(0, 1fr) auto auto;
+  align-items: baseline;
+  gap: var(--space-3) var(--space-4);
+  min-height: var(--control-height);
+  padding: var(--pad-row) 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.activity-entry:last-child .activity-row,
+.activity-stream > .activity-row:last-child {
+  border-bottom: 0;
+}
+
+.activity-time {
+  color: var(--ink-3);
+  font-size: var(--text-meta);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.activity-kind {
+  align-self: center;
+}
+
+.activity-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.activity-title {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--text-body);
+}
+
+.activity-detail {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: var(--text-meta);
+}
+
+.activity-actor,
+.activity-meta-tag {
+  color: var(--ink-3);
+  font-size: var(--text-meta);
+  white-space: nowrap;
+}
+
+.activity-entry > summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.activity-entry > summary::-webkit-details-marker {
+  display: none;
+}
+
+.activity-entry > summary:hover .activity-row,
+.activity-entry > summary:focus-visible .activity-row {
+  background: var(--control-hover);
+}
+
+.activity-entry > summary:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: -3px;
+}
+
+.activity-body {
+  padding: 0 0 var(--space-4) calc(var(--space-6) + var(--space-4));
+  border-bottom: 1px solid var(--line-soft);
+}
+
+@media (max-width: 720px) {
+  .activity-row {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "kind main meta"
+      "time main actor";
+    row-gap: 0;
+  }
+
+  .activity-time { grid-area: time; }
+  .activity-kind { grid-area: kind; align-self: start; margin-top: 6px; }
+  .activity-main { grid-area: main; }
+  .activity-actor { grid-area: actor; }
+  .activity-meta-tag { grid-area: meta; }
+
+  .activity-body {
+    padding-left: 0;
+  }
 }
 
 .panel {
   display: grid;
   gap: var(--space-3);
-  padding: var(--space-4);
+  padding: var(--pad-panel);
 }
 
 .panel.user-chat {
@@ -1992,7 +2547,7 @@ button.command.monitor-hide {
 
 #incident-strip .incident-card p,
 #facts .fact-row p {
-  font-size: 0.86rem;
+  font-size: var(--text-body);
   line-height: 1.3;
 }
 
@@ -2003,7 +2558,7 @@ button.command.monitor-hide {
 
 #incident-strip .incident-card h3,
 #facts .fact-row h3 {
-  font-size: 0.95rem;
+  font-size: var(--text-subtitle);
   line-height: 1.2;
 }
 
@@ -2032,24 +2587,58 @@ button.command.monitor-hide {
   background: var(--muted);
 }
 
+/* ---------------------------------------------------------------------------
+   Toolbar — one row, control height, above the content it filters.
+
+   Filters and search belong on a single line with the view they act on, the way
+   every console does it. A stacked label above a full-width search box costs a
+   whole row of vertical space to say something the placeholder already says.
+   --------------------------------------------------------------------------- */
 .toolbar {
   justify-content: space-between;
-  align-items: end;
+  align-items: center;
   flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+}
+
+.toolbar-end {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
 }
 
 .search-label {
   flex: 1 1 300px;
 }
 
+/* Inline search: the label stays in the accessibility tree and off the screen,
+   because the placeholder is already carrying it visually. */
+.search-inline {
+  display: flex;
+  align-items: center;
+  flex: 0 1 260px;
+  min-width: 0;
+  gap: 0;
+}
+
+.search-inline > span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
 .segmented {
   display: flex;
   flex-wrap: wrap;
   gap: 0;
-  border: 1px solid var(--border-soft);
-  border-radius: 6px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
   overflow: hidden;
-  background: var(--surface-alt);
+  background: var(--surface-sunken);
 }
 
 .apps {
@@ -2064,8 +2653,8 @@ button.command.monitor-hide {
 
 .app-card {
   display: grid;
-  gap: 6px;
-  padding: 8px 0;
+  gap: var(--space-1);
+  padding: var(--pad-row) 0;
   border: 0;
   border-bottom: 1px solid var(--border-soft);
   border-radius: 0;
@@ -2105,7 +2694,7 @@ button.command.monitor-hide {
 .app-summary {
   color: var(--muted);
   line-height: 1.35;
-  font-size: 0.88rem;
+  font-size: var(--text-body);
   overflow-wrap: anywhere;
 }
 
@@ -2141,8 +2730,8 @@ button.command.app-control {
 
 button.command.app-control:hover,
 button.command.app-control:focus-visible {
-  border-color: #66707c;
-  background: var(--button-hover);
+  border-color: var(--ink-3);
+  background: var(--control-hover);
 }
 
 .app-control svg {
@@ -2172,12 +2761,12 @@ button.command.app-control:focus-visible {
   height: 38px;
   overflow: hidden;
   border: 1px solid var(--border-soft);
-  border-radius: 5px;
-  background: var(--surface-alt);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
 }
 
 .app-logo-built-in {
-  background: #14181c;
+  background: var(--surface-overlay);
 }
 
 .app-logo img,
@@ -2199,8 +2788,8 @@ button.command.app-control:focus-visible {
 .app-logo-fallback {
   display: none;
   color: var(--accent-strong);
-  font-size: 0.85rem;
-  font-weight: 900;
+  font-size: var(--text-body);
+  font-weight: var(--weight-strong);
 }
 
 .app-logo.logo-missing .app-logo-fallback {
@@ -2227,12 +2816,12 @@ button.command.app-control:focus-visible {
   gap: 5px;
   min-width: 0;
   color: var(--muted);
-  font-size: 0.78rem;
+  font-size: var(--text-meta);
 }
 
 .app-meta-item dt {
-  font-weight: 800;
-  text-transform: uppercase;
+  color: var(--ink-3);
+  font-weight: var(--weight-medium);
 }
 
 .app-meta-item dd {
@@ -2243,68 +2832,66 @@ button.command.app-control:focus-visible {
   max-width: min(38vw, 360px);
 }
 
-.pill,
-.severity {
+/* ---------------------------------------------------------------------------
+   Status label — the one way a state is written as text.
+
+     .status    a live state: online / degraded / offline / unknown
+     .severity  an incident or fact severity
+     .pill      a standing fact about the session: role, data source
+
+   All three are the same object — a coloured indicator plus a sentence-case
+   word, on no background and inside no box. The old UI had nine variants across
+   four shapes ("NOT CONNECTED", "ON, UP TO 2 CALLS", "Medium", "Fixture Data"),
+   which is why a state was often encoded two or three times on one row.
+
+   Shape carries the state as well as colour, so the four states stay legible
+   without colour: circle = ok, triangle = degraded, square = offline, ring =
+   unknown. Do not add a filled or bordered variant.
+   --------------------------------------------------------------------------- */
+.status,
+.severity,
+.pill {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  gap: 0.4rem;
-  min-height: 28px;
-  border-radius: 999px;
-  padding: 0.18rem 0.6rem;
-  font-size: 0.82rem;
-  font-weight: 800;
-  text-transform: capitalize;
-  border: 1px solid transparent;
-}
-
-.severity::before {
-  content: "";
-  width: 0.48rem;
-  height: 0.48rem;
-  border-radius: 999px;
-  background: currentColor;
-}
-
-.severity {
-  justify-content: flex-start;
-  min-height: 20px;
-  border: 0;
-  border-radius: 0;
-  padding: 0;
-  background: transparent;
-  font-size: 0.76rem;
-  font-weight: 780;
-}
-
-.status {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.38rem;
+  gap: var(--space-2);
   min-width: 0;
-  min-height: 18px;
   border: 0;
   padding: 0;
   background: transparent;
-  color: var(--status-accent, var(--muted));
-  font-size: 0.82rem;
-  font-weight: 800;
-  line-height: 1;
+  color: var(--ink-2);
+  font-size: var(--text-meta);
+  font-weight: var(--weight-strong);
+  line-height: var(--leading-tight);
   text-transform: capitalize;
 }
 
-.status::before {
+.status,
+.severity,
+.pill {
+  justify-content: flex-start;
+}
+
+.status::before,
+.severity::before,
+.pill::before {
   content: "";
   width: var(--dot-size);
   height: var(--dot-size);
   flex: 0 0 auto;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: currentColor;
+}
+
+.status {
+  color: var(--status-accent, var(--ink-2));
+}
+
+.status::before {
   box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.035);
 }
 
 .status-text {
-  color: var(--muted);
+  color: var(--ink-2);
 }
 
 .status-dot-only {
@@ -2316,6 +2903,8 @@ button.command.app-control:focus-visible {
   overflow: visible;
 }
 
+/* Status shapes: square = offline, triangle = degraded, ring = unknown. Applied
+   to the dot-only variant so a row can be read without colour. */
 .status-dot-only.offline::before {
   border-radius: 2px;
 }
@@ -2340,25 +2929,10 @@ button.command.app-control:focus-visible {
   white-space: nowrap;
 }
 
-.pill {
-  justify-content: flex-start;
-  min-height: 24px;
-  border-radius: 0;
-  padding: 0;
-  background: transparent;
-  color: var(--muted);
-  border: 0;
-  font-size: 0.78rem;
-  font-weight: 780;
-}
-
+.severity::before,
 .pill::before {
-  content: "";
   width: 0.46rem;
   height: 0.46rem;
-  flex: 0 0 auto;
-  border-radius: 999px;
-  background: currentColor;
 }
 
 .source-pill[data-mode="fixture"] {
@@ -2390,8 +2964,10 @@ button.command.app-control:focus-visible {
   color: var(--bad-border);
 }
 
+/* The bare --status-neutral hue clears 3:1 (indicator) but not 4.5:1 (text),
+   so a status rendered as a word uses the -ink step. */
 .status.hidden {
-  color: var(--unknown-border);
+  color: var(--status-neutral-ink);
 }
 
 .severity.none,
@@ -2414,195 +2990,244 @@ button.command.app-control:focus-visible {
   border-color: transparent;
 }
 
-.incident-list,
 .settings-grid {
   display: grid;
-  gap: 12px;
+  gap: var(--space-3);
 }
 
+/* ---------------------------------------------------------------------------
+   Settings.
+
+   Settings was a 2,269px wall of ~30 identically weighted boxes with one Save
+   at the end; finding "cooldown" meant scrolling. It is now a search field over
+   a section list, and one focused section at a time on the right. The search is
+   the primary control, not the list: the list only helps once you already know
+   which section a setting lives in.
+   --------------------------------------------------------------------------- */
+/* ---------------------------------------------------------------------------
+   Settings.
+
+   Settings was a 2,269px wall of ~30 identically weighted boxes with one Save.
+   The first fix gave it a section rail — but the app already has a permanent
+   sidebar, and Role access carries its own list+detail, so at 1440px there were
+   *three* columns of navigation eating 750px before any content started.
+
+   The section list is now a horizontal tab strip sharing one toolbar row with
+   search, which is what a console does: navigation across the top of the pane it
+   controls, full width for the pane itself. Content went from 889px to ~1140px
+   at 1440, and the nested list+detail finally has room.
+   --------------------------------------------------------------------------- */
 .settings-workspace {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 10px;
+  gap: var(--space-3);
   align-items: start;
 }
 
-.settings-menu-head {
-  color: var(--muted);
-  font-size: 0.78rem;
-  font-weight: 780;
-  text-transform: uppercase;
+.settings-toolbar {
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
 }
 
+/* Section tabs. Deliberately NOT .segmented: a filter control divides one row
+   between a fixed set of equal options and may stretch them, whereas a tab strip
+   is a list of destinations that must keep their labels and scroll when there is
+   no room. Sharing the class made the eight section tabs inherit the filter's
+   flex: 1 0 70px and clip themselves at phone widths. */
 .settings-menu {
   display: flex;
-  min-height: 44px;
+  flex-wrap: nowrap;
   min-width: 0;
   overflow-x: auto;
-  border: 1px solid var(--border);
-  background: var(--surface);
+  border-bottom: 1px solid var(--line-soft);
   scrollbar-width: thin;
   -webkit-overflow-scrolling: touch;
 }
 
 .settings-menu button {
   flex: 0 0 auto;
-  min-height: 44px;
-  border-width: 0 0 3px 0;
-  border-bottom-color: var(--border-soft);
-  padding-inline: 12px;
+  justify-content: center;
+  min-width: max-content;
+  min-height: var(--control-height);
+  border-width: 0;
+  border-radius: 0;
+  padding-inline: var(--space-3);
+  background: transparent;
+  color: var(--ink-2);
   white-space: nowrap;
 }
 
-.settings-menu button:last-child {
-  border-right-color: transparent;
+.settings-menu button:hover {
+  background: var(--control-hover);
+  color: var(--ink-1);
 }
 
 .settings-menu button.active {
-  border-bottom-color: var(--accent-strong);
-  background: rgba(107, 199, 186, 0.12);
-  color: var(--accent-strong);
+  color: var(--ink-1);
+  box-shadow: inset 0 -2px 0 var(--accent-strong);
+}
+
+.settings-search-empty {
+  margin: 0;
+  font-size: var(--text-meta);
 }
 
 .settings-detail {
   display: grid;
-  gap: 12px;
+  gap: var(--space-3);
   min-width: 0;
+}
+
+.settings-advanced .debug-disclosure {
+  margin-top: var(--space-1);
+}
+
+@media (max-width: 860px) {
+  .settings-toolbar .toolbar-end {
+    width: 100%;
+  }
+
+  .settings-toolbar .search-inline {
+    flex: 1 1 auto;
+  }
 }
 
 .settings-grid {
   grid-template-columns: minmax(0, 1fr);
 }
 
+/* The section title and its Save control are one header row. They were stacked,
+   which left a band of empty panel between the title and the first field. */
 .settings-card {
   display: grid;
-  gap: 10px;
-  padding: 14px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--pad-panel);
+}
+
+.settings-card > header {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.settings-card > .settings-footer {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.settings-card > *:not(header):not(.settings-footer) {
+  grid-column: 1 / -1;
 }
 
 .settings-card header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: var(--space-3);
 }
 
+/* The section title was floating: same size and weight as the group headings
+   under it, with nothing between them, so the pane opened with three lines of
+   near-identical text and no way to tell which one named the pane. It is now a
+   header band — one step up in size, full-contrast ink, and a rule across the
+   whole card that the Save control shares. */
+.settings-card > header,
+.settings-card > .settings-footer,
+.settings-section > .section-head {
+  align-self: stretch;
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--line);
+}
+
+/* The title and the Save control are two grid cells, so the rule under them has
+   to meet in the middle: no column gap on that row, and the title keeps its
+   breathing room as padding instead. */
+.settings-card {
+  column-gap: 0;
+}
+
+.settings-card > header {
+  padding-right: var(--space-3);
+}
+
+.settings-card > header h3 {
+  font-size: var(--text-title);
+  color: var(--ink-1);
+}
+
+/* Save bar. It stays with the reader as they scroll a long section, but while
+   there is nothing to save it is just the button — no band, no border. The
+   frame appears only once there are unsaved changes, which is the moment it
+   needs to be noticed. */
 .settings-footer {
   position: sticky;
-  top: max(8px, var(--safe-top));
+  top: max(var(--space-2), var(--safe-top));
   z-index: 3;
   display: flex;
   align-items: center;
   justify-content: flex-end;
   flex-wrap: wrap;
-  gap: 12px;
-  margin: 0 0 2px;
-  border: 1px solid var(--border-soft);
-  border-radius: 6px;
-  padding: 8px 10px;
-  background: color-mix(in srgb, var(--surface) 94%, transparent);
-  backdrop-filter: blur(8px);
+  gap: var(--space-3);
+  margin: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) 0;
 }
 
 .settings-footer.is-dirty {
-  border-color: color-mix(in srgb, var(--accent-strong) 68%, var(--border-soft));
-  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.2);
+  border-color: var(--line);
+  padding-inline: var(--space-3);
+  background: color-mix(in srgb, var(--surface-raised) 94%, transparent);
+  backdrop-filter: blur(8px);
 }
 
-.audit-filter {
-  max-width: 420px;
-}
 
-.audit-table-meta {
-  min-height: 20px;
-}
-
-.audit-table-wrap {
-  min-width: 0;
-  overflow-x: auto;
-  border: 1px solid var(--border-soft);
-  background: var(--surface-alt);
-  -webkit-overflow-scrolling: touch;
-}
-
-.audit-table {
-  width: 100%;
-  min-width: 760px;
-  border-collapse: collapse;
-  font-size: 0.82rem;
-}
-
-.audit-table th,
-.audit-table td {
-  border-bottom: 1px solid var(--border-soft);
-  padding: 9px 10px;
-  text-align: left;
-  vertical-align: top;
-}
-
-.audit-table th {
-  color: var(--muted);
-  font-size: 0.74rem;
-  font-weight: 820;
-  text-transform: uppercase;
-}
-
-.audit-table tr:last-child td {
-  border-bottom: 0;
-}
-
-.audit-detail-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-}
-
+/* Key/value evidence. These were bordered chips — another box, competing with
+   the row that contains them. They are a definition list set as aligned pairs:
+   the key in ink-3, the value in ink-1, separated by whitespace only. */
 .audit-chip,
 .evidence-chip {
   display: inline-flex;
   align-items: baseline;
-  gap: 4px;
+  gap: var(--space-2);
   max-width: 100%;
-  border: 1px solid var(--border-soft);
-  padding: 2px 6px;
-  color: var(--muted);
-  background: var(--surface);
+  color: var(--ink-1);
+  font-size: var(--text-meta);
   overflow-wrap: anywhere;
 }
 
 .audit-chip strong,
 .evidence-chip strong {
-  color: var(--text);
-  font-size: 0.74rem;
-  text-transform: uppercase;
+  color: var(--ink-3);
+  font-size: var(--text-meta);
+  font-weight: var(--weight-medium);
 }
 
+.audit-detail-chips,
 .evidence-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--space-1) var(--space-5);
 }
 
+/* Same disclosure as every other group: hairline row, no box. */
 .debug-disclosure {
-  border: 1px solid var(--border-soft);
-  background: var(--surface-alt);
+  border-top: 1px solid var(--line-soft);
 }
 
 .debug-disclosure summary {
-  min-height: 44px;
+  min-height: var(--control-height);
   display: flex;
   align-items: center;
-  padding: 0 12px;
+  padding: var(--pad-row) 0;
   cursor: pointer;
-  font-weight: 740;
 }
 
 .debug-disclosure pre {
-  margin: 0;
+  margin: 0 0 var(--space-3);
   max-height: 540px;
   overflow: auto;
-  border-top: 1px solid var(--border-soft);
-  padding: 12px;
 }
 
 .settings-actions {
@@ -2615,7 +3240,7 @@ button.command.app-control:focus-visible {
 .settings-editor {
   min-height: 260px;
   font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
-  font-size: 0.82rem;
+  font-size: var(--text-body);
   line-height: 1.45;
   tab-size: 2;
 }
@@ -2635,16 +3260,62 @@ button.command.app-control:focus-visible {
 }
 
 .settings-subsection + .settings-subsection {
-  border-top: 1px solid var(--border-soft);
-  padding-top: 12px;
+  border-top: 1px solid var(--line-soft);
+  padding-top: var(--space-3);
 }
 
 .settings-subsection h4 {
   margin: 0;
-  color: var(--text);
-  font-size: 0.86rem;
-  font-weight: 900;
-  text-transform: uppercase;
+}
+
+/* Collapsible settings group. The summary is a row, not a control: hairline
+   above, heading left, disclosure marker right. */
+.settings-group + .settings-group {
+  border-top: 1px solid var(--line-soft);
+}
+
+.settings-group > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: var(--control-height);
+  padding: var(--space-2) 0;
+  list-style: none;
+  cursor: pointer;
+}
+
+/* A title row inside a summary must not fight the disclosure marker for the
+   right edge, so it takes the free space and keeps its own spacing. */
+.settings-group > summary > .settings-section-title-row {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.settings-group > summary::-webkit-details-marker {
+  display: none;
+}
+
+.settings-group > summary::after {
+  content: "\203a";
+  color: var(--ink-3);
+  font-size: 1.1rem;
+  line-height: 1;
+  transition: transform var(--motion-fast) var(--ease);
+}
+
+.settings-group[open] > summary::after {
+  transform: rotate(90deg);
+}
+
+.settings-group > summary:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: -3px;
+}
+
+.settings-group > .settings-subsection {
+  padding-block: 0 var(--space-4);
+  border-top: 0;
 }
 
 .settings-section-title-row {
@@ -2657,15 +3328,82 @@ button.command.app-control:focus-visible {
 .settings-field-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  gap: var(--space-2);
   min-width: 0;
 }
 
 .settings-two-col {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  gap: var(--space-3);
   min-width: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   Settings form rows — desktop admin only.
+
+   A stacked label over a full-width control is the mobile layout, and it is
+   what made a section 2,000px tall: every field cost two rows and the labels
+   and values never lined up into a column you could scan. With a mouse and a
+   wide pane the console layout applies — label left in a fixed column, control
+   right, hairline between rows — so the eye reads one list of names and one
+   list of values.
+   --------------------------------------------------------------------------- */
+@media (min-width: 861px) {
+  /* Every field container in Settings is one column, because every field is a
+     label-left row. A multi-column grid of label-left rows squeezes the label
+     column against the control — the blacklist editors collapsed their Add
+     buttons to one letter per line before this. */
+  body.admin-view .settings-field-grid,
+  body.admin-view .settings-two-col,
+  body.admin-view .settings-blacklist-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+
+  /* Every field row in Settings, whichever renderer built it. Toggles, choices
+     and search boxes are their own row types and opt out by name. */
+  body.admin-view #tab-settings label:not(.toggle-line):not(.setting-toggle):not(.search-label):not(.settings-choice):not(.role-app-toggle):not(.permission-toggle) {
+    grid-template-columns: var(--label-col) minmax(0, 1fr);
+    align-items: center;
+    gap: var(--space-4);
+    min-height: calc(var(--control-height) + var(--space-2));
+    padding-block: var(--space-1);
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  body.admin-view #tab-settings label:last-child {
+    border-bottom: 0;
+  }
+
+  /* Anchor the form instead of the control.
+
+     Capping each control at 460px left dropdowns stranded in the middle of a
+     1,177px pane — starting after the label column, ending nowhere in
+     particular, with no shared right edge to read down. Capping the ROW gives
+     every control in the section the same left and right edge, so the form is
+     one bounded column and the selects stop floating. Long inputs are also
+     harder to read than short ones, which is why the cap exists at all. */
+  body.admin-view #tab-settings label:not(.search-label),
+  body.admin-view #tab-settings .setting-toggle,
+  body.admin-view #tab-settings .permission-toggle,
+  body.admin-view #tab-settings .settings-list-row,
+  body.admin-view #tab-settings .settings-add-row,
+  body.admin-view #tab-settings .settings-kv-row {
+    max-width: var(--form-max);
+  }
+
+  body.admin-view #tab-settings input:not([type="checkbox"]),
+  body.admin-view #tab-settings select,
+  body.admin-view #tab-settings textarea {
+    max-width: none;
+    width: 100%;
+  }
+
+  body.admin-view #tab-settings .search-inline,
+  body.admin-view #tab-settings .search-inline input {
+    max-width: none;
+  }
 }
 
 .settings-blacklist-grid {
@@ -2675,10 +3413,19 @@ button.command.app-control:focus-visible {
   min-width: 0;
 }
 
+/* Booleans are one per row.
+
+   They used to sit in an auto-fit grid of 180px columns with the label left and
+   the checkbox pushed to the right of its own cell — which put every checkbox
+   immediately to the LEFT of the next label. "Status chat [x] Server health [x]"
+   reads as the box belonging to the following label, and there was no rule
+   anywhere to say otherwise. Proximity beats alignment here: one row per
+   boolean, hairline between, control on the same right edge as every other
+   control in the form. */
 .settings-toggle-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 8px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
   min-width: 0;
 }
 
@@ -2689,17 +3436,23 @@ button.command.app-control:focus-visible {
   min-width: 0;
 }
 
+/* Toggles and choices are rows in a form, not cards. Each was a bordered,
+   filled box — the same object as a panel, a button and a nav item — which is
+   what made a settings section read as a wall of identical weight. A hairline
+   between peers is enough. */
 .setting-toggle {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  min-height: 42px;
-  border: 1px solid var(--border-soft);
-  border-radius: 6px;
-  padding: 6px 10px;
-  background: var(--surface-alt);
-  color: var(--text);
+  gap: var(--space-3);
+  min-height: var(--control-height);
+  padding: var(--pad-row) 0;
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--ink-1);
+}
+
+.setting-toggle:last-child {
+  border-bottom: 0;
 }
 
 .setting-toggle input {
@@ -2712,18 +3465,21 @@ button.command.app-control:focus-visible {
   grid-template-columns: 20px minmax(0, 1fr) auto;
   grid-template-areas: "input copy action";
   align-items: center;
-  gap: 10px;
-  min-height: 52px;
-  border: 1px solid var(--border-soft);
-  border-radius: 6px;
-  padding: 8px 10px;
-  background: var(--surface-alt);
-  color: var(--text);
+  gap: var(--space-3);
+  min-height: var(--control-height);
+  padding: var(--pad-row) 0 var(--pad-row) var(--space-2);
+  border-left: 2px solid transparent;
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--ink-1);
 }
 
+.settings-choice:last-child {
+  border-bottom: 0;
+}
+
+/* Selection is a left marker, not a fill: a filled row competes with status. */
 .settings-choice.selected {
-  border-color: color-mix(in srgb, var(--accent-strong) 72%, var(--border));
-  background: rgba(199, 215, 230, 0.07);
+  border-left-color: var(--accent-strong);
 }
 
 .settings-choice input[type="radio"] {
@@ -2755,7 +3511,7 @@ button.command.app-control:focus-visible {
 .settings-connection-detail {
   min-width: 0;
   color: var(--muted);
-  font-size: 0.78rem;
+  font-size: var(--text-meta);
   line-height: 1.35;
 }
 
@@ -2777,24 +3533,26 @@ button.command.app-control:focus-visible {
   display: none;
 }
 
+/* Nested disclosures inside a settings group match .settings-group exactly: a
+   hairline row, heading left, marker right. A boxed and filled variant was the
+   last surviving second style of the same object. */
 .settings-advanced,
 .settings-policy-advanced {
-  border: 1px solid var(--border-soft);
-  border-radius: 6px;
-  background: var(--surface-alt);
+  border-top: 1px solid var(--line-soft);
 }
 
 .settings-advanced summary,
 .settings-policy-advanced summary {
-  min-height: 42px;
+  min-height: var(--control-height);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  padding: 0 10px;
+  gap: var(--space-3);
+  padding: var(--pad-row) 0;
   cursor: pointer;
-  color: var(--text);
-  font-weight: 820;
+  color: var(--ink-2);
+  font-size: var(--text-meta);
+  font-weight: var(--weight-strong);
   list-style: none;
 }
 
@@ -2809,11 +3567,11 @@ body.compact-view .user-technical-details summary::-webkit-details-marker {
 body.compact-view .user-technical-details summary::after {
   content: "\203a";
   flex: 0 0 auto;
-  color: var(--muted);
-  font-size: 1.3rem;
+  color: var(--ink-3);
+  font-size: 1.1rem;
   line-height: 1;
   transform: rotate(90deg);
-  transition: transform 140ms ease;
+  transition: transform var(--motion-fast) var(--ease);
 }
 
 .settings-advanced[open] summary::after,
@@ -2827,7 +3585,7 @@ body.compact-view .user-technical-details[open] summary::after {
 .settings-policy-advanced > .settings-field-grid,
 .settings-policy-advanced > .settings-list-editor,
 .settings-policy-advanced > p {
-  margin: 0 10px 10px;
+  margin: 0 0 var(--space-3);
 }
 
 .settings-add-row,
@@ -2848,14 +3606,16 @@ body.compact-view .user-technical-details[open] summary::after {
   min-width: 0;
 }
 
+/* A list of rows inside a settings group is a list of rows, not another card.
+   The rows already separate themselves with hairlines; a border and a fill
+   around them is the card-in-card the standard forbids. */
 .settings-list-items,
 .settings-row-list {
   display: grid;
   gap: 0;
   overflow: hidden;
-  border: 1px solid var(--border-soft);
-  border-radius: 6px;
-  background: var(--surface-alt);
+  border-top: 1px solid var(--line-soft);
+  background: transparent;
 }
 
 .settings-list-items:empty,
@@ -2868,7 +3628,7 @@ body.compact-view .user-technical-details[open] summary::after {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
-  min-height: 40px;
+  min-height: var(--control-height);
   border-bottom: 1px solid var(--border-soft);
   padding: 5px 6px 5px 10px;
 }
@@ -2891,7 +3651,7 @@ body.compact-view .user-technical-details[open] summary::after {
 .settings-kv-row button.command {
   width: 44px;
   min-width: 44px;
-  min-height: 44px;
+  min-height: var(--control-height);
   padding: 0;
 }
 
@@ -2900,11 +3660,11 @@ body.compact-view .user-technical-details[open] summary::after {
 }
 
 .settings-app-image-row {
-  grid-template-columns: 38px minmax(0, 0.9fr) minmax(220px, 1.1fr);
+  grid-template-columns: 34px minmax(0, 0.9fr) minmax(220px, 1.1fr);
   align-items: start;
-  min-height: 52px;
-  border-bottom: 1px solid var(--border-soft);
-  padding: 12px 8px;
+  min-height: var(--control-height);
+  border-bottom: 1px solid var(--line-soft);
+  padding: var(--space-2) 0;
 }
 
 .settings-app-controls {
@@ -2917,7 +3677,7 @@ body.compact-view .user-technical-details[open] summary::after {
   min-height: 34px;
   padding: 0 2px;
   color: var(--muted);
-  font-size: 0.78rem;
+  font-size: var(--text-meta);
 }
 
 .settings-app-image-row .app-logo {
@@ -2936,8 +3696,8 @@ body.compact-view .user-technical-details[open] summary::after {
 
 .settings-row-main small {
   color: var(--muted);
-  font-size: 0.76rem;
-  font-weight: 800;
+  font-size: var(--text-meta);
+  font-weight: var(--weight-strong);
 }
 
 .settings-key-field {
@@ -2951,20 +3711,25 @@ body.compact-view .user-technical-details[open] summary::after {
 .settings-key-state {
   display: inline-flex;
   align-items: center;
-  min-height: 44px;
-  border: 1px solid var(--border-soft);
-  border-radius: 6px;
-  padding: 0 10px;
-  color: var(--muted);
-  font-size: 0.78rem;
-  font-weight: 900;
-  text-transform: uppercase;
+  gap: var(--space-2);
+  min-height: var(--control-height);
+  color: var(--ink-2);
+  font-size: var(--text-meta);
+  font-weight: var(--weight-strong);
   white-space: nowrap;
 }
 
+.settings-key-state::before {
+  content: "";
+  width: 0.46rem;
+  height: 0.46rem;
+  flex: 0 0 auto;
+  border-radius: var(--radius-pill);
+  background: currentColor;
+}
+
 .settings-key-state.set {
-  border-color: var(--ok-border);
-  color: var(--ok-text);
+  color: var(--status-ok-ink);
 }
 
 .agent-readiness {
@@ -2974,9 +3739,8 @@ body.compact-view .user-technical-details[open] summary::after {
 .settings-status-list {
   display: grid;
   overflow: hidden;
-  border: 1px solid var(--border-soft);
-  border-radius: 6px;
-  background: var(--surface-alt);
+  border-top: 1px solid var(--line-soft);
+  background: transparent;
 }
 
 .settings-status-row {
@@ -2984,7 +3748,7 @@ body.compact-view .user-technical-details[open] summary::after {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
-  min-height: 48px;
+  min-height: var(--control-height);
   border-bottom: 1px solid var(--border-soft);
   padding: 8px 10px;
 }
@@ -3019,53 +3783,54 @@ body.compact-view .user-technical-details[open] summary::after {
 .agent-reference-note {
   min-width: 0;
   color: var(--muted);
-  font-size: 0.78rem;
+  font-size: var(--text-meta);
   line-height: 1.35;
 }
 
+/* Settings states use the same status label as everything else: an indicator
+   plus a sentence-case word, no capsule. These were the last bordered pills in
+   the product ("NOT CONNECTED", "ON, UP TO 2 CALLS", "READY", "OFF"). */
 .settings-state-pill {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  min-height: 28px;
+  gap: var(--space-2);
   max-width: 100%;
-  border: 1px solid var(--border-soft);
-  border-radius: 999px;
-  padding: 0 10px;
-  font-size: 0.72rem;
-  font-weight: 900;
-  text-transform: uppercase;
+  color: var(--ink-2);
+  font-size: var(--text-meta);
+  font-weight: var(--weight-strong);
   white-space: nowrap;
 }
 
+.settings-state-pill::before {
+  content: "";
+  width: 0.46rem;
+  height: 0.46rem;
+  flex: 0 0 auto;
+  border-radius: var(--radius-pill);
+  background: currentColor;
+}
+
 .settings-state-pill.state-ok {
-  border-color: var(--ok-border);
-  color: var(--ok-text);
-  background: var(--ok-bg);
+  color: var(--status-ok-ink);
 }
 
 .settings-state-pill.state-warn {
-  border-color: var(--warn-border);
-  color: var(--warn-text);
-  background: var(--warn-bg);
+  color: var(--status-warn-ink);
 }
 
 .settings-state-pill.state-bad {
-  border-color: var(--bad-border);
-  color: var(--bad-text);
-  background: var(--bad-bg);
+  color: var(--status-bad-ink);
 }
 
 .settings-state-pill.state-muted {
-  color: var(--muted);
-  background: var(--surface);
+  color: var(--ink-3);
 }
 
 .settings-policy-card {
   display: grid;
   gap: 8px;
   border: 1px solid var(--border-soft);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 10px;
   background: var(--surface-alt);
 }
@@ -3084,7 +3849,7 @@ body.compact-view .user-technical-details[open] summary::after {
 
 .settings-policy {
   border: 1px solid var(--border-soft);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--surface-alt);
 }
 
@@ -3093,10 +3858,10 @@ body.compact-view .user-technical-details[open] summary::after {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  min-height: 46px;
+  min-height: var(--control-height);
   padding: 8px 10px;
   cursor: pointer;
-  font-weight: 850;
+  font-weight: var(--weight-strong);
 }
 
 .settings-policy summary span {
@@ -3111,8 +3876,8 @@ body.compact-view .user-technical-details[open] summary::after {
 
 .settings-policy summary small {
   color: var(--muted);
-  font-size: 0.76rem;
-  font-weight: 760;
+  font-size: var(--text-meta);
+  font-weight: var(--weight-medium);
   text-transform: none;
 }
 
@@ -3129,8 +3894,8 @@ body.compact-view .user-technical-details[open] summary::after {
 .settings-save-state {
   min-width: 74px;
   text-align: right;
-  font-size: 0.84rem;
-  font-weight: 700;
+  font-size: var(--text-body);
+  font-weight: var(--weight-medium);
 }
 
 .settings-save-state[data-tone="ok"] {
@@ -3151,7 +3916,7 @@ body.compact-view .user-technical-details[open] summary::after {
   padding: 9px 10px;
   background: var(--warn-bg);
   color: var(--text);
-  font-size: 0.84rem;
+  font-size: var(--text-body);
   line-height: 1.4;
 }
 
@@ -3194,24 +3959,31 @@ body.compact-view .user-technical-details[open] summary::after {
   align-items: start;
 }
 
+/* Already inside a .panel, so these carry no box of their own — the internal
+   rule between list and detail is all the structure they need. */
 .role-editor,
 .user-editor {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   overflow: hidden;
+}
+
+.user-editor {
+  border-top: 1px solid var(--line);
+  padding-top: var(--space-3);
 }
 
 .role-editor-head {
   grid-template-columns: minmax(0, 1fr) minmax(180px, 260px);
   align-items: center;
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--border-soft);
+  padding: 0 0 var(--space-2);
+  border-bottom: 1px solid var(--line-soft);
 }
 
 .user-editor > .section-head {
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--border-soft);
+  padding: 0 0 var(--space-2);
+  border-bottom: 1px solid var(--line-soft);
 }
 
 .role-workspace {
@@ -3220,10 +3992,32 @@ body.compact-view .user-technical-details[open] summary::after {
   min-width: 0;
 }
 
+/* The role/user editors carry their own list+detail pair, which now sits inside
+   the settings section rail. Two rails plus a detail pane needs real width, so
+   the inner pair stacks whenever the container cannot give the detail ~420px.
+   Container queries keep that decision local instead of guessing at viewport
+   widths that the sidebar and settings rail have already spent. */
+.role-settings,
+.settings-detail {
+  container-type: inline-size;
+}
+
 .user-management-grid {
   display: grid;
   grid-template-columns: minmax(230px, 280px) minmax(0, 1fr);
   min-width: 0;
+}
+
+@container (max-width: 720px) {
+  .user-management-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .role-sidebar,
+  .user-list {
+    border-right: 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
 }
 
 .role-sidebar {
@@ -3272,7 +4066,7 @@ body.compact-view .user-technical-details[open] summary::after {
   align-items: center;
   gap: 8px;
   width: 100%;
-  min-height: 56px;
+  min-height: var(--control-height);
   border-width: 0 0 1px 4px;
   border-color: transparent transparent var(--border-soft) transparent;
   border-radius: 0;
@@ -3315,8 +4109,8 @@ body.compact-view .user-technical-details[open] summary::after {
 .role-nav-meta small,
 .role-app-name small {
   color: var(--muted);
-  font-size: 0.76rem;
-  font-weight: 800;
+  font-size: var(--text-meta);
+  font-weight: var(--weight-strong);
 }
 
 .role-nav-meta {
@@ -3325,9 +4119,9 @@ body.compact-view .user-technical-details[open] summary::after {
 
 .role-detail {
   display: grid;
-  gap: 14px;
+  gap: var(--space-3);
   min-width: 0;
-  padding: 16px;
+  padding: var(--pad-panel);
 }
 
 .role-detail-head,
@@ -3355,49 +4149,41 @@ body.compact-view .user-technical-details[open] summary::after {
 
 .role-general-config {
   display: grid;
-  justify-items: start;
-  gap: 8px;
-  border: 1px solid var(--border-soft);
-  border-radius: 6px;
-  padding: 12px;
-  background: var(--surface-alt);
+  gap: 0;
+  min-width: 0;
 }
 
 .role-default-field {
   display: grid;
-  gap: 4px;
-  min-width: 150px;
+  gap: var(--space-1);
+  min-width: 0;
 }
 
 .role-default-field span {
-  color: var(--muted);
-  font-size: 0.72rem;
-  font-weight: 900;
-  text-transform: uppercase;
+  color: var(--ink-2);
+  font-size: var(--text-meta);
+  font-weight: var(--weight-medium);
 }
 
 .role-name-field {
-  max-width: 360px;
+  min-width: 0;
 }
 
+/* Three counts are three counts, not three cards. */
 .role-stat-strip {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0;
-  overflow: hidden;
-  border: 1px solid var(--border-soft);
-  border-radius: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  grid-template-columns: none;
+  gap: var(--space-2) var(--space-6);
+  padding: var(--pad-row) 0;
+  border-bottom: 1px solid var(--line-soft);
 }
 
 .role-stat {
-  display: grid;
-  gap: 2px;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
   min-width: 0;
-  padding: 10px 12px;
-  border-right: 1px solid var(--border-soft);
-}
-
-.role-stat:last-child {
-  border-right: 0;
 }
 
 .role-stat span,
@@ -3406,35 +4192,33 @@ body.compact-view .user-technical-details[open] summary::after {
   color: var(--muted);
 }
 
-.role-stat span,
-.role-section-title h4,
-.user-form-head h4 {
-  font-size: 0.76rem;
-  font-weight: 900;
-  text-transform: uppercase;
+/* The stat label beside a group heading is a label, not a heading. */
+.role-stat span {
+  font-size: var(--text-meta);
+  font-weight: var(--weight-medium);
 }
 
 .role-stat strong {
-  font-size: 1.1rem;
+  font-size: var(--text-body);
+  font-variant-numeric: tabular-nums;
 }
 
 .role-badge {
   display: inline-flex;
   align-items: center;
   min-height: 26px;
-  border: 1px solid var(--accent-strong);
-  border-radius: 999px;
-  padding: 0 8px;
-  color: var(--accent-strong);
-  font-size: 0.74rem;
-  font-weight: 900;
-  text-transform: uppercase;
+  color: var(--ink-3);
+  font-size: var(--text-meta);
+  font-weight: var(--weight-strong);
 }
 
+/* One boolean per row, for the same reason as .settings-toggle-grid: in two
+   columns each checkbox lands immediately left of the next label. */
 .role-options {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  max-width: var(--form-max);
 }
 
 .toggle-line {
@@ -3442,7 +4226,7 @@ body.compact-view .user-technical-details[open] summary::after {
   grid-auto-flow: column;
   align-items: center;
   gap: 8px;
-  min-height: 44px;
+  min-height: var(--control-height);
   color: var(--text);
 }
 
@@ -3459,7 +4243,7 @@ body.compact-view .user-technical-details[open] summary::after {
   gap: 0;
   overflow: hidden;
   border: 1px solid var(--border-soft);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--surface);
 }
 
@@ -3491,7 +4275,7 @@ body.compact-view .user-technical-details[open] summary::after {
   display: grid;
   grid-template-columns: 20px 38px minmax(0, 1fr) auto;
   min-width: 0;
-  min-height: 50px;
+  min-height: var(--control-height);
   border: 0;
   border-bottom: 1px solid var(--border-soft);
   padding: 6px 10px;
@@ -3503,17 +4287,25 @@ body.compact-view .user-technical-details[open] summary::after {
 }
 
 .role-app-toggle.hidden {
-  background: var(--surface-alt);
+  opacity: 0.66;
 }
 
+/* Same order as every other row in the form: name on the left, control on the
+   right. This one used to put its checkbox first, so Settings had two boolean
+   rows that read in opposite directions. */
 .permission-toggle {
-  justify-content: flex-start;
-  min-height: 42px;
-  border: 1px solid var(--border-soft);
-  border-radius: 6px;
-  padding: 6px 10px;
-  background: var(--surface-alt);
-  font-weight: 700;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--control-height);
+  padding: var(--pad-row) 0;
+  border-bottom: 1px solid var(--line-soft);
+  font-weight: var(--weight-medium);
+}
+
+.permission-toggle input {
+  order: 2;
 }
 
 .role-app-toggle .role-app-name,
@@ -3532,9 +4324,8 @@ body.compact-view .user-technical-details[open] summary::after {
 .role-app-state {
   align-self: center;
   color: var(--muted);
-  font-size: 0.74rem;
-  font-weight: 900;
-  text-transform: uppercase;
+  font-size: var(--text-meta);
+  font-weight: var(--weight-strong);
 }
 
 .role-app-state.online {
@@ -3566,7 +4357,7 @@ body.compact-view .user-technical-details[open] summary::after {
   gap: 0;
   overflow: hidden;
   border: 1px solid var(--border-soft);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--surface);
 }
 
@@ -3576,7 +4367,7 @@ body.compact-view .user-technical-details[open] summary::after {
   align-items: center;
   gap: 10px;
   min-width: 0;
-  min-height: 52px;
+  min-height: var(--control-height);
   border-left: 4px solid transparent;
   border-bottom: 1px solid var(--border-soft);
   padding: 7px 10px 7px 8px;
@@ -3588,7 +4379,6 @@ body.compact-view .user-technical-details[open] summary::after {
 
 .role-assignment-row.assigned {
   border-left-color: var(--accent-strong);
-  background: rgba(199, 215, 230, 0.055);
 }
 
 .role-assignment-row.disabled {
@@ -3611,8 +4401,8 @@ body.compact-view .user-technical-details[open] summary::after {
 
 .role-assignment-user small {
   color: var(--muted);
-  font-size: 0.76rem;
-  font-weight: 800;
+  font-size: var(--text-meta);
+  font-weight: var(--weight-strong);
 }
 
 .role-assignment-row select {
@@ -3624,7 +4414,7 @@ body.compact-view .user-technical-details[open] summary::after {
   gap: 2px;
   min-width: 0;
   border: 1px solid var(--border-soft);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 7px 9px;
   background: var(--surface-alt);
 }
@@ -3642,8 +4432,8 @@ body.compact-view .user-technical-details[open] summary::after {
 
 .role-member-pill small {
   color: var(--muted);
-  font-size: 0.76rem;
-  font-weight: 800;
+  font-size: var(--text-meta);
+  font-weight: var(--weight-strong);
 }
 
 .inline-empty {
@@ -3670,7 +4460,7 @@ body.compact-view .user-technical-details[open] summary::after {
 .user-row {
   justify-content: space-between;
   width: 100%;
-  min-height: 56px;
+  min-height: var(--control-height);
   border-width: 0 0 1px 4px;
   border-color: transparent transparent var(--border-soft) transparent;
   border-radius: 0;
@@ -3712,16 +4502,15 @@ body.compact-view .user-technical-details[open] summary::after {
   align-items: center;
   gap: 6px;
   color: var(--muted);
-  font-size: 0.78rem;
-  font-weight: 900;
-  text-transform: uppercase;
+  font-size: var(--text-meta);
+  font-weight: var(--weight-strong);
 }
 
 .user-role::before {
   content: "";
   width: 8px;
   height: 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--ok-border);
 }
 
@@ -3780,7 +4569,7 @@ body.compact-view .user-technical-details[open] summary::after {
 
 .skeleton-row {
   height: 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: color-mix(in srgb, var(--border-soft) 74%, var(--surface-alt));
 }
 
@@ -3798,7 +4587,7 @@ body.compact-view .user-technical-details[open] summary::after {
   left: 0;
   width: 18px;
   height: 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: linear-gradient(90deg, transparent, var(--accent-strong), transparent);
   box-shadow: 0 0 11px color-mix(in srgb, var(--accent-strong) 62%, transparent);
   opacity: 0.86;
@@ -3807,8 +4596,8 @@ body.compact-view .user-technical-details[open] summary::after {
 
 .thinking-label {
   color: var(--muted);
-  font-size: 0.82rem;
-  font-weight: 720;
+  font-size: var(--text-body);
+  font-weight: var(--weight-medium);
   letter-spacing: 0;
   line-height: 1.24;
 }
@@ -3856,8 +4645,8 @@ body.compact-view .user-technical-details[open] summary::after {
   gap: 8px;
   min-height: 36px;
   color: var(--muted);
-  font-size: 0.84rem;
-  font-weight: 760;
+  font-size: var(--text-body);
+  font-weight: var(--weight-medium);
   line-height: 1.2;
   cursor: pointer;
   user-select: none;
@@ -3881,7 +4670,7 @@ body.compact-view .user-technical-details[open] summary::after {
 
 .empty {
   border: 1px dashed var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: var(--space-4);
   color: var(--muted);
   background: var(--surface-alt);
@@ -3917,9 +4706,9 @@ body.compact-view .user-technical-details[open] summary::after {
   body.admin-view .assistant-toggle {
     min-height: 44px;
     padding: 0 12px;
-    border-radius: 6px;
-    font-size: 0.86rem;
-    font-weight: 800;
+    border-radius: var(--radius-md);
+    font-size: var(--text-body);
+    font-weight: var(--weight-strong);
   }
 
   body.admin-view .assistant-panel {
@@ -3952,9 +4741,17 @@ body.admin-view.assistant-available .dashboard:has(.assistant-panel:not([hidden]
 }
 
 .assistant-toggle {
-  min-height: 52px;
-  color: var(--accent-strong);
+  min-height: var(--control-height-touch);
+  color: var(--ink-1);
   text-align: left;
+}
+
+/* Docked in the sidebar column on desktop, so it is a control in the chrome
+   rather than a floating call-to-action sitting on top of the page. */
+@media (min-width: 861px) {
+  body.admin-view .assistant-toggle {
+    min-height: var(--control-height);
+  }
 }
 
 .assistant-panel {
@@ -4003,9 +4800,9 @@ body.compact-view #source-pill {
 }
 
 body.compact-view h1 {
-  font-size: 0.98rem;
+  font-size: var(--text-subtitle);
   line-height: 1.12;
-  font-weight: 720;
+  font-weight: var(--weight-medium);
 }
 
 body.compact-view #summary {
@@ -4027,7 +4824,7 @@ body.compact-view .topbar-actions button.command {
   background: transparent;
   padding: 0;
   font-size: 0;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 body.compact-view .topbar-actions button.command:hover,
@@ -4090,7 +4887,7 @@ body.compact-view .user-status-card .overview-label {
 body.compact-view .user-status-card .status-note {
   min-width: 0;
   color: var(--text);
-  font-size: 0.78rem;
+  font-size: var(--text-meta);
   line-height: 1.16;
 }
 
@@ -4109,11 +4906,11 @@ body.compact-view .section-head {
 }
 
 body.compact-view .section-head h2 {
-  font-size: 0.84rem;
+  font-size: var(--text-body);
 }
 
 body.compact-view #user-app-count {
-  font-size: 0.74rem;
+  font-size: var(--text-meta);
 }
 
 body.compact-view .user-app-card {
@@ -4136,7 +4933,7 @@ body.compact-view .user-app-main {
 }
 
 body.compact-view .user-app-card h3 {
-  font-size: 0.84rem;
+  font-size: var(--text-body);
   line-height: 1.12;
 }
 
@@ -4147,7 +4944,7 @@ body.compact-view .app-title-line {
 body.compact-view .user-app-card p {
   min-width: 0;
   flex: 1 1 auto;
-  font-size: 0.75rem;
+  font-size: var(--text-meta);
   line-height: 1.18;
 }
 
@@ -4156,7 +4953,7 @@ body.compact-view .detail-chevron {
   align-items: center;
   justify-content: flex-end;
   justify-self: end;
-  font-size: 0.82rem;
+  font-size: var(--text-body);
 }
 
 body.compact-view .user-detail-view {
@@ -4187,7 +4984,7 @@ body.compact-view .detail-header .status-artwork {
 }
 
 body.compact-view .detail-title h2 {
-  font-size: 0.98rem;
+  font-size: var(--text-subtitle);
 }
 
 body.compact-view .detail-metric {
@@ -4197,11 +4994,11 @@ body.compact-view .detail-metric {
 }
 
 body.compact-view .detail-metric span {
-  font-size: 0.72rem;
+  font-size: var(--text-micro);
 }
 
 body.compact-view .detail-metric strong {
-  font-size: 0.8rem;
+  font-size: var(--text-meta);
 }
 
 body.compact-view .history-event {
@@ -4210,12 +5007,12 @@ body.compact-view .history-event {
 }
 
 body.compact-view .history-copy strong {
-  font-size: 0.82rem;
+  font-size: var(--text-body);
 }
 
 body.compact-view .history-copy small,
 body.compact-view .detail-empty {
-  font-size: 0.76rem;
+  font-size: var(--text-meta);
 }
 
 body.compact-view .panel.user-chat {
@@ -4244,7 +5041,7 @@ body.compact-view .panel.user-chat .chat-output {
   padding: 5px 0;
   border: 0;
   background: transparent;
-  font-size: 0.78rem;
+  font-size: var(--text-meta);
   line-height: 1.24;
 }
 
@@ -4260,7 +5057,7 @@ body.compact-view .panel.user-chat textarea {
   padding: 8px 10px;
   border-color: var(--border-soft);
   background: transparent;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   line-height: 1.15;
   resize: none;
 }
@@ -4318,7 +5115,7 @@ body.compact-view .panel.user-chat[data-chat-available="false"] textarea {
   grid-column: 1;
   overflow: hidden;
   color: var(--muted);
-  font-size: 0.88rem;
+  font-size: var(--text-body);
   line-height: 1.1;
 }
 
@@ -4340,9 +5137,7 @@ body.compact-view .assistant-toggle {
   .login,
   .overview-cards,
   .user-status-grid,
-  .overview-grid,
-  .diagnostics-grid,
-  .admin-grid {
+  .diagnostics-grid {
     grid-template-columns: 1fr;
   }
 
@@ -4499,7 +5294,7 @@ body.compact-view .assistant-toggle {
 
   .openai-auth-code {
     min-height: 64px;
-    font-size: 1.72rem;
+    font-size: var(--text-display);
   }
 
   .openai-auth-status {
@@ -4565,7 +5360,7 @@ body.compact-view .assistant-toggle {
     background: var(--button-bg);
     padding: 0;
     font-size: 0;
-    border-radius: 5px;
+    border-radius: var(--radius-sm);
   }
 
   .topbar-actions button.command:hover,
@@ -4583,7 +5378,7 @@ body.compact-view .assistant-toggle {
     width: auto;
     min-width: 44px;
     padding-inline: 0.62rem;
-    font-size: 0.82rem;
+    font-size: var(--text-body);
   }
 
   .tabs:not(.side-nav) {
@@ -4610,7 +5405,7 @@ body.compact-view .assistant-toggle {
   }
 
   h1 {
-    font-size: 1.12rem;
+    font-size: var(--text-title);
     line-height: 1.1;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -4626,7 +5421,7 @@ body.compact-view .assistant-toggle {
   .incident-card,
   .settings-card,
   .fact-row {
-    border-radius: 8px;
+    border-radius: var(--radius-md);
   }
 
   .panel {
@@ -4634,10 +5429,10 @@ body.compact-view .assistant-toggle {
     padding: 12px;
   }
 
-  .overview-grid,
-  .diagnostics-grid,
-  .admin-grid {
-    gap: 12px;
+  .overview-layout,
+  .overview-side,
+  .diagnostics-grid {
+    gap: var(--space-3);
   }
 
   .fact-row,
@@ -4682,11 +5477,11 @@ body.compact-view .assistant-toggle {
   }
 
   .overview-metric span {
-    font-size: 0.68rem;
+    font-size: var(--text-micro);
   }
 
   .overview-metric strong {
-    font-size: 0.72rem;
+    font-size: var(--text-micro);
   }
 
   .overview-card > .overview-actions {
@@ -4826,7 +5621,7 @@ body.compact-view .assistant-toggle {
     flex: 1 0 70px;
     min-width: 70px;
     padding-inline: 6px;
-    font-size: 0.83rem;
+    font-size: var(--text-body);
     border-left-color: var(--border);
   }
 
@@ -5009,7 +5804,7 @@ body.compact-view .assistant-toggle {
 
   .assistant-toggle,
   .assistant-panel {
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     pointer-events: auto;
   }
 
@@ -5017,7 +5812,7 @@ body.compact-view .assistant-toggle {
     width: 44px;
     min-height: 44px;
     padding: 0;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     font-size: 0;
     text-align: center;
   }
@@ -5025,7 +5820,7 @@ body.compact-view .assistant-toggle {
   .assistant-toggle::before {
     content: "?";
     font-size: 1rem;
-    font-weight: 800;
+    font-weight: var(--weight-strong);
   }
 
   .assistant-panel {
@@ -5085,9 +5880,9 @@ body.compact-view .topbar-actions button.command {
   min-height: 44px;
   padding: 0 9px;
   border: 1px solid var(--border-soft);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: transparent;
-  font-size: 0.78rem;
+  font-size: var(--text-meta);
   line-height: 1.05;
 }
 
@@ -5099,7 +5894,7 @@ body.compact-view .topbar-actions button.command::before {
 }
 
 body.compact-view h1 {
-  font-size: 1.02rem;
+  font-size: var(--text-title);
   line-height: 1.1;
 }
 
@@ -5115,7 +5910,7 @@ body.compact-view .user-hero {
   padding: 12px;
   border: 1px solid color-mix(in srgb, var(--hero-accent) 72%, var(--border));
   border-left-width: 4px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--hero-bg);
   box-shadow: none;
 }
@@ -5162,23 +5957,22 @@ body.compact-view .user-hero-copy {
 
 body.compact-view .user-hero-state {
   color: var(--hero-accent);
-  font-size: 0.72rem;
-  font-weight: 820;
+  font-size: var(--text-micro);
+  font-weight: var(--weight-strong);
   letter-spacing: 0;
   line-height: 1;
-  text-transform: uppercase;
 }
 
 body.compact-view .user-hero h2 {
   margin: 0;
-  font-size: 1.08rem;
+  font-size: var(--text-title);
   line-height: 1.14;
 }
 
 body.compact-view .user-hero p {
   margin: 0;
   color: var(--muted);
-  font-size: 0.86rem;
+  font-size: var(--text-body);
   line-height: 1.28;
 }
 
@@ -5195,7 +5989,7 @@ body.compact-view .user-view-tabs {
   gap: 4px;
   padding: 3px;
   border: 1px solid var(--border-soft);
-  border-radius: 7px;
+  border-radius: var(--radius-md);
   background: var(--surface-alt);
 }
 
@@ -5203,16 +5997,16 @@ body.compact-view .user-view-tabs button {
   min-height: 44px;
   padding: 0 8px;
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
-  font-size: 0.8rem;
-  font-weight: 760;
+  font-size: var(--text-meta);
+  font-weight: var(--weight-medium);
 }
 
 body.compact-view .user-view-tabs button.active {
   background: var(--accent-strong);
-  color: #101214;
+  color: var(--accent-ink);
 }
 
 body.compact-view .user-view-tabs button:disabled {
@@ -5232,10 +6026,10 @@ body.compact-view .user-primary-actions[data-chat-available="false"] {
 body.compact-view .user-primary-actions button.command {
   min-height: 44px;
   width: 100%;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 0 12px;
-  font-size: 0.86rem;
-  font-weight: 740;
+  font-size: var(--text-body);
+  font-weight: var(--weight-medium);
 }
 
 body.compact-view #user-notify-admin,
@@ -5244,7 +6038,7 @@ body.compact-view #user-ask-primary {
   min-width: 0;
   min-height: 44px;
   padding: 0 12px;
-  font-size: 0.86rem;
+  font-size: var(--text-body);
 }
 
 body.compact-view .user-primary-actions button.command::before {
@@ -5266,65 +6060,124 @@ body.compact-view .section-head {
 }
 
 body.compact-view .section-head h2 {
-  font-size: 0.9rem;
+  font-size: var(--text-body);
 }
 
+/* ---------------------------------------------------------------------------
+   Compact surface: tiles.
+
+   The compact audience is non-technical and on a phone, so this surface uses the
+   third container role. Status is the tile's FILL rather than a dot beside a
+   label, which means the one thing that is broken is the only saturated object
+   on the screen and no dot/word/pill encoding is needed to find it. A working
+   tile stays neutral on purpose.
+
+   Touch targets are large by construction here — the 44px floor stops being
+   something the visual harness has to police, because the smallest tappable
+   object is a whole tile.
+
+   This is a design language, not an architecture: the two surfaces still run on
+   two ports from two bundles, and nothing admin-only renders here.
+   --------------------------------------------------------------------------- */
 body.compact-view .user-apps {
-  border-block: 1px solid var(--border-soft);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+  border-block: 0;
 }
 
 body.compact-view .user-app-card {
-  grid-template-columns: 32px minmax(0, 1fr) 12px;
-  min-height: 46px;
-  gap: 8px;
-  padding: 5px 0;
+  grid-template-columns: minmax(0, 1fr);
+  grid-auto-rows: min-content;
+  align-content: space-between;
+  min-height: 104px;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+}
+
+body.compact-view .user-app-card.degraded,
+body.compact-view .user-app-card.unknown {
+  border-color: var(--status-warn);
+  background: var(--status-warn-wash);
+}
+
+body.compact-view .user-app-card.offline {
+  border-color: var(--status-bad);
+  background: var(--status-bad-wash);
 }
 
 body.compact-view .user-app-card .app-logo {
-  width: 32px;
-  height: 32px;
+  width: 34px;
+  height: 34px;
+}
+
+/* The tile itself is the target and the fill already carries the state, so the
+   chevron and the status dot are both redundant chrome here. */
+body.compact-view .user-app-card .detail-chevron {
+  display: none;
+}
+
+body.compact-view .compact-app-status::before {
+  display: none;
 }
 
 body.compact-view .user-app-main {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+body.compact-view .app-title-line {
   display: grid;
   gap: 2px;
   min-width: 0;
 }
 
-body.compact-view .app-title-line {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-}
-
 body.compact-view .user-app-card h3 {
   min-width: 0;
-  flex: 1 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 0.9rem;
-  line-height: 1.12;
+  font-size: var(--text-title);
+  line-height: var(--leading-snug);
 }
 
 body.compact-view .compact-app-status {
-  flex: 0 0 auto;
-  font-size: 0.74rem;
-  font-weight: 760;
+  font-size: var(--text-meta);
+  font-weight: var(--weight-strong);
 }
 
-body.compact-view .compact-app-status .status-text {
-  color: var(--text);
+body.compact-view .user-app-card.offline .compact-app-status .status-text {
+  color: var(--status-bad-ink);
+}
+
+body.compact-view .user-app-card.degraded .compact-app-status .status-text,
+body.compact-view .user-app-card.unknown .compact-app-status .status-text {
+  color: var(--status-warn-ink);
+}
+
+body.compact-view .user-app-card.online .compact-app-status .status-text {
+  color: var(--status-ok-ink);
 }
 
 body.compact-view .user-app-card p {
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 0.78rem;
-  line-height: 1.2;
+  color: var(--ink-2);
+  font-size: var(--text-meta);
+  line-height: var(--leading-snug);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+@media (max-width: 359px) {
+  body.compact-view .user-apps {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 body.compact-view .panel.user-chat {
@@ -5348,7 +6201,7 @@ body.compact-view .panel.user-chat h2 {
   overflow: visible;
   clip: auto;
   white-space: normal;
-  font-size: 0.9rem;
+  font-size: var(--text-body);
 }
 
 body.compact-view .panel.user-chat .chat-output {
@@ -5359,7 +6212,7 @@ body.compact-view .panel.user-chat .chat-output {
   padding: 10px 0;
   border-block: 1px solid var(--border-soft);
   background: transparent;
-  font-size: 0.9rem;
+  font-size: var(--text-body);
   line-height: 1.36;
   -webkit-overflow-scrolling: touch;
 }
@@ -5371,7 +6224,7 @@ body.compact-view .panel.user-chat .chat-output.chat-empty {
 body.compact-view .panel.user-chat .chat-auto-repair {
   grid-column: 1 / -1;
   min-height: 32px;
-  font-size: 0.78rem;
+  font-size: var(--text-meta);
 }
 
 body.compact-view .panel.user-chat textarea {
@@ -5380,7 +6233,7 @@ body.compact-view .panel.user-chat textarea {
   height: 96px;
   max-height: 160px;
   padding: 10px 12px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   resize: vertical;
 }
 
@@ -5398,7 +6251,7 @@ body.compact-view #user-chat-send {
   min-height: 44px;
   height: 44px;
   padding: 0 12px;
-  font-size: 0.86rem;
+  font-size: var(--text-body);
 }
 
 body.compact-view #user-chat-send::before {
@@ -5422,8 +6275,8 @@ body.compact-view .user-technical-details summary {
   justify-content: space-between;
   gap: 10px;
   cursor: pointer;
-  font-size: 0.84rem;
-  font-weight: 700;
+  font-size: var(--text-body);
+  font-weight: var(--weight-medium);
   list-style: none;
 }
 
@@ -5456,7 +6309,7 @@ body.compact-view #user-menu-toggle.nav-toggle {
   min-width: 44px;
   min-height: 44px;
   border: 1px solid var(--border-soft);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--text);
   padding: 0;
@@ -5471,7 +6324,7 @@ body.compact-view #user-menu-toggle.nav-toggle.command[data-glyph]::before {
 
 body.compact-view #user-menu-toggle.nav-toggle:hover,
 body.compact-view #user-menu-toggle.nav-toggle:focus-visible {
-  border-color: #56606b;
+  border-color: var(--ink-3);
   background: var(--button-hover);
 }
 
@@ -5534,7 +6387,7 @@ body.user-menu-open .user-drawer {
 
 .user-drawer-head h2 {
   margin: 0;
-  font-size: 1rem;
+  font-size: var(--text-subtitle);
   line-height: 1.12;
 }
 
@@ -5575,7 +6428,7 @@ body.user-menu-open .user-drawer {
   gap: 8px;
   min-height: 44px;
   border: 1px solid var(--border-soft);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 0 10px;
   background: var(--surface-alt);
   color: var(--text);
@@ -5607,12 +6460,6 @@ body.user-menu-open .user-drawer {
 
 .user-settings-section h3 {
   margin: 0;
-  color: var(--muted);
-  font-size: 0.74rem;
-  font-weight: 820;
-  letter-spacing: 0;
-  line-height: 1;
-  text-transform: uppercase;
 }
 
 .user-settings-intro,
@@ -5620,7 +6467,7 @@ body.user-menu-open .user-drawer {
 .user-settings-loading {
   margin: 0;
   color: var(--muted);
-  font-size: 0.88rem;
+  font-size: var(--text-body);
   line-height: 1.32;
 }
 
@@ -5656,8 +6503,8 @@ body.user-menu-open .user-drawer {
   gap: 9px;
   min-height: 48px;
   color: var(--text);
-  font-size: 0.88rem;
-  font-weight: 680;
+  font-size: var(--text-body);
+  font-weight: var(--weight-medium);
   line-height: 1.2;
 }
 
@@ -5696,7 +6543,7 @@ body.user-menu-open .user-drawer {
   width: 66px;
   height: 32px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--surface-alt);
   transition: background 120ms ease, border-color 120ms ease;
 }
@@ -5707,7 +6554,7 @@ body.user-menu-open .user-drawer {
   left: 4px;
   width: 22px;
   height: 22px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--muted);
   transition: transform 120ms ease, background 120ms ease;
 }
@@ -5718,10 +6565,9 @@ body.user-menu-open .user-drawer {
   right: 8px;
   transform: translateY(-50%);
   color: var(--muted);
-  font-size: 0.66rem;
-  font-weight: 820;
+  font-size: var(--text-micro);
+  font-weight: var(--weight-strong);
   line-height: 1;
-  text-transform: uppercase;
 }
 
 .user-switch input:checked + .user-switch-track {
@@ -5753,7 +6599,7 @@ body.user-menu-open .user-drawer {
   min-height: 0;
   margin: 0 0 0 43px;
   color: var(--bad-text);
-  font-size: 0.78rem;
+  font-size: var(--text-meta);
   line-height: 1.25;
 }
 
@@ -5780,7 +6626,7 @@ body.user-menu-open .user-drawer {
   gap: var(--space-4);
   width: min(360px, calc(100vw - 32px - var(--safe-left) - var(--safe-right)));
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: var(--space-4);
   background: var(--surface);
   box-shadow: 0 18px 54px rgba(0, 0, 0, 0.42);
@@ -5798,13 +6644,13 @@ body.user-menu-open .user-drawer {
 
 .compact-notification-signup h2 {
   color: var(--text);
-  font-size: 1.12rem;
+  font-size: var(--text-title);
   line-height: 1.2;
 }
 
 .compact-notification-signup p {
   color: var(--muted);
-  font-size: 0.92rem;
+  font-size: var(--text-subtitle);
   line-height: 1.42;
 }
 
@@ -5892,7 +6738,7 @@ body.compact-view[data-compact-view="chat"] .panel.user-chat {
   min-height: 0;
   overflow: hidden;
   border: 1px solid var(--border-soft);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--surface);
 }
 
@@ -5902,8 +6748,8 @@ body.compact-view[data-compact-view="chat"] .panel.user-chat h2 {
   padding: 10px 12px;
   border-bottom: 1px solid var(--border-soft);
   color: var(--muted);
-  font-size: 0.82rem;
-  font-weight: 760;
+  font-size: var(--text-body);
+  font-weight: var(--weight-medium);
   line-height: 1.15;
 }
 
@@ -5916,7 +6762,7 @@ body.compact-view[data-compact-view="chat"] .panel.user-chat .chat-output {
   border: 0;
   border-bottom: 1px solid var(--border-soft);
   background: var(--surface-alt);
-  font-size: 0.94rem;
+  font-size: var(--text-subtitle);
   line-height: 1.42;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
@@ -5960,7 +6806,7 @@ body.compact-view[data-compact-view="chat"] .panel.user-chat .chat-auto-repair {
   padding: 0 12px;
   border-bottom: 1px solid var(--border-soft);
   background: var(--surface);
-  font-size: 0.78rem;
+  font-size: var(--text-meta);
 }
 
 body.compact-view[data-compact-view="chat"] .panel.user-chat textarea {
@@ -5972,9 +6818,9 @@ body.compact-view[data-compact-view="chat"] .panel.user-chat textarea {
   margin: 10px 0 10px 10px;
   padding: 10px 11px;
   border-color: var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--surface-alt);
-  font-size: 0.94rem;
+  font-size: var(--text-subtitle);
   line-height: 1.28;
   resize: none;
 }
@@ -5997,7 +6843,7 @@ body.compact-view[data-compact-view="chat"] #user-chat-send {
   height: 56px;
   min-height: 56px;
   padding: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   font-size: 0;
 }
 
@@ -6005,9 +6851,9 @@ body.compact-view[data-compact-view="chat"] #user-chat-send::before {
   margin: 0;
   width: 1.7rem;
   height: 1.7rem;
-  color: #101214;
+  color: var(--accent-ink);
   font-size: 1.78rem;
-  font-weight: 900;
+  font-weight: var(--weight-strong);
   line-height: 1;
 }
 
@@ -6043,7 +6889,7 @@ html:is(.is-keyboard-open, .visual-keyboard-test) body.compact-view[data-compact
   grid-row: 1;
   min-height: 72px;
   padding: 10px 12px;
-  font-size: 0.9rem;
+  font-size: var(--text-body);
 }
 
 html:is(.is-keyboard-open, .visual-keyboard-test) body.compact-view[data-compact-view="chat"] .panel.user-chat .chat-auto-repair {
@@ -6089,19 +6935,18 @@ html:is(.is-keyboard-open, .visual-keyboard-test) body.compact-view[data-compact
   }
 }
 
-/* Intermediate desktop range (sidebar visible, but not enough room for title beside the
-   action buttons). Stack the actions below the title so the title keeps full width and
-   never gets squeezed into a mid-word-wrapping column. Above this range the 3-column topbar
-   has room; below 861px the mobile topbar layout already stacks the actions. */
+/* Intermediate desktop range (sidebar visible, but not enough room for a title beside the
+   action buttons). The admin surface no longer renders a title at this width, so it keeps
+   the single action row; the compact surface stacks actions under its title. */
 @media (min-width: 861px) and (max-width: 1200px) {
-  .topbar {
+  body.compact-view .topbar {
     grid-template-columns: minmax(0, 1fr);
     grid-template-areas:
       "title"
       "actions";
   }
 
-  .topbar-actions {
+  body.compact-view .topbar-actions {
     justify-content: flex-start;
   }
 }

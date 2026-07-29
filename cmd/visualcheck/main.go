@@ -44,10 +44,10 @@ type screenshots struct {
 	DesktopServer          string `json:"desktopServer"`
 	DesktopRouter          string `json:"desktopRouter"`
 	DesktopApps            string `json:"desktopApps"`
-	DesktopIncidents       string `json:"desktopIncidents"`
+	DesktopActivity        string `json:"desktopActivity"`
 	DesktopDiagnostics     string `json:"desktopDiagnostics"`
 	DesktopQueue           string `json:"desktopQueue"`
-	DesktopAdmin           string `json:"desktopAdmin"`
+	DesktopAdvanced        string `json:"desktopAdvanced"`
 	DesktopSettings        string `json:"desktopSettings"`
 	DesktopAgentRepair     string `json:"desktopAgentRepair"`
 	DesktopUserAppDetail   string `json:"desktopUserAppDetail"`
@@ -55,10 +55,10 @@ type screenshots struct {
 	MobileOverview         string `json:"mobileOverview"`
 	MobileRouter           string `json:"mobileRouter"`
 	MobileApps             string `json:"mobileApps"`
-	MobileIncidents        string `json:"mobileIncidents"`
+	MobileActivity         string `json:"mobileActivity"`
 	MobileDiagnostics      string `json:"mobileDiagnostics"`
 	MobileQueue            string `json:"mobileQueue"`
-	MobileAdmin            string `json:"mobileAdmin"`
+	MobileAdvanced         string `json:"mobileAdvanced"`
 	MobileSettings         string `json:"mobileSettings"`
 	MobileUserHome         string `json:"mobileUserHome"`
 	MobileUserChatKeyboard string `json:"mobileUserChatKeyboard"`
@@ -87,7 +87,9 @@ type flags struct {
 	ReviewQueueOutputVisible    bool     `json:"reviewQueueOutputVisible,omitempty"`
 	ReviewQueueCopyAuditOnly    bool     `json:"reviewQueueCopyAuditOnly,omitempty"`
 	ActiveTabCount              int      `json:"activeTabCount,omitempty"`
-	AuditTableRowCount          int      `json:"auditTableRowCount,omitempty"`
+	ActivityRowCount            int      `json:"activityRowCount,omitempty"`
+	ActivityFilterNarrowed      bool     `json:"activityFilterNarrowed,omitempty"`
+	ActivitySearchNarrowed      bool     `json:"activitySearchNarrowed,omitempty"`
 	RawSnapshotCollapsed        bool     `json:"rawSnapshotCollapsed,omitempty"`
 	AssistantOverlapCount       int      `json:"assistantOverlapCount,omitempty"`
 	AssistantDockVisible        bool     `json:"assistantDockVisible,omitempty"`
@@ -95,6 +97,8 @@ type flags struct {
 	SettingsEditorCount         int      `json:"settingsEditorCount,omitempty"`
 	SettingsControlCount        int      `json:"settingsControlCount,omitempty"`
 	SettingsMenuButtonCount     int      `json:"settingsMenuButtonCount,omitempty"`
+	SettingsSearchNarrowed      bool     `json:"settingsSearchNarrowed,omitempty"`
+	SettingsSearchRestored      bool     `json:"settingsSearchRestored,omitempty"`
 	VisibleSettingsSections     int      `json:"visibleSettingsSections,omitempty"`
 	SettingsDirtyPromptBlocked  bool     `json:"settingsDirtyPromptBlocked,omitempty"`
 	SettingsDirtyCleared        bool     `json:"settingsDirtyCleared,omitempty"`
@@ -130,6 +134,7 @@ type flags struct {
 	UserChatOutputVisible       bool     `json:"userChatOutputVisible,omitempty"`
 	UserChatChromeCollapsed     bool     `json:"userChatChromeCollapsed,omitempty"`
 	UserMenuToggleVisible       bool     `json:"userMenuToggleVisible,omitempty"`
+	AdminPageTitleVisible       bool     `json:"adminPageTitleVisible,omitempty"`
 	UserDrawerOpen              bool     `json:"userDrawerOpen,omitempty"`
 	UserDrawerHidden            bool     `json:"userDrawerHidden,omitempty"`
 	UserDrawerFocusReturned     bool     `json:"userDrawerFocusReturned,omitempty"`
@@ -159,6 +164,7 @@ type flags struct {
 	MonitorHideRestored         bool     `json:"monitorHideRestored,omitempty"`
 	BodyHorizontalOverflow      bool     `json:"bodyHorizontalOverflow"`
 	ButtonTextOverflow          bool     `json:"buttonTextOverflow"`
+	ButtonTextOverflowOffender  string   `json:"buttonTextOverflowOffender,omitempty"`
 	NoticeTitleOverlap          bool     `json:"noticeTitleOverlap"`
 	RawTransportErrorVisible    bool     `json:"rawTransportErrorVisible"`
 	ElementBoundsOverflow       bool     `json:"elementBoundsOverflow"`
@@ -382,12 +388,12 @@ func run(opts options) (visualResult, error) {
 		return result, err
 	}
 
-	incidents, err := evalFlags(cdp, incidentsExpression)
+	activity, err := evalFlags(cdp, activityExpression)
 	if err != nil {
 		return result, err
 	}
-	result.Screenshots.DesktopIncidents = filepath.Join(cache, "visual-desktop-incidents-"+runID+".png")
-	if err := captureScreenshot(cdp, result.Screenshots.DesktopIncidents); err != nil {
+	result.Screenshots.DesktopActivity = filepath.Join(cache, "visual-desktop-activity-"+runID+".png")
+	if err := captureScreenshot(cdp, result.Screenshots.DesktopActivity); err != nil {
 		return result, err
 	}
 
@@ -409,12 +415,12 @@ func run(opts options) (visualResult, error) {
 		return result, err
 	}
 
-	admin, err := evalFlags(cdp, adminExpression)
+	advanced, err := evalFlags(cdp, advancedExpression)
 	if err != nil {
 		return result, err
 	}
-	result.Screenshots.DesktopAdmin = filepath.Join(cache, "visual-desktop-admin-"+runID+".png")
-	if err := captureScreenshot(cdp, result.Screenshots.DesktopAdmin); err != nil {
+	result.Screenshots.DesktopAdvanced = filepath.Join(cache, "visual-desktop-advanced-"+runID+".png")
+	if err := captureScreenshot(cdp, result.Screenshots.DesktopAdvanced); err != nil {
 		return result, err
 	}
 
@@ -492,12 +498,12 @@ func run(opts options) (visualResult, error) {
 	if err := captureScreenshot(cdp, result.Screenshots.MobileApps); err != nil {
 		return result, err
 	}
-	mobileIncidents, err := evalFlags(cdp, incidentsExpression)
+	mobileActivity, err := evalFlags(cdp, activityExpression)
 	if err != nil {
 		return result, err
 	}
-	result.Screenshots.MobileIncidents = filepath.Join(cache, "visual-mobile-incidents-"+runID+".png")
-	if err := captureScreenshot(cdp, result.Screenshots.MobileIncidents); err != nil {
+	result.Screenshots.MobileActivity = filepath.Join(cache, "visual-mobile-activity-"+runID+".png")
+	if err := captureScreenshot(cdp, result.Screenshots.MobileActivity); err != nil {
 		return result, err
 	}
 	mobileDiagnostics, err := evalFlags(cdp, diagnosticsExpression)
@@ -516,12 +522,12 @@ func run(opts options) (visualResult, error) {
 	if err := captureScreenshot(cdp, result.Screenshots.MobileQueue); err != nil {
 		return result, err
 	}
-	mobileAdmin, err := evalFlags(cdp, adminExpression)
+	mobileAdvanced, err := evalFlags(cdp, advancedExpression)
 	if err != nil {
 		return result, err
 	}
-	result.Screenshots.MobileAdmin = filepath.Join(cache, "visual-mobile-admin-"+runID+".png")
-	if err := captureScreenshot(cdp, result.Screenshots.MobileAdmin); err != nil {
+	result.Screenshots.MobileAdvanced = filepath.Join(cache, "visual-mobile-advanced-"+runID+".png")
+	if err := captureScreenshot(cdp, result.Screenshots.MobileAdvanced); err != nil {
 		return result, err
 	}
 	mobileSettings, err := evalFlags(cdp, settingsExpression)
@@ -712,20 +718,20 @@ func run(opts options) (visualResult, error) {
 		"server":                  serverFlags,
 		"router":                  router,
 		"apps":                    apps,
-		"incidents":               incidents,
+		"activity":                activity,
 		"diagnostics":             diagnostics,
 		"queue":                   queue,
-		"admin":                   admin,
+		"advanced":                advanced,
 		"settings":                settings,
 		"agentRepair":             agentRepair,
 		"customization":           monitorCustomization,
 		"mobileOverview":          mobileOverview,
 		"mobileRouter":            mobileRouter,
 		"mobileApps":              mobileApps,
-		"mobileIncidents":         mobileIncidents,
+		"mobileActivity":          mobileActivity,
 		"mobileDiagnostics":       mobileDiagnostics,
 		"mobileQueue":             mobileQueue,
-		"mobileAdmin":             mobileAdmin,
+		"mobileAdvanced":          mobileAdvanced,
 		"mobileSettings":          mobileSettings,
 		"desktopUserPromptAction": desktopUserPromptAction,
 		"desktopUserAppDetail":    desktopUserAppDetail,
@@ -737,7 +743,7 @@ func run(opts options) (visualResult, error) {
 		"mobileUserDrawer":        mobileUserDrawer,
 		"mobileDrawerClose":       mobileUserDrawerClose,
 	}
-	if err := assertVisualFlags(overview, serverFlags, router, apps, incidents, diagnostics, queue, admin, settings, agentRepair, monitorCustomization, mobileOverview, mobileRouter, mobileApps, mobileIncidents, mobileDiagnostics, mobileQueue, mobileAdmin, mobileSettings, desktopUserPromptAction, desktopUserAppDetail, desktopUserInfraDetail, mobileUserHome, mobileUserChatKeyboard, mobileUserAppDetail, mobileUserInfraDetail, mobileUserDrawer, mobileUserDrawerClose); err != nil {
+	if err := assertVisualFlags(overview, serverFlags, router, apps, activity, diagnostics, queue, advanced, settings, agentRepair, monitorCustomization, mobileOverview, mobileRouter, mobileApps, mobileActivity, mobileDiagnostics, mobileQueue, mobileAdvanced, mobileSettings, desktopUserPromptAction, desktopUserAppDetail, desktopUserInfraDetail, mobileUserHome, mobileUserChatKeyboard, mobileUserAppDetail, mobileUserInfraDetail, mobileUserDrawer, mobileUserDrawerClose); err != nil {
 		return result, err
 	}
 
@@ -868,7 +874,7 @@ func captureScreenshot(cdp *cdpClient, path string) error {
 	return os.WriteFile(path, data, 0o644)
 }
 
-func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, queue, admin, settings, agentRepair, customization, mobileOverview, mobileRouter, mobileApps, mobileIncidents, mobileDiagnostics, mobileQueue, mobileAdmin, mobileSettings, desktopUserPromptAction, desktopUserAppDetail, desktopUserInfraDetail, mobileUserHome, mobileUserChatKeyboard, mobileUserAppDetail, mobileUserInfraDetail, mobileUserDrawer, mobileUserDrawerClose flags) error {
+func assertVisualFlags(overview, server, router, apps, activity, diagnostics, queue, advanced, settings, agentRepair, customization, mobileOverview, mobileRouter, mobileApps, mobileActivity, mobileDiagnostics, mobileQueue, mobileAdvanced, mobileSettings, desktopUserPromptAction, desktopUserAppDetail, desktopUserInfraDetail, mobileUserHome, mobileUserChatKeyboard, mobileUserAppDetail, mobileUserInfraDetail, mobileUserDrawer, mobileUserDrawerClose flags) error {
 	var failures []string
 	if !overview.DashboardVisible {
 		failures = append(failures, "dashboard was not visible after login")
@@ -897,8 +903,8 @@ func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, q
 	if apps.AppLogoCount < 1 {
 		failures = append(failures, "apps tab did not render app logos")
 	}
-	if incidents.IncidentCardCount < 1 || mobileIncidents.IncidentCardCount < 1 {
-		failures = append(failures, "incidents tab did not render incident cards")
+	if activity.IncidentCardCount < 1 || mobileActivity.IncidentCardCount < 1 {
+		failures = append(failures, "activity stream did not expand an incident into its evidence")
 	}
 	if diagnostics.DiagnosticPanelCount < 2 || mobileDiagnostics.DiagnosticPanelCount < 2 {
 		failures = append(failures, "diagnostics tab did not render diagnosis panels")
@@ -915,14 +921,28 @@ func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, q
 	if queue.ActiveTabCount != 1 || mobileQueue.ActiveTabCount != 1 {
 		failures = append(failures, "review queue navigation did not keep exactly one active tab")
 	}
-	if admin.AuditTableRowCount < 1 || mobileAdmin.AuditTableRowCount < 1 {
-		failures = append(failures, "admin audit log did not render as a table")
+	if activity.ActivityRowCount < 2 || mobileActivity.ActivityRowCount < 2 {
+		failures = append(failures, "activity stream did not merge incidents and audit entries")
 	}
-	if !admin.RawSnapshotCollapsed || !mobileAdmin.RawSnapshotCollapsed {
-		failures = append(failures, "raw admin snapshot debug disclosure was not collapsed")
+	if !activity.ActivityFilterNarrowed || !mobileActivity.ActivityFilterNarrowed {
+		failures = append(failures, "activity kind filter did not narrow the stream")
 	}
-	if admin.PageSubtitle == overview.PageSubtitle || settings.PageSubtitle == overview.PageSubtitle || diagnostics.PageSubtitle == overview.PageSubtitle {
-		failures = append(failures, "admin/settings/diagnostics subtitle repeated overall status")
+	if !activity.ActivitySearchNarrowed || !mobileActivity.ActivitySearchNarrowed {
+		failures = append(failures, "activity search did not filter and then restore the stream")
+	}
+	if !advanced.RawSnapshotCollapsed || !mobileAdvanced.RawSnapshotCollapsed {
+		failures = append(failures, "raw debug snapshot was not present and collapsed in settings > advanced")
+	}
+	// The page name is navigation, not content: it must not render beside a
+	// permanently visible sidebar, and it must render when the sidebar is a drawer.
+	if overview.AdminPageTitleVisible || settings.AdminPageTitleVisible {
+		failures = append(failures, "admin page title rendered while the sidebar was permanently visible")
+	}
+	if !mobileOverview.AdminPageTitleVisible || !mobileSettings.AdminPageTitleVisible {
+		failures = append(failures, "admin page title did not render while the sidebar was a drawer")
+	}
+	if advanced.PageSubtitle == overview.PageSubtitle || settings.PageSubtitle == overview.PageSubtitle || diagnostics.PageSubtitle == overview.PageSubtitle {
+		failures = append(failures, "settings/diagnostics accessible description repeated overall status")
 	}
 	if overview.AssistantOverlapCount > 0 || settings.AssistantOverlapCount > 0 || mobileSettings.AssistantOverlapCount > 0 {
 		failures = append(failures, "assistant launcher overlapped interactive controls")
@@ -939,14 +959,20 @@ func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, q
 	if apps.ButtonTextOverflow {
 		failures = append(failures, "apps tab button text overflow detected")
 	}
-	if overview.ElementBoundsOverflow || server.ElementBoundsOverflow || router.ElementBoundsOverflow || apps.ElementBoundsOverflow || incidents.ElementBoundsOverflow || diagnostics.ElementBoundsOverflow || queue.ElementBoundsOverflow || admin.ElementBoundsOverflow || settings.ElementBoundsOverflow {
-		failures = append(failures, "desktop component bounds overflow detected: "+firstNonEmpty(overview.ElementBoundsOffender, server.ElementBoundsOffender, router.ElementBoundsOffender, apps.ElementBoundsOffender, incidents.ElementBoundsOffender, diagnostics.ElementBoundsOffender, queue.ElementBoundsOffender, admin.ElementBoundsOffender, settings.ElementBoundsOffender))
+	if overview.ElementBoundsOverflow || server.ElementBoundsOverflow || router.ElementBoundsOverflow || apps.ElementBoundsOverflow || activity.ElementBoundsOverflow || diagnostics.ElementBoundsOverflow || queue.ElementBoundsOverflow || advanced.ElementBoundsOverflow || settings.ElementBoundsOverflow {
+		failures = append(failures, "desktop component bounds overflow detected: "+firstNonEmpty(overview.ElementBoundsOffender, server.ElementBoundsOffender, router.ElementBoundsOffender, apps.ElementBoundsOffender, activity.ElementBoundsOffender, diagnostics.ElementBoundsOffender, queue.ElementBoundsOffender, advanced.ElementBoundsOffender, settings.ElementBoundsOffender))
 	}
 	if settings.SettingsControlCount < 12 {
 		failures = append(failures, "structured settings controls did not render")
 	}
-	if settings.SettingsMenuButtonCount < 7 {
+	if settings.SettingsMenuButtonCount < 8 {
 		failures = append(failures, "settings submenu did not render")
+	}
+	if !settings.SettingsSearchNarrowed || !mobileSettings.SettingsSearchNarrowed {
+		failures = append(failures, "settings search did not narrow the section list")
+	}
+	if !settings.SettingsSearchRestored || !mobileSettings.SettingsSearchRestored {
+		failures = append(failures, "settings search did not restore the section list when cleared")
 	}
 	if settings.VisibleSettingsSections != 1 {
 		failures = append(failures, "settings should show exactly one active submenu")
@@ -987,7 +1013,7 @@ func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, q
 	if !desktopUserPromptAction.UserPromptTryAgainVisible || !desktopUserPromptAction.UserPromptInlineSuccess {
 		failures = append(failures, "compact chat direct app action did not show persistent try-again success state")
 	}
-	if mobileSettings.SettingsMenuButtonCount < 6 || mobileSettings.VisibleSettingsSections != 1 {
+	if mobileSettings.SettingsMenuButtonCount < 7 || mobileSettings.VisibleSettingsSections != 1 {
 		failures = append(failures, "mobile settings submenu did not render correctly")
 	}
 	if mobileSettings.AgentRepairToggleCount == 0 {
@@ -996,11 +1022,11 @@ func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, q
 	if !mobileSettings.AgentReadinessLimitVisible {
 		failures = append(failures, "mobile agent readiness cooldown/rate limit text did not render")
 	}
-	if mobileOverview.UserMenuToggleVisible || mobileQueue.UserMenuToggleVisible || mobileAdmin.UserMenuToggleVisible || mobileSettings.UserMenuToggleVisible {
+	if mobileOverview.UserMenuToggleVisible || mobileQueue.UserMenuToggleVisible || mobileAdvanced.UserMenuToggleVisible || mobileSettings.UserMenuToggleVisible {
 		failures = append(failures, "compact user menu was visible on admin mobile screens")
 	}
 	if mobileSettings.BodyHorizontalOverflow || mobileSettings.ButtonTextOverflow {
-		failures = append(failures, "mobile settings layout overflow detected")
+		failures = append(failures, "mobile settings layout overflow detected: "+firstNonEmpty(mobileSettings.ButtonTextOverflowOffender, "body scroll width"))
 	}
 	if customization.NormalRemoveButtonCount != 0 {
 		failures = append(failures, "overview remove controls were visible outside rearrange mode")
@@ -1035,8 +1061,8 @@ func assertVisualFlags(overview, server, router, apps, incidents, diagnostics, q
 	if mobileOverview.ButtonTextOverflow || mobileRouter.ButtonTextOverflow {
 		failures = append(failures, "mobile button text overflow detected")
 	}
-	if mobileOverview.ElementBoundsOverflow || mobileRouter.ElementBoundsOverflow || mobileApps.ElementBoundsOverflow || mobileIncidents.ElementBoundsOverflow || mobileDiagnostics.ElementBoundsOverflow || mobileQueue.ElementBoundsOverflow || mobileAdmin.ElementBoundsOverflow || mobileSettings.ElementBoundsOverflow {
-		failures = append(failures, "mobile component bounds overflow detected: "+firstNonEmpty(mobileOverview.ElementBoundsOffender, mobileRouter.ElementBoundsOffender, mobileApps.ElementBoundsOffender, mobileIncidents.ElementBoundsOffender, mobileDiagnostics.ElementBoundsOffender, mobileQueue.ElementBoundsOffender, mobileAdmin.ElementBoundsOffender, mobileSettings.ElementBoundsOffender))
+	if mobileOverview.ElementBoundsOverflow || mobileRouter.ElementBoundsOverflow || mobileApps.ElementBoundsOverflow || mobileActivity.ElementBoundsOverflow || mobileDiagnostics.ElementBoundsOverflow || mobileQueue.ElementBoundsOverflow || mobileAdvanced.ElementBoundsOverflow || mobileSettings.ElementBoundsOverflow {
+		failures = append(failures, "mobile component bounds overflow detected: "+firstNonEmpty(mobileOverview.ElementBoundsOffender, mobileRouter.ElementBoundsOffender, mobileApps.ElementBoundsOffender, mobileActivity.ElementBoundsOffender, mobileDiagnostics.ElementBoundsOffender, mobileQueue.ElementBoundsOffender, mobileAdvanced.ElementBoundsOffender, mobileSettings.ElementBoundsOffender))
 	}
 	if !mobileOverview.ViewportFitCover || !mobileUserHome.ViewportFitCover {
 		failures = append(failures, "mobile viewport-fit=cover metadata missing")
@@ -1367,6 +1393,7 @@ const loginExpression = `(async () => {
     assistantOverlapCount: assistantControlOverlapCount(),
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow,
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
     elementBoundsOverflow: componentBoundsOverflow(),
     elementBoundsOffender: componentBoundsOffender()
   };
@@ -1394,6 +1421,7 @@ const overviewExpression = `(async () => {
     overviewRearrangeReady,
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow,
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
     ...mobileAudit
   };
 })()`
@@ -1412,6 +1440,7 @@ const serverExpression = `(async () => {
     detailSectionCount: document.querySelectorAll('#server-detail-grid .detail-section').length,
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow,
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
     elementBoundsOverflow: componentBoundsOverflow(),
     elementBoundsOffender: componentBoundsOffender()
   };
@@ -1432,6 +1461,7 @@ const routerExpression = `(async () => {
     detailSectionCount: document.querySelectorAll('#router-detail-grid .detail-section').length,
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow,
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
     ...mobileAudit
   };
 })()`
@@ -1452,23 +1482,55 @@ const appsExpression = `(async () => {
     detailSectionCount: document.querySelectorAll('.detail-section').length,
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow,
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
     ...mobileAudit
   };
 })()`
 
-const incidentsExpression = `(async () => {
-  document.querySelector('[data-tab="incidents"]')?.click();
+// Activity replaced the separate Incidents and Admin destinations: incidents,
+// repair decisions and audit entries are one typed stream, so the checks that
+// used to live on two pages are asserted here.
+const activityExpression = `(async () => {
+  document.querySelector('[data-tab="activity"]')?.click();
   const started = Date.now();
-  while (document.querySelectorAll('#incident-list .incident-card').length < 1 && Date.now() - started < 5000) {
+  while (document.querySelectorAll('#activity-stream .activity-row').length < 2 && Date.now() - started < 5000) {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
+  const rowCount = () => document.querySelectorAll('#activity-stream .activity-row').length;
+  const allCount = rowCount();
+  const incidentEntry = [...document.querySelectorAll('#activity-stream .activity-entry.kind-problem')][0];
+  incidentEntry?.setAttribute('open', '');
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  const incidentCardCount = document.querySelectorAll('#activity-stream .incident-card').length;
+  incidentEntry?.removeAttribute('open');
+  document.querySelector('#activity-filters [data-activity-filter="change"]')?.click();
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  const changeCount = rowCount();
+  document.querySelector('#activity-filters [data-activity-filter="all"]')?.click();
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  const search = document.querySelector('#activity-search');
+  if (search) {
+    search.value = 'zzzzznomatch';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  const searchFiltered = rowCount() === 0;
+  if (search) {
+    search.value = '';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  await new Promise((resolve) => setTimeout(resolve, 60));
   const mobileAudit = await auditMobileShell();
   return {
     pageTitle: document.querySelector('#page-title')?.textContent || '',
     pageSubtitle: document.querySelector('#summary')?.textContent || '',
-    incidentCardCount: document.querySelectorAll('#incident-list .incident-card').length,
+    activityRowCount: allCount,
+    activityFilterNarrowed: changeCount > 0 && changeCount < allCount,
+    activitySearchNarrowed: searchFiltered && rowCount() === allCount,
+    incidentCardCount,
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow: hasButtonTextOverflow(),
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
     ...mobileAudit
   };
 })()`
@@ -1486,6 +1548,7 @@ const diagnosticsExpression = `(async () => {
     diagnosticPanelCount: document.querySelectorAll('#tab-diagnostics .panel').length,
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow: hasButtonTextOverflow(),
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
     ...mobileAudit
   };
 })()`
@@ -1505,29 +1568,33 @@ const queueExpression = `(async () => {
     pageSubtitle: document.querySelector('#summary')?.textContent || '',
     reviewQueueVisible: !!panel && visibleElement(panel),
     reviewQueueOutputVisible: !!output && visibleElement(output),
-    reviewQueueCopyAuditOnly: copy.includes('Direct admin or LLM app actions') && copy.includes('audit log'),
+    reviewQueueCopyAuditOnly: copy.includes('Direct admin or LLM app actions') && copy.includes('Activity'),
     activeTabCount: document.querySelectorAll('.tabs button.active').length,
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow: hasButtonTextOverflow(),
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
     ...mobileAudit
   };
 })()`
 
-const adminExpression = `(async () => {
-  document.querySelector('[data-tab="admin"]')?.click();
+// The debug snapshot moved from its own Admin page into Settings > Advanced.
+const advancedExpression = `(async () => {
+  document.querySelector('[data-tab="settings"]')?.click();
   const started = Date.now();
-  while (document.querySelectorAll('#audit-output table tbody tr').length < 1 && Date.now() - started < 5000) {
+  while (document.querySelectorAll('#settings-menu [data-settings-section]').length < 8 && Date.now() - started < 5000) {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  const debug = document.querySelector('.debug-disclosure');
+  document.querySelector('#settings-menu [data-settings-section="advanced"]')?.click();
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  const debug = document.querySelector('.settings-advanced .debug-disclosure');
   const mobileAudit = await auditMobileShell();
   return {
     pageTitle: document.querySelector('#page-title')?.textContent || '',
     pageSubtitle: document.querySelector('#summary')?.textContent || '',
-    auditTableRowCount: document.querySelectorAll('#audit-output table tbody tr').length,
-    rawSnapshotCollapsed: !!debug && !debug.open,
+    rawSnapshotCollapsed: !!debug && !debug.open && visibleElement(debug),
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow: hasButtonTextOverflow(),
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
     ...mobileAudit
   };
 })()`
@@ -1570,6 +1637,7 @@ const monitorCustomizationExpression = `(async () => {
     monitorHideRestored: document.querySelectorAll('#overview-cards .overview-card').length === initialCount,
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow: hasButtonTextOverflow(),
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
     elementBoundsOverflow: componentBoundsOverflow(),
     elementBoundsOffender: componentBoundsOffender()
   };
@@ -1625,6 +1693,7 @@ const generalUserExpression = `(async () => {
     sourcePillText: document.querySelector('#source-pill')?.textContent || '',
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow,
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
     ...mobileAudit
   };
 })()`
@@ -1699,6 +1768,7 @@ const userChatKeyboardExpression = `(async () => {
     userChatChromeCollapsed: topbarCollapsed && tabsCollapsed && panelRect.bottom <= visibleBottom + 1,
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow: hasButtonTextOverflow(),
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
     ...mobileAudit
   };
 })()`
@@ -1781,6 +1851,7 @@ const userPromptActionExpression = `(async () => {
     userPromptInlineSuccess: resultVisible && message.includes('Emby started successfully.') && message.includes('Send another message or try again'),
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow: hasButtonTextOverflow(),
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
     ...mobileAudit
   };
 })()`
@@ -1838,6 +1909,7 @@ const userAppDetailExpression = `(async () => {
     rawTransportErrorVisible: rawTransportErrorVisible(),
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow: hasButtonTextOverflow(),
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
     ...mobileAudit
   };
 })()`
@@ -1877,6 +1949,7 @@ const userInfraDetailExpression = `(async () => {
     bannedTermCount: bannedMatches.length,
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow: hasButtonTextOverflow(),
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
     ...mobileAudit
   };
 })()`
@@ -1898,6 +1971,7 @@ const userDetailBackExpression = `(async () => {
     userDetailFocusReturned: !!trigger && document.activeElement === trigger,
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow: hasButtonTextOverflow(),
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
     ...mobileAudit
   };
 })()`
@@ -1910,6 +1984,7 @@ const userDrawerOpenExpression = `(async () => {
       userDrawerOpen: false,
       bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
       buttonTextOverflow: hasButtonTextOverflow(),
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
       elementBoundsOverflow: componentBoundsOverflow(),
       elementBoundsOffender: componentBoundsOffender()
     };
@@ -1930,6 +2005,7 @@ const userDrawerOpenExpression = `(async () => {
       userDrawerOpen: false,
       bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
       buttonTextOverflow: hasButtonTextOverflow(),
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
       elementBoundsOverflow: componentBoundsOverflow(),
       elementBoundsOffender: componentBoundsOffender()
     };
@@ -1977,6 +2053,7 @@ const userDrawerOpenExpression = `(async () => {
     notificationSignupPrimary,
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow: hasButtonTextOverflow(),
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
     elementBoundsOverflow: componentBoundsOverflow(),
     elementBoundsOffender: componentBoundsOffender()
   };
@@ -2001,6 +2078,7 @@ const userDrawerCloseExpression = `(async () => {
     userDrawerBodyUnlocked: !document.body.classList.contains('user-menu-open') && !(shell && shell.inert) && (!shell || shell.getAttribute('aria-hidden') !== 'true'),
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow: hasButtonTextOverflow(),
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
     elementBoundsOverflow: componentBoundsOverflow(),
     elementBoundsOffender: componentBoundsOffender()
   };
@@ -2030,6 +2108,8 @@ const auditMobileShellExpression = `async function auditMobileShell() {
     smallTouchTargetCount: smallTouchTargets.length,
     smallTouchTargets,
     userMenuToggleVisible: !!document.querySelector('#user-menu-toggle') && visibleElement(document.querySelector('#user-menu-toggle')),
+    adminPageTitleVisible: document.body.classList.contains('admin-view') &&
+      !!document.querySelector('.title-block') && visibleElement(document.querySelector('.title-block')),
     sourcePillText: document.querySelector('#source-pill')?.textContent || '',
     detailSectionCount: document.querySelectorAll('.detail-section').length,
     assistantDockVisible: !!document.querySelector('#assistant-dock') && visibleElement(document.querySelector('#assistant-dock')),
@@ -2066,8 +2146,8 @@ function visibleCompactText(root) {
   return parts.join(' ');
 }
 
-function hasButtonTextOverflow() {
-  return [...document.querySelectorAll('button')].some((element) => {
+function overflowingButton() {
+  return [...document.querySelectorAll('button')].find((element) => {
     if (!visibleElement(element)) return false;
     const style = getComputedStyle(element);
     const iconOnly = style.fontSize === '0px' ||
@@ -2075,7 +2155,24 @@ function hasButtonTextOverflow() {
       element.classList.contains('app-control');
     if (iconOnly) return false;
     return element.scrollWidth > element.clientWidth + 1;
-  });
+  }) || null;
+}
+
+function hasButtonTextOverflow() {
+  return !!overflowingButton();
+}
+
+// Naming the offender turns "something clips" into an address. Reported
+// alongside the boolean so a failure is actionable without a repro run.
+function buttonTextOverflowOffender() {
+  const element = overflowingButton();
+  if (!element) return '';
+  return [
+    element.id ? '#' + element.id : '',
+    element.className ? '.' + String(element.className).trim().replace(/\s+/g, '.') : '',
+    (element.getAttribute('aria-label') || element.textContent || '').trim().slice(0, 40),
+    element.scrollWidth + '>' + element.clientWidth
+  ].filter(Boolean).join(' ');
 }
 
 function elementTextWraps(element) {
@@ -2159,6 +2256,24 @@ const settingsExpression = `(async () => {
   while (!document.querySelector('.agent-readiness') && Date.now() - llmStarted < 5000) {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
+  const visibleMenuButtons = () => [...document.querySelectorAll('#settings-menu [data-settings-section]')]
+    .filter((element) => visibleElement(element)).length;
+  const search = document.querySelector('#settings-search');
+  const menuBeforeSearch = visibleMenuButtons();
+  let settingsSearchNarrowed = false;
+  let settingsSearchRestored = false;
+  if (search) {
+    search.value = 'notification';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    settingsSearchNarrowed = visibleMenuButtons() > 0 && visibleMenuButtons() < menuBeforeSearch;
+    search.value = '';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    settingsSearchRestored = visibleMenuButtons() === menuBeforeSearch;
+  }
+  document.querySelector('#settings-menu [data-settings-section="llm"]')?.click();
+  await new Promise((resolve) => setTimeout(resolve, 80));
   const visibleSettingsSections = [...document.querySelectorAll('#tab-settings .settings-section')]
     .filter((element) => !element.hidden && getComputedStyle(element).display !== 'none').length;
   const settingsControlCount = document.querySelectorAll('.settings-card input,.settings-card select,.settings-card button').length;
@@ -2196,6 +2311,8 @@ const settingsExpression = `(async () => {
     settingsEditorCount: document.querySelectorAll('.settings-editor').length,
     settingsControlCount,
     settingsMenuButtonCount: document.querySelectorAll('#settings-menu [data-settings-section]').length,
+    settingsSearchNarrowed,
+    settingsSearchRestored,
     visibleSettingsSections,
     settingsDirtyPromptBlocked,
     settingsDirtyCleared,
@@ -2203,6 +2320,7 @@ const settingsExpression = `(async () => {
     agentReadinessLimitVisible: readinessText.includes('1 per app') && readinessText.includes('5 total'),
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow,
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
     ...mobileAudit
   };
 })()`
@@ -2303,6 +2421,7 @@ const agentRepairExpression = `(async () => {
     noticeTitleOverlap: noticeOverlapsTitle(),
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow: hasButtonTextOverflow(),
+    buttonTextOverflowOffender: buttonTextOverflowOffender(),
     ...mobileAudit
   };
 })()`
