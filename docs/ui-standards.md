@@ -182,11 +182,19 @@ Six steps. Each has one job. Do not add a seventh, and **do not set a
 The old scale had one 2.55rem `h1` and clustered everything else between
 0.78–0.9rem, which is why the containers were carrying all the hierarchy.
 
+**The scale needs a base.** `body` sets `font-size: var(--text-body)`. Without
+it, any element whose own rule did not set a size falls through to the browser
+default of 16px — which is off the scale entirely, and is how a detail-row value
+ended up rendering at 16px beside a 12px label. Setting it on `body` is also
+what makes the density block below reach everything that has not opted out.
+
 ### Weight
 
 Three: `--weight-normal` 400, `--weight-medium` 500, `--weight-strong` 600. The
 old sheet ran to 620–900 on ordinary labels and values, which is why everything
-read as emphasised and nothing read as important.
+read as emphasised and nothing read as important. `<strong>` inside a data row
+is structural (it pairs with a label), so it takes the medium weight rather than
+the browser's 700.
 
 ### Density
 
@@ -203,7 +211,8 @@ component that needs a density exception is a component that is wrong.
 | `--nav-width` | 220px | 184px |
 | Settings form row | label above control | label left in a `--label-col` column, control right |
 | Settings form width | full width | rows capped at `--form-max` |
-| Monitor row | name over summary | name and summary on one baseline |
+| Monitor / status row | name over summary | name and summary on one baseline |
+| Diagnostics | ask above answer | ask and answer side by side |
 | App row | stacked card | one table row: identity · state · metadata · actions |
 
 The 44px floor is a **touch** requirement (Apple HIG; WCAG 2.5.5) and the visual
@@ -356,7 +365,27 @@ shares. Group headings below it take the uppercase micro-label (§4), which is
 what makes the two levels legible as levels.
 
 **Empty states.** If a panel has nothing to say, hide the panel. Do not render
-"No X" styled exactly like a value.
+"No X" styled exactly like a value — and do not put it in a box. A dashed border
+with a fill around one sentence is a container pretending there is something in
+it; the sentence alone says the same thing in a third of the room. The same
+applies to output wells: a chat or diagnosis panel reserves its height once
+there is something to show, not before.
+
+**One toolbar row per page.** Search, filters and the page's reload live on a
+single line above the content they act on; the count lives in the panel's own
+head beside its title. Activity had a title block, a toolbar and a count row —
+three bands of chrome, ~100px, before the first event.
+
+**Actions do not shrink.** In a flex header or toolbar the copy takes
+`flex: 1 1 auto; min-width: 0` and the action takes `flex: 0 0 auto`. Left to
+the default the button shrinks instead and wraps its own label mid-word
+("Reloa / d"), because `button.command` wraps by design for narrow phones.
+
+**A scanning column is fixed-width.** Sized to its content, the Activity
+timestamp column was 34px on a row from today and 76px on an older one, which
+shifted every indicator and title by a different amount and destroyed the
+column the stream exists to be read down. If the eye is meant to run down it,
+give it a width.
 
 ---
 
@@ -405,13 +434,15 @@ working around a failure.
    metrics in `::before`/`::after` are the only exception.)
 4. Is any state encoded more than once in the same row?
 5. Panel inside a panel?
-6. Does the empty case hide, or does it render "No X" as data?
-7. Sentence case? Plain English if it can reach the compact surface?
-8. ≥44px for anything touchable; visible focus ring; not colour-only.
-9. Does it survive 390×844 and 1440×900 with no horizontal scroll?
-10. At 1440×900, is the answer to "what is going on" above the fold without
+6. Does the empty case hide, or does it render "No X" as data — or worse, as a
+   box?
+7. Does anything inherit 16px because its rule set no size?
+8. Sentence case? Plain English if it can reach the compact surface?
+9. ≥44px for anything touchable; visible focus ring; not colour-only.
+10. Does it survive 390×844 and 1440×900 with no horizontal scroll?
+11. At 1440×900, is the answer to "what is going on" above the fold without
     scrolling?
-11. `go test ./...`, `go build`, **and** `scripts/visual-check.ps1`.
+12. `go test ./...`, `go build`, **and** `scripts/visual-check.ps1`.
 
 ---
 

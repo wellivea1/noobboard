@@ -245,6 +245,11 @@ html {
   border: 0 !important;
 }
 
+/* The scale needs a base. Without a font-size here, anything whose own rule did
+   not set one fell through to the browser default of 16px — which is off the
+   scale entirely and is why a detail-row value rendered at 16px next to a 12px
+   label. Setting it on body means the density override in the block above
+   reaches every element that has not opted out. */
 body {
   margin: 0;
   min-width: 320px;
@@ -252,6 +257,8 @@ body {
   overflow-x: hidden;
   background: var(--page);
   color: var(--text);
+  font-size: var(--text-body);
+  line-height: var(--leading-normal);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -1078,10 +1085,10 @@ body.admin-view #summary {
   grid-template-columns: minmax(0, 1fr);
   gap: 0;
   overflow: hidden;
-  border: 1px solid var(--border-soft);
+  border: 1px solid var(--line);
   border-radius: var(--radius-md);
-  padding-inline: 16px;
-  background: var(--surface);
+  padding-inline: var(--pad-panel);
+  background: var(--surface-raised);
 }
 
 .status-grid:empty {
@@ -1435,11 +1442,21 @@ body.admin-view #summary {
 
 .chat-output {
   min-height: 112px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--line);
   border-radius: var(--radius-md);
-  padding: var(--space-4);
-  background: var(--surface-alt);
-  line-height: 1.45;
+  padding: var(--pad-panel);
+  background: var(--surface-sunken);
+  line-height: var(--leading-normal);
+}
+
+/* Before anything has been asked there is nothing to frame, so the placeholder
+   is a line of text rather than a 180px well. */
+.chat-output.chat-empty {
+  min-height: 0;
+  border-color: transparent;
+  padding: 0;
+  background: transparent;
+  color: var(--ink-3);
 }
 
 .chat-output strong {
@@ -1930,6 +1947,49 @@ body.admin-view #summary {
     flex: 1 1 0;
     min-width: 0;
   }
+
+  /* Server and Router rows are the same object as an Overview monitor row and
+     were the only list still stacking a name over its note, which made those
+     two pages twice as tall as the page that shows the same information. */
+  body.admin-view .status-copy {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+    min-width: 0;
+  }
+
+  body.admin-view .status-row-label {
+    flex: 0 0 auto;
+    min-width: 104px;
+    color: var(--ink-1);
+    font-size: var(--text-body);
+    font-weight: var(--weight-strong);
+  }
+
+  body.admin-view .status-list-row .status-note {
+    flex: 1 1 0;
+    margin-top: 0;
+    min-width: 0;
+    font-size: var(--text-meta);
+  }
+
+  /* Detail rows are a two-column reading of one fact; they do not need a row's
+     worth of padding above and below each one. */
+  body.admin-view .detail-row {
+    min-height: var(--control-height);
+    padding-block: 0;
+  }
+
+  /* Ask and answer side by side: on a 1,440px console, stacking them puts the
+     answer below the fold and leaves the width unused. */
+  body.admin-view .diagnostics-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    align-items: start;
+  }
+
+  body.admin-view #diagnostic-question {
+    max-width: none;
+  }
 }
 
 .overview-card > .overview-summary {
@@ -2058,20 +2118,24 @@ body.admin-view #summary {
 .detail-row {
   display: grid;
   grid-template-columns: minmax(96px, 0.28fr) minmax(0, 1fr);
-  gap: 12px;
-  align-items: start;
+  gap: var(--space-3);
+  align-items: baseline;
   min-width: 0;
-  padding: 7px 0;
-  border-bottom: 1px solid var(--border-soft);
+  padding: var(--pad-row) 0;
+  border-bottom: 1px solid var(--line-soft);
 }
 
 .detail-row:last-child {
   border-bottom: 0;
 }
 
+/* A reading is content, not emphasis. <strong> here is structural (it pairs
+   with the label), so it takes the medium weight rather than shouting over the
+   row it belongs to. */
 .detail-row strong {
-  line-height: 1.35;
+  line-height: var(--leading-snug);
   overflow-wrap: anywhere;
+  font-weight: var(--weight-medium);
 }
 
 .status-row-main {
@@ -2364,19 +2428,17 @@ button.command.monitor-hide {
 /* ---------------------------------------------------------------------------
    Activity stream — aligned columns, one row per event.
    --------------------------------------------------------------------------- */
-.activity-meta {
-  display: flex;
-  justify-content: flex-end;
-  min-height: 18px;
-}
-
 .activity-stream {
   display: grid;
 }
 
+/* The time column is fixed, not max-content: sized to its content it is 34px
+   wide on a row from today and 76px on an older one, which shifts every
+   indicator and title right by a different amount and destroys the column the
+   stream exists to be read down. */
 .activity-row {
   display: grid;
-  grid-template-columns: max-content auto minmax(0, 1fr) auto auto;
+  grid-template-columns: 80px auto minmax(0, 1fr) auto auto;
   align-items: baseline;
   gap: var(--space-3) var(--space-4);
   min-height: var(--control-height);
@@ -2483,10 +2545,21 @@ button.command.monitor-hide {
   justify-content: space-between;
 }
 
+/* The copy is the part that gives way. Left to the flex default the action
+   shrank instead and wrapped its own label down the middle of a word
+   ("Reloa / d"), because button.command wraps by design for narrow phones. */
 .section-head-copy {
   display: grid;
-  gap: 4px;
+  gap: var(--space-1);
+  flex: 1 1 auto;
   min-width: 0;
+}
+
+.section-head > button,
+.section-head > .command,
+.toolbar > button,
+.toolbar-end > button {
+  flex: 0 0 auto;
 }
 
 .section-head-copy h2,
@@ -4540,7 +4613,11 @@ body.compact-view .user-technical-details[open] summary::after {
 
 .diagnostic-output {
   min-height: 180px;
-  line-height: 1.45;
+  line-height: var(--leading-normal);
+}
+
+.diagnostic-output.chat-empty {
+  min-height: 0;
 }
 
 .diagnostic-output strong {
@@ -4668,12 +4745,13 @@ body.compact-view .user-technical-details[open] summary::after {
   cursor: not-allowed;
 }
 
+/* An absence is not an object. A dashed box with a fill around one sentence is
+   a container pretending there is something in it; the sentence alone says the
+   same thing and takes a third of the room. */
 .empty {
-  border: 1px dashed var(--border);
-  border-radius: var(--radius-md);
-  padding: var(--space-4);
-  color: var(--muted);
-  background: var(--surface-alt);
+  padding: var(--pad-row) 0;
+  color: var(--ink-3);
+  font-size: var(--text-meta);
 }
 
 .assistant-dock {

@@ -171,27 +171,24 @@
       </section>
 
       <section id="tab-activity" class="tab-panel" hidden data-admin-detail>
-        <div class="section-head">
-          <div class="section-head-copy">
-            <h2>Activity</h2>
-            <p>Incidents, repair decisions, and configuration changes in one stream.</p>
-          </div>
-          <button id="activity-refresh" type="button" class="command" data-glyph="&#8635;">Reload</button>
-        </div>
         <div class="toolbar">
           <label class="search-label search-inline">
             <span>Search activity</span>
             <input id="activity-search" placeholder="Filter by app, actor, or text">
           </label>
-          <div id="activity-filters" class="segmented" aria-label="Activity filter">
-            <button type="button" data-activity-filter="all" class="active">All</button>
-            <button type="button" data-activity-filter="problem">Problems</button>
-            <button type="button" data-activity-filter="repair">Repairs</button>
-            <button type="button" data-activity-filter="change">Changes</button>
+          <div class="toolbar-end">
+            <div id="activity-filters" class="segmented" aria-label="Activity filter">
+              <button type="button" data-activity-filter="all" class="active">All</button>
+              <button type="button" data-activity-filter="problem">Problems</button>
+              <button type="button" data-activity-filter="repair">Repairs</button>
+              <button type="button" data-activity-filter="change">Changes</button>
+            </div>
+            <button id="activity-refresh" type="button" class="command" data-glyph="&#8635;" aria-label="Reload activity" title="Reload activity"></button>
           </div>
         </div>
         <section class="panel">
-          <div class="activity-meta">
+          <div class="section-head">
+            <h2>Activity</h2>
             <span id="activity-count" class="muted">0 events</span>
           </div>
           <div id="activity-stream" class="activity-stream"></div>
