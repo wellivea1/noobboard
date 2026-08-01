@@ -24,37 +24,35 @@ const (
 	OpenAIChatGPTClientID       = "app_EMoamEEZ73f0CkXaXp7hrann"
 	OpenAIChatGPTIssuer         = "https://auth.openai.com"
 	OpenAIChatGPTCodexEndpoint  = "https://chatgpt.com/backend-api/codex/responses"
-	DefaultChatGPTCodexModel    = "gpt-5.5"
+	DefaultChatGPTCodexModel    = "gpt-5.6-terra"
 	ChatGPTCodexReasoningHigh   = "high"
 	defaultChatGPTAccessSeconds = 3600
 )
 
+// Models the Codex endpoint accepts for a ChatGPT account. Kept in step with
+// the picker in web/public/app.js; a value outside this set falls back rather
+// than failing the request, because the account tier — not the config — decides
+// what is actually available.
 var chatGPTCodexAllowedModels = map[string]bool{
-	"gpt-5.5":      true,
-	"gpt-5.5-pro":  true,
-	"gpt-5.4":      true,
-	"gpt-5.4-pro":  true,
-	"gpt-5.4-mini": true,
-	"gpt-5.4-nano": true,
-	"gpt-5.2":      true,
-	"gpt-5.2-pro":  true,
-	"gpt-5.1":      true,
-	"gpt-5":        true,
-	"gpt-5-mini":   true,
-	"gpt-5-nano":   true,
-	"gpt-4.1":      true,
-	"gpt-4.1-mini": true,
-	"gpt-4o-mini":  true,
+	"gpt-5.6-terra": true,
+	"gpt-5.6-sol":   true,
+	"gpt-5.6-luna":  true,
+	"gpt-5.5":       true,
+	"gpt-5.5-pro":   true,
+	"gpt-5.4":       true,
+	"gpt-5.4-mini":  true,
 }
 
+// Ordered best-effort chain: current generation first, then the previous
+// generations OpenAI still serves. Entries whose snapshots are scheduled for
+// shutdown (gpt-5, gpt-5-mini, gpt-5-nano, o3, o3-pro) are deliberately absent
+// — falling back onto a model that is about to 404 only moves the failure.
 var chatGPTCodexModelFallbacks = []string{
+	"gpt-5.6-terra",
+	"gpt-5.6-sol",
+	"gpt-5.6-luna",
 	"gpt-5.5",
 	"gpt-5.4",
-	"gpt-5.2",
-	"gpt-5.1",
-	"gpt-5",
-	"gpt-4.1",
-	"gpt-4o-mini",
 }
 
 type ChatGPTTokenResponse struct {

@@ -63,33 +63,32 @@ const SETTINGS_ENDPOINTS = [
   { title: "Integrations", section: "integrations", path: "/api/admin/settings/integrations" },
   { title: "Notifications", section: "notifications", path: "/api/admin/settings/notifications" },
 ];
+/* Model pickers.
+   Checked against the providers' own catalogues on 2026-08-01:
+   developers.openai.com/api/docs/models + /deprecations, and the Anthropic
+   models overview. Two rules for this list:
+     1. Never carry a retired ID — it 404s, and the admin has no way to know
+        the model is gone rather than the key being wrong.
+     2. Keep it short. This is an operator picking a model for one structured
+        JSON call, not a catalogue. Superseded generations stay only while the
+        provider still serves them, so a saved value keeps working. */
 const OPENAI_MODEL_OPTIONS = [
-  { value: "gpt-5.5", label: "GPT-5.5 (recommended)" },
+  { value: "gpt-5.6-terra", label: "GPT-5.6 Terra (recommended)" },
+  { value: "gpt-5.6-sol", label: "GPT-5.6 Sol" },
+  { value: "gpt-5.6-luna", label: "GPT-5.6 Luna" },
+  { value: "gpt-5.5", label: "GPT-5.5" },
   { value: "gpt-5.5-pro", label: "GPT-5.5 pro" },
   { value: "gpt-5.4", label: "GPT-5.4" },
-  { value: "gpt-5.4-pro", label: "GPT-5.4 pro" },
   { value: "gpt-5.4-mini", label: "GPT-5.4 mini" },
-  { value: "gpt-5.4-nano", label: "GPT-5.4 nano" },
-  { value: "gpt-5.2", label: "GPT-5.2" },
-  { value: "gpt-5.2-pro", label: "GPT-5.2 pro" },
-  { value: "gpt-5.1", label: "GPT-5.1" },
-  { value: "gpt-5", label: "GPT-5" },
-  { value: "gpt-5-mini", label: "GPT-5 mini" },
-  { value: "gpt-5-nano", label: "GPT-5 nano" },
-  { value: "gpt-4.1", label: "GPT-4.1" },
-  { value: "gpt-4.1-mini", label: "GPT-4.1 mini" },
-  { value: "gpt-4o-mini", label: "GPT-4o mini" },
-  { value: "o3-pro", label: "o3-pro" },
-  { value: "o3", label: "o3" },
 ];
 const CHATGPT_MODEL_OPTIONS = OPENAI_MODEL_OPTIONS.filter((option) => option.value.startsWith("gpt-"));
 const ANTHROPIC_MODEL_OPTIONS = [
+  { value: "claude-opus-5", label: "Claude Opus 5 (recommended)" },
+  { value: "claude-sonnet-5", label: "Claude Sonnet 5" },
+  { value: "claude-opus-4-8", label: "Claude Opus 4.8" },
+  { value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
+  { value: "claude-haiku-4-5", label: "Claude Haiku 4.5" },
   { value: "claude-sonnet-4-5", label: "Claude Sonnet 4.5" },
-  { value: "claude-opus-4-1-20250805", label: "Claude Opus 4.1" },
-  { value: "claude-opus-4-20250514", label: "Claude Opus 4" },
-  { value: "claude-sonnet-4-20250514", label: "Claude Sonnet 4" },
-  { value: "claude-3-7-sonnet-20250219", label: "Claude Sonnet 3.7" },
-  { value: "claude-3-5-haiku-20241022", label: "Claude Haiku 3.5" },
 ];
 const compactDrawerSections = [
   { id: "settings", label: "Settings", glyph: "\u2699", render: renderCompactSettings },
@@ -4985,9 +4984,9 @@ function renderLLMSettings(item, data) {
     settingChoice(authMethodName, "chatgpt_headless", "ChatGPT Pro/Plus (code)", "Shows a login code for another browser or device.", selectedAuthMethod === "chatgpt_headless", node("div", { class: "settings-choice-action" }, headlessConnect)),
     settingChoice(authMethodName, "api_key", "API key", "Uses a saved OpenAI API key.", selectedAuthMethod === "api_key"),
   ];
-  const openAIModel = settingSelectField("OpenAI API model", knownModelValue(OPENAI_MODEL_OPTIONS, settings.openai_model, "gpt-5.5"), OPENAI_MODEL_OPTIONS);
-  const chatGPTModel = settingSelectField("ChatGPT account model", knownModelValue(CHATGPT_MODEL_OPTIONS, settings.openai_model, "gpt-5.5"), CHATGPT_MODEL_OPTIONS);
-  const anthropicModel = settingSelectField("Anthropic model", knownModelValue(ANTHROPIC_MODEL_OPTIONS, settings.anthropic_model, "claude-sonnet-4-5"), ANTHROPIC_MODEL_OPTIONS);
+  const openAIModel = settingSelectField("OpenAI API model", knownModelValue(OPENAI_MODEL_OPTIONS, settings.openai_model, "gpt-5.6-terra"), OPENAI_MODEL_OPTIONS);
+  const chatGPTModel = settingSelectField("ChatGPT account model", knownModelValue(CHATGPT_MODEL_OPTIONS, settings.openai_model, "gpt-5.6-terra"), CHATGPT_MODEL_OPTIONS);
+  const anthropicModel = settingSelectField("Anthropic model", knownModelValue(ANTHROPIC_MODEL_OPTIONS, settings.anthropic_model, "claude-opus-5"), ANTHROPIC_MODEL_OPTIONS);
   const timeout = durationSecondsField("Timeout", settings.timeout || 45000000000);
   const agentControlEnabled = settingToggle("Allow admin-approved app fixes", !!settings.agent_control_enabled);
   const actionAutoReviewEnabled = settingToggle("Require reviewer before fixes", !!settings.action_auto_review_enabled);
@@ -5115,9 +5114,9 @@ function renderLLMSettings(item, data) {
 }
 
 function actionReviewModelOptions(settings) {
-  const openAIModel = knownModelValue(OPENAI_MODEL_OPTIONS, settings.openai_model, "gpt-5.5");
-  const chatGPTModel = knownModelValue(CHATGPT_MODEL_OPTIONS, settings.openai_model, "gpt-5.5");
-  const anthropicModel = knownModelValue(ANTHROPIC_MODEL_OPTIONS, settings.anthropic_model, "claude-sonnet-4-5");
+  const openAIModel = knownModelValue(OPENAI_MODEL_OPTIONS, settings.openai_model, "gpt-5.6-terra");
+  const chatGPTModel = knownModelValue(CHATGPT_MODEL_OPTIONS, settings.openai_model, "gpt-5.6-terra");
+  const anthropicModel = knownModelValue(ANTHROPIC_MODEL_OPTIONS, settings.anthropic_model, "claude-opus-5");
   const options = [
     { value: "same", label: "Same as diagnosis" },
     { value: `openai/${openAIModel}`, label: `OpenAI: ${openAIModel}` },

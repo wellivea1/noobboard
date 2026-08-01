@@ -2,7 +2,33 @@
 
 Checked against current OpenCode docs on 2026-06-01, the `sst/opencode`
 source on 2026-06-03, and the `opencode-auto-review` package source on
-2026-06-04.
+2026-06-04. Re-checked against the OpenCode provider docs on 2026-08-01
+during the model refresh — see "Model catalogue" below.
+
+## Model catalogue (re-check, 2026-08-01)
+
+OpenCode does not hardcode model ids. It pulls provider and model metadata from
+**models.dev**, discovers some providers over OAuth, and gives users blacklist
+and whitelist filters over the resulting picker — so model lifecycle is the
+catalogue's problem, not OpenCode's.
+
+NoobBoard hardcodes model ids in three places that must agree: the picker in
+`web/public/app.js`, the ChatGPT-Codex allowlist in `internal/llm/chatgpt.go`,
+and the fallback chain beside it. That is why this list went stale enough to
+carry two retired Anthropic ids (`claude-3-7-sonnet-*`, `claude-3-5-haiku-*`)
+that now 404, presenting to the admin as an auth failure rather than a removed
+model.
+
+**Not adopting the catalogue itself.** Fetching models.dev at startup adds an
+outbound dependency on a third party for a LAN-only monitoring tool, on a path
+that currently talks to nothing but the configured provider. The failure mode —
+no picker when the catalogue is unreachable — is worse than a list that needs
+editing twice a year, and it would need its own allowlist and redaction review.
+
+**Worth adopting: one source of truth in-repo.** The three lists should be one.
+The server already serves settings, so the natural shape is the Go list as the
+source and the picker reading it from an admin endpoint, which also lets the
+server reject a saved id it no longer serves. Follow-up, not part of this change.
 
 Relevant ideas worth copying:
 
