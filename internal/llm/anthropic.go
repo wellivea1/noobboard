@@ -45,7 +45,7 @@ func (c AnthropicClient) Diagnose(ctx context.Context, req Request) (Diagnosis, 
 	}
 	body := map[string]interface{}{
 		"model":      c.model,
-		"max_tokens": 1200,
+		"max_tokens": anthropicMaxTokens,
 		"system":     Instructions(),
 		"messages": []map[string]interface{}{
 			{"role": "user", "content": BuildPrompt(contextText)},
@@ -94,7 +94,7 @@ func (c AnthropicClient) ReviewAction(ctx context.Context, req ActionReviewReque
 	}
 	body := map[string]interface{}{
 		"model":      c.model,
-		"max_tokens": 900,
+		"max_tokens": anthropicMaxTokens,
 		"system":     "You review a proposed NoobBoard repair action. Return only the structured JSON review decision.",
 		"messages": []map[string]interface{}{
 			{"role": "user", "content": BuildActionReviewPrompt(req)},
@@ -137,6 +137,42 @@ func (c AnthropicClient) ReviewAction(ctx context.Context, req ActionReviewReque
 	return actionReviewFromAnthropic(respData)
 }
 
+// The Anthropic max_tokens budget covers thinking as well as the response, and
+// current models think by default. The old 1200/900 budgets were sized for the
+// tool call alone, so on a thinking model the JSON could be cut off mid-object
+// and surface as a parse error rather than as a truncation. The calls here are
+// a single structured tool use, so a generous cap costs nothing when it is not
+// reached — max_tokens is a ceiling, not a reservation.
+const anthropicMaxTokens = 8000
+
+// A refusal or a truncation comes back as HTTP 200 with no usable tool call, so
+// the transport-level check above cannot catch either. Without this both fall
+// through to scanning the raw body for JSON, which fails with something that
+// reads like a bug in NoobBoard rather than an answer the provider declined to
+// give. Infrastructure questions name ports, SSH and networking, so a
+// cyber-category refusal is a realistic outcome here, not a hypothetical.
+func anthropicStopReasonError(data []byte) error {
+	var raw struct {
+		StopReason  string `json:"stop_reason"`
+		StopDetails *struct {
+			Category string `json:"category"`
+		} `json:"stop_details"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil
+	}
+	switch raw.StopReason {
+	case "refusal":
+		if raw.StopDetails != nil && raw.StopDetails.Category != "" {
+			return fmt.Errorf("anthropic declined this request (%s); try a different provider or rephrase the question", raw.StopDetails.Category)
+		}
+		return errors.New("anthropic declined this request; try a different provider or rephrase the question")
+	case "max_tokens":
+		return errors.New("anthropic response hit the token limit before returning a complete answer")
+	}
+	return nil
+}
+
 func diagnosisFromAnthropic(data []byte) (Diagnosis, error) {
 	var raw struct {
 		Content []struct {
@@ -153,6 +189,9 @@ func diagnosisFromAnthropic(data []byte) (Diagnosis, error) {
 		if block.Type == "tool_use" && block.Name == "record_diagnosis" && len(block.Input) > 0 {
 			return ValidateDiagnosis(block.Input)
 		}
+	}
+	if err := anthropicStopReasonError(data); err != nil {
+		return Diagnosis{}, err
 	}
 	jsonText, err := firstJSONString(data)
 	if err != nil {
@@ -177,6 +216,9 @@ func actionReviewFromAnthropic(data []byte) (ActionReviewDecision, error) {
 		if block.Type == "tool_use" && block.Name == "record_action_review" && len(block.Input) > 0 {
 			return ValidateActionReviewDecision(block.Input)
 		}
+	}
+	if err := anthropicStopReasonError(data); err != nil {
+		return ActionReviewDecision{}, err
 	}
 	jsonText, err := firstJSONString(data)
 	if err != nil {

@@ -543,6 +543,10 @@ func TestChatGPTConnectorFallsBackWhenChatGPTAccountRejectsModel(t *testing.T) {
 	cfg.LLM.ChatGPTAccountID = "account-123"
 	cfg.LLM.ChatGPTTokenExpiresAt = time.Now().UTC().Add(time.Hour)
 	cfg.LLM.OpenAIModel = "gpt-5.5"
+	wantFallback := chatGPTCodexModelFallbacks[0]
+	if wantFallback == "gpt-5.5" {
+		wantFallback = chatGPTCodexModelFallbacks[1]
+	}
 	client := NewChatGPTClient(cfg.LLM, privacy.NewRedactor(config.PrivacyConfig{}))
 	var models []string
 	client.http = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -557,8 +561,10 @@ func TestChatGPTConnectorFallsBackWhenChatGPTAccountRejectsModel(t *testing.T) {
 				"message": "The 'gpt-5.5' model is not supported when using Codex with a ChatGPT account.",
 			})
 		}
-		if model != "gpt-5.4" {
-			t.Fatalf("fallback model = %q, want gpt-5.4", model)
+		// Asserted against the head of the chain rather than a literal, so a
+		// model refresh updates one list instead of also editing this test.
+		if model != wantFallback {
+			t.Fatalf("fallback model = %q, want %q", model, wantFallback)
 		}
 		return streamResponse(t,
 			map[string]interface{}{
@@ -570,8 +576,8 @@ func TestChatGPTConnectorFallsBackWhenChatGPTAccountRejectsModel(t *testing.T) {
 	if _, err := client.Diagnose(context.Background(), sampleLLMRequest()); err != nil {
 		t.Fatal(err)
 	}
-	if len(models) != 2 || models[0] != "gpt-5.5" || models[1] != "gpt-5.4" {
-		t.Fatalf("models = %#v, want gpt-5.5 then gpt-5.4", models)
+	if len(models) != 2 || models[0] != "gpt-5.5" || models[1] != wantFallback {
+		t.Fatalf("models = %#v, want gpt-5.5 then %q", models, wantFallback)
 	}
 }
 
@@ -767,4 +773,56 @@ func testJWT(t *testing.T, claims map[string]interface{}) string {
 		t.Fatal(err)
 	}
 	return base64.RawURLEncoding.EncodeToString(header) + "." + base64.RawURLEncoding.EncodeToString(payload) + ".sig"
+}
+
+func TestAnthropicRefusalAndTruncationReportClearly(t *testing.T) {
+	// Both come back as HTTP 200 with no usable tool call, so the transport-level
+	// status check cannot catch them. Without an explicit stop_reason check they
+	// fall through to scanning the body for JSON and surface as a parse error,
+	// which reads like a NoobBoard bug rather than an answer the provider
+	// declined or cut short.
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "refusal with category",
+			body: `{"stop_reason":"refusal","stop_details":{"type":"refusal","category":"cyber"},"content":[]}`,
+			want: "declined this request (cyber)",
+		},
+		{
+			name: "refusal without category",
+			body: `{"stop_reason":"refusal","content":[]}`,
+			want: "declined this request;",
+		},
+		{
+			name: "truncated before the tool call completed",
+			body: `{"stop_reason":"max_tokens","content":[{"type":"text","text":"partial"}]}`,
+			want: "hit the token limit",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := diagnosisFromAnthropic([]byte(tt.body)); err == nil {
+				t.Fatal("diagnosisFromAnthropic returned no error")
+			} else if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("diagnosis error = %q, want it to contain %q", err.Error(), tt.want)
+			}
+			if _, err := actionReviewFromAnthropic([]byte(tt.body)); err == nil {
+				t.Fatal("actionReviewFromAnthropic returned no error")
+			} else if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("action review error = %q, want it to contain %q", err.Error(), tt.want)
+			}
+		})
+	}
+}
+
+func TestAnthropicToolCallStillWinsOverStopReason(t *testing.T) {
+	// A complete tool call must be honoured even when stop_reason is set, so the
+	// new check cannot reject a good answer.
+	body := `{"stop_reason":"tool_use","content":[{"type":"tool_use","name":"record_diagnosis","input":` + validDiagnosisJSON(t) + `}]}`
+	if _, err := diagnosisFromAnthropic([]byte(body)); err != nil {
+		t.Fatalf("diagnosisFromAnthropic returned %v, want the tool call to be accepted", err)
+	}
 }
