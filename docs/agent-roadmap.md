@@ -432,7 +432,8 @@ the LLM useful before making it powerful.**
 
 ## Workstream E — Close the diagnose→act→verify loops
 
-**Status:** `in-progress` (E1 and E2 shipped; E3 UniFi actions next)
+**Status:** `in-progress` (E1, E2 and E4 shipped; E3 half shipped — device
+restart done, PoE power-cycle blocked on read-side port topology; E5 next)
 
 Source: `docs/capability-review.md` (2026-08-01), which audited what the app can
 detect, explain, repair and verify for each service and device it touches. Read
@@ -451,31 +452,6 @@ model diagnoses without access to logs or history.
   that reaches LLM context. Default admin tool budget raised 2 → 4 because the
   workflow is now status → logs → history. See `docs/llm-policy.md` for the
   constraints on the logs tool.
-<<<<<<< HEAD
-- **E2 — Diagnose what is already collected.** CPU/memory/VM/share telemetry is
-  fetched every poll and read by zero rules and zero UI. Add rules for memory
-  pressure, full shares, per-disk temperature and status, and restart-loop
-  detection from history. Then show it or stop fetching it.
-- **E3 — Close the UniFi loop.** The adapter is read-only although the
-  Integration API v1 exposes device `RESTART` and PoE port power-cycle — the
-  exact remedy for the offline-device and degraded-link conditions already
-  detected. New actions inherit the full existing gate (approval, reviewer,
-  replay protection, rate limit, audit, verification) and add no new trust
-  level. The port allowlist must exclude the NoobBoard host's and the NAS's own
-  ports unless explicitly named.
-- **E4 — Make "slow" detectable.** ✅ **Done.** Every probe is timed on the same
-  request it already made, so the measurement costs nothing extra. The server
-  keeps a rolling ~1h window per probe and fills each reading with a median
-  baseline, sample count and failure rate before the rules run.
-  `probe_slow_*` fires at 4× the link's *own* median; `probe_flaky_*` fires on a
-  ≥20% failure rate while the probe is currently up, which is the intermittent
-  case a snapshot can never see. A missing baseline suppresses the rule rather
-  than firing it.
-  **Known limitation:** the window is in memory and resets on restart, so there
-  is no baseline for the first ~10 minutes after one. A persisted metric series
-  would fix that and enable the multi-day baselines the review originally
-  imagined; not built here.
-=======
 - **E2 — Diagnose what is already collected.** ✅ **Done.** `memory_pressure`
   and `array_capacity_high` rules; restart-loop detection via
   `annotateRestartLoops`, which counts history events before the rules run and
@@ -501,10 +477,18 @@ model diagnoses without access to logs or history.
     **Prerequisite: extend the read side to resolve device↔port↔client topology,
     then revisit.** Recorded rather than quietly dropped — the constraint doing
     its job is the reason this half is missing.
-- **E4 — Make "slow" detectable.** Probes are binary, so the most common real
-  complaint is outside what the app can see. Add latency/loss with history and
-  baseline-relative rules, not fixed thresholds.
->>>>>>> origin/main
+- **E4 — Make "slow" detectable.** ✅ **Done.** Every probe is timed on the same
+  request it already made, so the measurement costs nothing extra. The server
+  keeps a rolling ~1h window per probe and fills each reading with a median
+  baseline, sample count and failure rate before the rules run.
+  `probe_slow_*` fires at 4× the link's *own* median; `probe_flaky_*` fires on a
+  ≥20% failure rate while the probe is currently up, which is the intermittent
+  case a snapshot can never see. A missing baseline suppresses the rule rather
+  than firing it.
+  **Known limitation:** the window is in memory and resets on restart, so there
+  is no baseline for the first ~10 minutes after one. A persisted metric series
+  would fix that and enable the multi-day baselines the review originally
+  imagined; not built here.
 - **E5 — Monitor the monitor.** Nothing checks NoobBoard's own host: free disk
   on the unbounded `history.jsonl` path, last successful poll age, service
   state. A stalled poller currently looks identical to "everything is fine".
