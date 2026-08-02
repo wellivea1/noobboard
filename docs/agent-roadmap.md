@@ -463,9 +463,18 @@ model diagnoses without access to logs or history.
   replay protection, rate limit, audit, verification) and add no new trust
   level. The port allowlist must exclude the NoobBoard host's and the NAS's own
   ports unless explicitly named.
-- **E4 — Make "slow" detectable.** Probes are binary, so the most common real
-  complaint is outside what the app can see. Add latency/loss with history and
-  baseline-relative rules, not fixed thresholds.
+- **E4 — Make "slow" detectable.** ✅ **Done.** Every probe is timed on the same
+  request it already made, so the measurement costs nothing extra. The server
+  keeps a rolling ~1h window per probe and fills each reading with a median
+  baseline, sample count and failure rate before the rules run.
+  `probe_slow_*` fires at 4× the link's *own* median; `probe_flaky_*` fires on a
+  ≥20% failure rate while the probe is currently up, which is the intermittent
+  case a snapshot can never see. A missing baseline suppresses the rule rather
+  than firing it.
+  **Known limitation:** the window is in memory and resets on restart, so there
+  is no baseline for the first ~10 minutes after one. A persisted metric series
+  would fix that and enable the multi-day baselines the review originally
+  imagined; not built here.
 - **E5 — Monitor the monitor.** Nothing checks NoobBoard's own host: free disk
   on the unbounded `history.jsonl` path, last successful poll age, service
   state. A stalled poller currently looks identical to "everything is fine".

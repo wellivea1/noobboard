@@ -28,7 +28,7 @@ single most useful framing for what to build next — not "add features" but
 | Unraid array | ✅ state, capacity, disks, parity | ✅ 4 rules | ⚠️ start array only | ✅ re-checks after |
 | Unraid host (CPU/RAM/VM/shares) | ✅ collected | ❌ **no rule reads it** | ❌ | — |
 | UniFi network | ✅ WAN, devices, clients, link speed | ✅ 4 rules | ❌ **read-only adapter** | — |
-| Internet / DNS / router | ⚠️ binary up/down only | ✅ 3 rules | — (correctly upstream) | — |
+| Internet / DNS / router | ✅ up/down + latency + failure rate (E4) | ✅ 5 rules | — (correctly upstream) | — |
 | NoobBoard's own host | ❌ **nothing** | ❌ | ❌ | — |
 
 Detail per row follows. `⚠️` marks something that works but is narrower than the
@@ -134,15 +134,23 @@ port power-cycle. A PoE power-cycle is *precisely* the standard remedy for the
 degraded-link and offline-device conditions the app already detects. This is the
 clearest case in the codebase of detecting something the API would let us fix.
 
-### Probes — binary, so "slow" is undetectable
+### Probes — resolved in E4
 
-`httpReachable`, `dnsReachable`, `tcpReachable`
-(`internal/adapters/probes/live.go:82-127`) return booleans. There is no
-latency, packet loss or jitter measurement and no baseline.
+**Was:** the probes returned booleans, so the most common real complaint on a
+home server — "the internet is slow", "Plex keeps buffering" — was outside what
+the app could detect at all. It reported everything green at 400ms and 5% loss.
 
-The most common real complaint on a home server — "the internet is slow", "Plex
-keeps buffering" — is therefore outside what the app can detect at all. It will
-report everything green while the WAN is at 400ms and 5% loss.
+**Now:** every probe is timed on the request it already made, and the server
+keeps a rolling window per subject to derive a median baseline and a failure
+rate. Two rules use them, both relative rather than absolute, because a 200ms
+baseline is normal on some links and terrible on others.
+
+Naming is deliberate: `FailureRate` counts *probe failures across polls*, not
+ICMP packet loss. The app does not send ICMP and should not claim to.
+
+**Known limitation:** the window is in memory and resets on restart, so there is
+no baseline for roughly the first ten minutes after one. A persisted metric
+series would remove that and allow multi-day baselines.
 
 ### NoobBoard's own host — unmonitored
 
@@ -161,7 +169,7 @@ fine".
 | Unraid GraphQL | array state/capacity/disks, parity, notifications, CPU, memory, version, VMs, shares, docker networks, `StartArray` | per-disk SMART detail, parity check start/cancel, share free-space thresholds, plugin/update state |
 | Unraid Docker GraphQL | container list (`id/names/state/status/autoStart/image/labels/webUiUrl/templatePath`), start/stop/restart, logs | exit-code parsing from the `status` string already fetched; per-container stats |
 | UniFi Integration v1 | `/info`, `/sites`, `/devices`, `/clients`, `/wans` | **device `RESTART` action**, **PoE port power-cycle**, statistics endpoints |
-| Probes | HTTP GET, DNS lookup, TCP dial | latency, loss, jitter, traceroute-style hop isolation |
+| Probes | HTTP GET, DNS lookup, TCP dial, per-probe timing | jitter, ICMP loss, traceroute-style hop isolation |
 | NoobBoard host | — | nothing collected at all |
 
 The pattern: **the read side is well covered and the write side is nearly

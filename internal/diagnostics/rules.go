@@ -161,12 +161,61 @@ func infrastructureFacts(infra models.InfrastructureStatus, now time.Time) []mod
 	if unifiData && infra.NASLinkSpeedMbps > 0 && infra.ExpectedNASLinkMbps > 0 && infra.NASLinkSpeedMbps < infra.ExpectedNASLinkMbps {
 		add("nas_link_speed_degraded", models.IncidentUnifiIssue, models.SeverityMedium, "NAS switch port link speed is lower than expected.", []string{fmt.Sprintf("NAS link %d Mbps expected %d Mbps", infra.NASLinkSpeedMbps, infra.ExpectedNASLinkMbps)}, false)
 	}
+	// "The internet is slow" was undetectable: probes returned booleans, so
+	// everything read green at 400ms and 5% loss. These two rules compare a link
+	// against its own recent history rather than a fixed threshold, because a
+	// 200ms baseline is normal on some connections and terrible on others.
+	for _, probe := range infra.ProbeLatencies {
+		if probe.SampleCount >= probeMinSamplesForRules && probe.FailureRate >= probeFlakyFailureRate && probe.OK {
+			add("probe_flaky_"+probe.Subject, models.IncidentDNSIssue, models.SeverityMedium,
+				fmt.Sprintf("%s checks are failing intermittently.", probeDisplayName(probe.Subject)),
+				[]string{fmt.Sprintf("%.0f%% of recent %s checks failed, but it is reachable right now", probe.FailureRate*100, probe.Subject)}, false)
+			continue
+		}
+		// A baseline of zero means "not enough history yet", so the rule stays
+		// silent rather than comparing against nothing. The floor stops a link
+		// whose normal latency is 1ms reporting a fault at 5ms.
+		if !probe.OK || probe.BaselineMS < probeBaselineFloorMS || probe.SampleCount < probeMinSamplesForRules {
+			continue
+		}
+		if probe.LatencyMS >= probe.BaselineMS*probeSlowMultiplier {
+			add("probe_slow_"+probe.Subject, models.IncidentInternetDown, models.SeverityMedium,
+				fmt.Sprintf("%s is responding much slower than usual.", probeDisplayName(probe.Subject)),
+				[]string{fmt.Sprintf("%dms now against a usual %dms over the last %d checks", probe.LatencyMS, probe.BaselineMS, probe.SampleCount)}, true)
+		}
+	}
 	if unraidData {
 		for i, warning := range infra.StorageWarnings {
 			add(fmt.Sprintf("storage_warning_%d", i+1), models.IncidentStorageWarning, models.SeverityHigh, "Storage warning requires admin attention.", []string{warning}, false)
 		}
 	}
 	return facts
+}
+
+// Slow is relative. 4x the link's own median is well outside normal jitter
+// without firing on it; the floor keeps a 2ms LAN hop from reporting a fault at
+// 8ms; and the sample minimum stops a freshly restarted NoobBoard judging a link
+// it has barely measured.
+const (
+	probeSlowMultiplier     = 4
+	probeBaselineFloorMS    = 8
+	probeFlakyFailureRate   = 0.2
+	probeMinSamplesForRules = 20
+)
+
+func probeDisplayName(subject string) string {
+	switch subject {
+	case "internet":
+		return "The internet connection"
+	case "dns":
+		return "DNS"
+	case "router":
+		return "The router"
+	case "nas":
+		return "The server"
+	default:
+		return subject
+	}
 }
 
 func appFacts(infra models.InfrastructureStatus, apps []models.AppStatus, now time.Time) []models.IncidentFact {
