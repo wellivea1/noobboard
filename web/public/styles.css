@@ -1427,6 +1427,23 @@ body.admin-view #summary {
 }
 
 .history-copy small,
+/* An empty section is one line, not a panel: no border, no fill, heading and
+   note on the same baseline. Several unreported collectors then read as a short
+   list instead of a row of identical empty boxes. */
+.detail-section.is-empty {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  border: 0;
+  padding: var(--pad-row) 0;
+  background: transparent;
+}
+
+.detail-section.is-empty h3 {
+  color: var(--ink-2);
+  font-size: var(--text-meta);
+}
+
 /* An absence reads as an absence: ink-3, meta size, never the ink-1 bold weight
    a real reading gets. */
 .detail-empty {

@@ -140,6 +140,10 @@ type AppStatus struct {
 	// as "offline" without it, and they need opposite responses.
 	DockerExitCode              *int           `json:"docker_exit_code,omitempty"`
 	DockerExitReason            DockerExit     `json:"docker_exit_reason,omitempty"`
+	// Status transitions recorded for this app inside RestartLoopWindow.
+	// Populated from history before the rules run, so the rule engine stays a
+	// pure function of the snapshot.
+	RecentStatusChanges         int            `json:"recent_status_changes,omitempty"`
 	EndpointStatus              EndpointStatus `json:"endpoint_status"`
 	LastSeenOnline              *time.Time     `json:"last_seen_online,omitempty"`
 	LastSeenOffline             *time.Time     `json:"last_seen_offline,omitempty"`
@@ -321,6 +325,8 @@ const (
 	IncidentUnifiIssue           IncidentType = "unifi_issue"
 	IncidentDNSIssue             IncidentType = "dns_issue"
 	IncidentUnknown              IncidentType = "unknown"
+	IncidentAppRestartLoop       IncidentType = "app_restart_loop"
+	IncidentMemoryPressure       IncidentType = "memory_pressure"
 )
 
 type IncidentFact struct {
