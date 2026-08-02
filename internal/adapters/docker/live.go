@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -296,6 +297,7 @@ func appsFromContainers(containers []dockerContainer) []models.AppStatus {
 		name := displayName([]string(container.Names))
 		state := dockerState(container.State)
 		health := dockerHealth(container.Status)
+		exitCode, exitReason := dockerExit(container.Status)
 		endpoint := models.EndpointSkipped
 		current := currentStatusFromDocker(state, health)
 		apps = append(apps, models.AppStatus{
@@ -314,11 +316,13 @@ func appsFromContainers(containers []dockerContainer) []models.AppStatus {
 			ProbeType:                models.ProbeDockerState,
 			DockerState:              state,
 			DockerHealth:             health,
+			DockerExitCode:           exitCode,
+			DockerExitReason:         exitReason,
 			EndpointStatus:           endpoint,
 			CurrentStatus:            current,
 			Severity:                 severity(current),
 			ServerSummary:            fmt.Sprintf("%s is %s.", name, current),
-			AdminSummary:             fmt.Sprintf("%s state=%s status=%q auto_start=%t", name, container.State, container.Status, bool(container.AutoStart)),
+			AdminSummary:             adminSummaryLine(name, container, exitCode, exitReason),
 			LLMVisibleAdmin:          true,
 			LLMVisibleGeneral:        true,
 			NotificationOptInAllowed: true,
@@ -599,6 +603,34 @@ func dockerState(state string) models.DockerState {
 	}
 }
 
+// The Docker status string already carries the exit code — "Exited (137) 2
+// minutes ago" — and it was being read only for the words healthy/unhealthy.
+// Without the code, an out-of-memory kill, a deliberate stop and an application
+// crash all flatten to "offline", which is three different diagnoses and three
+// different correct responses.
+var dockerExitCodePattern = regexp.MustCompile(`(?i)exited\s*\((\d+)\)`)
+
+func dockerExit(status string) (*int, models.DockerExit) {
+	match := dockerExitCodePattern.FindStringSubmatch(status)
+	if len(match) != 2 {
+		return nil, ""
+	}
+	code, err := strconv.Atoi(match[1])
+	if err != nil {
+		return nil, ""
+	}
+	switch code {
+	case 0:
+		return &code, models.ExitClean
+	case 143:
+		return &code, models.ExitStopped
+	case 137:
+		return &code, models.ExitKilled
+	default:
+		return &code, models.ExitError
+	}
+}
+
 func dockerHealth(status string) models.DockerHealth {
 	lower := strings.ToLower(status)
 	switch {
@@ -637,4 +669,14 @@ func severity(status models.CurrentStatus) models.Severity {
 	default:
 		return models.SeverityNone
 	}
+}
+
+// The admin summary is what reaches LLM context, so the exit interpretation has
+// to be in the sentence and not only in a struct field.
+func adminSummaryLine(name string, container dockerContainer, exitCode *int, exitReason models.DockerExit) string {
+	line := fmt.Sprintf("%s state=%s status=%q auto_start=%t", name, container.State, container.Status, bool(container.AutoStart))
+	if detail := models.ExitDetail(exitCode, exitReason); detail != "" {
+		line += " " + detail
+	}
+	return line
 }

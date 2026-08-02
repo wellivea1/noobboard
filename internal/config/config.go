@@ -276,13 +276,20 @@ func defaultLLMPolicies() map[string]models.LLMPolicy {
 			MaxLogLines:           80,
 			FailClosedOnRedaction: true,
 			RecipientRole:         models.RoleAdmin,
-			AgentToolsEnabled:     true,
-			AgentMaxToolCalls:     2,
+			AgentToolsEnabled: true,
+			// Diagnosing one failed app is now status -> logs -> history, so a
+			// budget of 2 could not complete the workflow the log and history
+			// tools exist for. Still a hard cap, and every call is read-only,
+			// role-filtered and audited. Existing configs keep their own value;
+			// this is the default for new installs.
+			AgentMaxToolCalls: 4,
 			AgentToolRules: []models.LLMAgentToolRule{
 				{Tool: "noobboard_current_status", Action: "allow"},
 				{Tool: "noobboard_server_status", Action: "allow"},
 				{Tool: "noobboard_network_status", Action: "allow"},
 				{Tool: "noobboard_app_status", Action: "allow"},
+				{Tool: "noobboard_app_logs", Action: "allow"},
+				{Tool: "noobboard_app_history", Action: "allow"},
 			},
 		},
 		"general_user_requested": {

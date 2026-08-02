@@ -34,12 +34,39 @@ ChatGPT connector tokens are credentials. They are admin-only, audited on connec
 
 Every diagnosis request collects a fresh NoobBoard snapshot from the configured collectors before building LLM context. In `live` or `mixed` integration mode, that means the LLM receives current read-only Unraid, UniFi, Docker, and probe status fields that pass role visibility and redaction. Context stays bounded by preserving valid JSON and progressively reducing duplicate or lower-priority detail before failing. Admin context first drops the duplicate raw snapshot, then shrinks selected app/log/fact/warning detail while keeping original app status counts. Compact/general-user context always uses a concise API report with source health and selected visible apps, prioritizing apps named in the user's question.
 
-Admin-requested diagnosis enables read-only agent tools for live status lookups by default (`admin_requested.agent_tools_enabled=true`, `agent_max_tool_calls=2`). Existing runtime settings also re-enable the admin read-only tools when `agent_control_enabled=true`, so repair proposal mode and live status lookup do not drift apart. The browser/headless ChatGPT connector does not grant those tools by itself; it only supplies credentials. Tool access is controlled by `LLMPolicy.agent_tools_enabled`, `agent_max_tool_calls`, and `agent_tool_rules`, is denied for non-admin recipients, and is limited to these read-only tools:
+Admin-requested diagnosis enables read-only agent tools for live status lookups by default (`admin_requested.agent_tools_enabled=true`, `agent_max_tool_calls=4`). Existing runtime settings also re-enable the admin read-only tools when `agent_control_enabled=true`, so repair proposal mode and live status lookup do not drift apart. The browser/headless ChatGPT connector does not grant those tools by itself; it only supplies credentials. Tool access is controlled by `LLMPolicy.agent_tools_enabled`, `agent_max_tool_calls`, and `agent_tool_rules`, is denied for non-admin recipients, and is limited to these read-only tools:
 
 - `noobboard_current_status`
 - `noobboard_server_status`
 - `noobboard_network_status`
 - `noobboard_app_status`
+- `noobboard_app_logs`
+- `noobboard_app_history`
+
+`noobboard_app_logs` returns recent container log lines for one visible app. It
+is the only tool that returns free text originating inside a container, so it
+carries extra constraints:
+
+- The app is resolved against the role-filtered snapshot first, so an app the
+  role cannot see is unreachable even when named exactly.
+- Lines pass through `internal/privacy` `RedactLogs` before leaving the server.
+  Redaction is a precondition, not a step: if no redactor is configured the tool
+  is **not offered at all** rather than serving raw lines.
+- A hard ceiling of 120 lines is applied server-side regardless of what the
+  model asks for, and every read is audited as `app.container.logs` with
+  `via=agent_tool`.
+- Redaction reduces but does not eliminate the risk that a secret appears in a
+  log line. Treat enabling this tool as a decision to send container output to
+  the configured provider.
+
+`noobboard_app_history` returns recent status transitions for one visible app
+over a 24-hour window, capped at 40 events. It exists so a repeating failure can
+be told apart from a first-time one — restarting a container that has already
+crashed four times is the wrong recommendation, and without history the model
+cannot know the difference. It carries no container-authored text.
+
+The default admin tool budget is 4 rather than 2 because diagnosing one failed
+app is now status → logs → history.
 
 Tool calls refresh sanitized NoobBoard snapshots through the normal collectors, then run role filtering and redaction before results are returned to the model. The tool loop has a hard call budget and fails closed on unknown tools, invalid arguments, collector errors, schema failures, or oversized/redaction-failed context. Mutating repair is not exposed as an LLM tool; app execution is a separate server-side repair path that maps one schema recommendation to a Docker start for stopped apps or Docker restart for non-stopped apps. General-user policies keep agent tools disabled.
 

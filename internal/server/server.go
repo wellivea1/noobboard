@@ -96,6 +96,9 @@ const (
 	maxLoginFailureKeys         = 2048
 	defaultLogLimit             = 80
 	maxLogLimit                 = 200
+	// Events handed to the agent history tool. Enough to show a repeating
+	// pattern, small enough that it does not dominate the request.
+	agentHistoryEventLimit = 60
 	agentApprovalPlanID         = "current_recommendation"
 
 	agentRepairPerAppCooldown      = time.Minute
@@ -884,6 +887,65 @@ func (a *App) infrastructureHistory(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, history)
 }
 
+// agentAppLogs backs the noobboard_app_logs tool.
+//
+// Three things have to hold before a line reaches a provider, and each is
+// checked here rather than trusted from the caller:
+//   - the app must be visible to the requesting role (visibleAppByID),
+//   - the redactor must exist — no redactor means no logs, not raw logs,
+//   - the read is audited like the equivalent admin endpoint.
+//
+// Returns nil when logs cannot be served, which makes the tool unavailable
+// rather than silently empty.
+func (a *App) agentAppLogs(role models.Role) func(context.Context, string, int) ([]models.LogLine, error) {
+	if a.deps.Redactor == nil || a.deps.Collectors.Docker == nil {
+		return nil
+	}
+	return func(ctx context.Context, appID string, limit int) ([]models.LogLine, error) {
+		app, ok, err := a.visibleAppByID(ctx, role, appID)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, db.ErrNotFound
+		}
+		lines, err := a.deps.Collectors.Docker.Logs(ctx, app, docker.LogOptions{Limit: limit})
+		if err != nil {
+			return nil, err
+		}
+		redacted, changed := a.deps.Redactor.RedactLogs(lines)
+		a.deps.Audit.Record("llm", "app.container.logs", map[string]interface{}{
+			"app_id":         app.AppID,
+			"container_name": app.ContainerName,
+			"line_count":     len(redacted),
+			"redacted":       changed,
+			"via":            "agent_tool",
+		})
+		return redacted, nil
+	}
+}
+
+// agentAppHistory backs the noobboard_app_history tool. Same visibility rule as
+// the logs tool; history carries no free text from the container, so it needs
+// no redaction beyond what statusHistory already applies for the role.
+func (a *App) agentAppHistory(role models.Role) func(context.Context, string) (models.StatusHistory, error) {
+	if a.deps.History == nil {
+		return nil
+	}
+	return func(ctx context.Context, appID string) (models.StatusHistory, error) {
+		app, ok, err := a.visibleAppByID(ctx, role, appID)
+		if err != nil {
+			return models.StatusHistory{}, err
+		}
+		if !ok {
+			return models.StatusHistory{}, db.ErrNotFound
+		}
+		// A 24h window is what answers "is this a loop or a one-off"; a wider one
+		// mostly adds noise the model has to pay for in tokens.
+		return a.statusHistory(models.SubjectApp, app.AppID, app.DisplayName, app.CurrentStatus, app.LastSeenOnline, app.LastSeenOffline, 24*time.Hour, agentHistoryEventLimit, role)
+	}
+}
+
 func (a *App) statusHistory(subjectType models.StatusSubjectType, subjectID, displayName string, current models.CurrentStatus, lastOnline, lastOffline *time.Time, window time.Duration, limit int, role models.Role) (models.StatusHistory, error) {
 	now := time.Now().UTC()
 	since := now.Add(-window)
@@ -1461,6 +1523,8 @@ func (a *App) diagnose(w http.ResponseWriter, r *http.Request, mode llm.Mode, ro
 		Question:     body.Question,
 		ActorID:      mustUser(r).ID,
 		LiveSnapshot: a.readOnlySnapshot,
+		AppLogs:      a.agentAppLogs(role),
+		AppHistory:   a.agentAppHistory(role),
 		ToolAudit: func(name string, ok bool, errText string) {
 			details := map[string]interface{}{"mode": string(mode), "tool": name, "ok": ok}
 			if errText != "" {

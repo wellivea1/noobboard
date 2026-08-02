@@ -432,7 +432,8 @@ the LLM useful before making it powerful.**
 
 ## Workstream E — Close the diagnose→act→verify loops
 
-**Status:** `not-started`
+**Status:** `in-progress` (E1 shipped: `noobboard_app_logs` and
+`noobboard_app_history` tools, Docker exit-code parsing)
 
 Source: `docs/capability-review.md` (2026-08-01), which audited what the app can
 detect, explain, repair and verify for each service and device it touches. Read
@@ -443,12 +444,14 @@ The finding in one line: **only Docker containers complete the
 detect→diagnose→act→verify loop.** Everything else stops at diagnose, and the
 model diagnoses without access to logs or history.
 
-- **E1 — Give the model what a human looks at first.** `noobboard_app_logs` and
-  `noobboard_app_history` agent tools; parse the Docker exit code (137 = OOM)
-  that is already fetched and discarded. Read-only, no new integration. Largest
-  quality win available. The logs tool needs the closest redaction review of
-  anything here: container logs are the most likely place for a credential to
-  appear, and it must fail closed.
+- **E1 — Give the model what a human looks at first.** ✅ **Done.**
+  `noobboard_app_logs` (role-filtered, redaction as a precondition, 120-line
+  server-side cap, audited) and `noobboard_app_history` (24h window, 40-event
+  cap) are live, and the Docker exit code is parsed out of the status string
+  into `AppStatus.DockerExitCode`/`DockerExitReason` and into the admin summary
+  that reaches LLM context. Default admin tool budget raised 2 → 4 because the
+  workflow is now status → logs → history. See `docs/llm-policy.md` for the
+  constraints on the logs tool.
 - **E2 — Diagnose what is already collected.** CPU/memory/VM/share telemetry is
   fetched every poll and read by zero rules and zero UI. Add rules for memory
   pressure, full shares, per-disk temperature and status, and restart-loop
