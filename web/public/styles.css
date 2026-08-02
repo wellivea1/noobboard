@@ -1427,6 +1427,23 @@ body.admin-view #summary {
 }
 
 .history-copy small,
+/* An empty section is one line, not a panel: no border, no fill, heading and
+   note on the same baseline. Several unreported collectors then read as a short
+   list instead of a row of identical empty boxes. */
+.detail-section.is-empty {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  border: 0;
+  padding: var(--pad-row) 0;
+  background: transparent;
+}
+
+.detail-section.is-empty h3 {
+  color: var(--ink-2);
+  font-size: var(--text-meta);
+}
+
 /* An absence reads as an absence: ink-3, meta size, never the ink-1 bold weight
    a real reading gets. */
 .detail-empty {
@@ -2430,6 +2447,37 @@ button.command.monitor-hide {
    --------------------------------------------------------------------------- */
 .activity-stream {
   display: grid;
+}
+
+/* Offline UniFi devices with a restart affordance. Same row treatment as every
+   other list: hairline between peers, control on the right edge. */
+.unifi-devices {
+  display: grid;
+}
+
+.unifi-device-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--control-height);
+  padding: var(--pad-row) 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.unifi-device-row:last-child {
+  border-bottom: 0;
+}
+
+.unifi-device-main {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.unifi-device-main span {
+  font-size: var(--text-meta);
 }
 
 /* The time column is fixed, not max-content: sized to its content it is 34px

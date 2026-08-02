@@ -24,11 +24,17 @@ single most useful framing for what to build next — not "add features" but
 
 | Subsystem | Detect | Diagnose | Act | Verify |
 |---|---|---|---|---|
-| Docker containers | ✅ state, health, image, logs | ✅ rules + LLM tool | ✅ start / stop / restart | ✅ re-checks after |
+| Docker containers | ✅ state, health, exit code, logs | ✅ rules + LLM tools, restart-loop aware | ✅ start / stop / restart | ✅ re-checks after |
 | Unraid array | ✅ state, capacity, disks, parity | ✅ 4 rules | ⚠️ start array only | ✅ re-checks after |
+<<<<<<< HEAD
 | Unraid host (CPU/RAM/VM/shares) | ✅ collected | ❌ **no rule reads it** | ❌ | — |
 | UniFi network | ✅ WAN, devices, clients, link speed | ✅ 4 rules | ❌ **read-only adapter** | — |
 | Internet / DNS / router | ✅ up/down + latency + failure rate (E4) | ✅ 5 rules | — (correctly upstream) | — |
+=======
+| Unraid host (CPU/RAM/VM/shares) | ✅ collected | ⚠️ memory + capacity (E2) | ❌ | — |
+| UniFi network | ✅ WAN, devices, clients, link speed | ✅ 4 rules | ⚠️ restart offline devices (E3) | ✅ re-polls after |
+| Internet / DNS / router | ⚠️ binary up/down only | ✅ 3 rules | — (correctly upstream) | — |
+>>>>>>> origin/main
 | NoobBoard's own host | ❌ **nothing** | ❌ | ❌ | — |
 
 Detail per row follows. `⚠️` marks something that works but is narrower than the
@@ -90,11 +96,15 @@ Detect, diagnose, act and verify all present. `verifyRepairOutcome`
 records whether it actually recovered, which is the part most implementations
 skip. Actions are approval-gated, safety-reviewed, rate-limited and audited.
 
-Gaps: no exit-code reasoning (above); **restart loops are invisible** —
-`state=restarting` falls through `currentStatusFromDocker` (`live.go:616`) to
-`StatusUnknown`, and a container flapping every 30s reads as online whenever the
-poll lands during an `Up 5 seconds` window. Nothing consults history to catch
-the pattern.
+**Closed in E1/E2.** Exit codes are parsed and reach both the rules and LLM
+context. Restart loops are caught by counting history events per app before the
+rules run (`annotateRestartLoops`), and report as their own incident type with
+evidence that warns against restarting again — a crash loop needs the opposite
+response to a steady failure.
+
+Remaining: a container flapping faster than the poll interval can still be
+sampled during an `Up 5 seconds` window and read as online for that cycle. The
+history count catches it across cycles, which is the case that matters.
 
 ### Unraid array and storage
 
@@ -103,23 +113,33 @@ Four rules fire: `array_stopped`, `array_degraded`, `unraid_notifications`,
 the only mutation (`internal/adapters/unraid/live.go:149`) and it is verified
 (`server.go:2698`).
 
-Gaps: **per-disk data is collected and unused.** The dashboard query pulls
-`disks { name status temp size }` (`live.go:36`), but no rule reads disk
-temperature or per-disk status — only the aggregate array health. A single disk
-running hot or reporting a non-OK status is invisible until Unraid itself raises
-a notification. Parity check state is read but never actionable (no start/cancel).
+**Correction (2026-08-02, during E2).** The original review claimed per-disk
+data was unused. That was wrong, and the mistake is worth recording: the
+per-disk checks run in the *adapter*, not the rule engine.
+`unraid/live.go:82-90` walks `disks { name status temp size }`, flags any disk
+over 55°C or with a non-OK status, and emits them as `StorageWarnings`, which
+`rules.go` turns into `storage_warning_*` incidents. Reading only `rules.go`
+made it look absent. Anyone auditing coverage has to read the adapters too.
 
-### Unraid host telemetry — collected, then dropped
+Remaining gap: parity check state is read but never actionable (no start/cancel).
 
-`systemDetails` (`live.go:188-207`) collects CPU brand/cores/threads, memory
-total/used/percent, VM counts and names, share counts and names, and Docker
-network counts. These reach `models.InfrastructureStatus`
-(`internal/models/models.go:157-181`).
+### Unraid host telemetry — resolved in E2
 
-**Zero diagnostics rules reference any of them, and none is displayed in the UI.**
-Every poll pays four extra GraphQL round-trips for data nothing consumes. Either
-use it — memory pressure and full shares are real, diagnosable home-server
-failures — or stop fetching it.
+**Was:** zero rules referenced any of it and none was displayed, so every poll
+paid four extra GraphQL round-trips for data nothing consumed. **Now:** memory
+drives `memory_pressure`, array capacity drives `array_capacity_high`, and the
+rest is shown on the Server page under Host and Workloads. Nothing is
+fetched-and-hidden any more.
+
+Still not diagnosed, deliberately:
+
+- **VM stopped.** There is no baseline for which VMs are *supposed* to be
+  running, so "1 of 2 VMs stopped" is a fact, not a problem. A rule without a
+  baseline is a false-alarm generator. Displayed, not alerted on.
+- **Per-share capacity.** The share query returns counts and names only, not
+  free space, so a "share nearly full" rule is not possible from what is
+  currently fetched. It needs a wider query first.
+- **CPU brand/cores/threads.** Inventory, not health.
 
 ### UniFi — detects problems it cannot touch
 

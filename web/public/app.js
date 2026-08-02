@@ -2102,6 +2102,19 @@ function uptimeText(value) {
   return `Working ${rounded}% of the time.`;
 }
 
+// Not uptimeText: that one formats an uptime *percentage* for the compact
+// surface and would render 864000 seconds as "Working 100% of the time."
+function serverUptimeText(seconds) {
+  const total = Number(seconds);
+  if (!Number.isFinite(total) || total <= 0) return null;
+  const days = Math.floor(total / 86400);
+  const hours = Math.floor((total % 86400) / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+}
+
 function relativeTime(value) {
   if (!value) return "Not recorded yet.";
   const date = new Date(value);
@@ -2384,6 +2397,21 @@ function renderServerHealth(snapshot) {
       detailRow("Parity", infra.parity_check_state || null),
       detailRow("Warnings", infra.storage_warnings?.length ? infra.storage_warnings.join("; ") : null),
     ]),
+    // Host telemetry was collected on every poll and shown nowhere. Each row
+    // disappears on its own when the collector returns nothing, so a fixture or
+    // a partial API keeps the section honest rather than padding it with
+    // "unknown".
+    detailSection("server.host", "Host", [
+      detailRow("Processor", infra.unraid_cpu_brand ? `${infra.unraid_cpu_brand}${infra.unraid_cpu_cores ? ` (${infra.unraid_cpu_cores} cores / ${infra.unraid_cpu_threads || infra.unraid_cpu_cores} threads)` : ""}` : null),
+      detailRow("Memory", infra.unraid_memory_total_bytes ? `${formatBytes(infra.unraid_memory_used_bytes)} of ${formatBytes(infra.unraid_memory_total_bytes)} (${formatPercent(infra.unraid_memory_used_pct)})` : null),
+      detailRow("Uptime", serverUptimeText(infra.unraid_uptime_seconds)),
+      detailRow("Notifications", infra.unraid_notification_count ? `${infra.unraid_alert_count || 0} alert${(infra.unraid_alert_count || 0) === 1 ? "" : "s"}, ${infra.unraid_warning_count || 0} warning${(infra.unraid_warning_count || 0) === 1 ? "" : "s"} unread` : null),
+    ]),
+    detailSection("server.workloads", "Workloads", [
+      detailRow("Shares", infra.unraid_share_count ? `${infra.unraid_share_count}` : null),
+      detailRow("Virtual machines", infra.unraid_vm_count ? `${infra.unraid_vm_running_count || 0} of ${infra.unraid_vm_count} running` : null),
+      detailRow("Container networks", infra.docker_network_count ? `${infra.docker_network_count}` : null),
+    ]),
   ].filter(Boolean));
 }
 
@@ -2406,6 +2434,65 @@ function probeLatencyLabel(subject) {
   return labels[subject] || subject;
 }
 
+/* Restartable UniFi devices.
+
+   Only fetched when UniFi is actually reporting an offline device, so the
+   normal case costs no extra request. The list comes from the server rather
+   than being derived here, so the affordance the admin sees and the check the
+   mutation runs are the same rule. */
+async function renderUniFiDevices(infra) {
+  const panel = $("unifi-devices-panel");
+  if (!panel) return;
+  if (!isAdmin() || !(infra.unifi_offline_device_count > 0)) {
+    panel.hidden = true;
+    return;
+  }
+  try {
+    const data = await api("/api/admin/unifi/devices/restartable");
+    const devices = data.devices || [];
+    panel.hidden = devices.length === 0;
+    $("unifi-devices").replaceChildren(...devices.map(renderUniFiDeviceRow));
+  } catch (error) {
+    panel.hidden = false;
+    $("unifi-devices").replaceChildren(node("div", { class: "empty", text: error.message }));
+  }
+}
+
+function renderUniFiDeviceRow(device) {
+  return node("article", { class: "unifi-device-row" },
+    statusIndicator("offline", "offline", "status-dot-only"),
+    node("div", { class: "unifi-device-main" },
+      node("strong", { text: device.name || device.id }),
+      node("span", { class: "muted", text: [device.model, device.state].filter(Boolean).join(" · ") }),
+    ),
+    node("button", {
+      type: "button",
+      class: "command",
+      "data-glyph": "r",
+      onclick: (event) => restartUniFiDevice(device, event.currentTarget),
+      text: "Restart",
+    }),
+  );
+}
+
+async function restartUniFiDevice(device, button) {
+  const label = device.name || device.id;
+  if (!confirm(`Restart ${label}? It will drop off the network for a minute or two.`)) return;
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = "Restarting";
+  try {
+    const data = await api(`/api/admin/unifi/devices/${encodeURIComponent(device.id)}/restart`, { method: "POST" });
+    const outcome = data.outcome || {};
+    showNotice(outcome.message || `${label} restart sent.`, outcome.recovered ? "success" : "info");
+    await refresh();
+  } catch (error) {
+    showNotice(error.message, "error");
+    button.disabled = false;
+    button.textContent = original;
+  }
+}
+
 function renderRouterStatus(snapshot) {
   const infra = snapshot.infrastructure || {};
   const probesKnown = hasCollectorData(infra, "probes");
@@ -2418,6 +2505,7 @@ function renderRouterStatus(snapshot) {
     ["router.nas-link-status", "NAS Link", linkStatus(infra), linkNote(infra)],
   ];
   $("router-status-grid").replaceChildren(...rows.map(([id, label, value, note]) => statusListRow(id, label, value, note)).filter(Boolean));
+  renderUniFiDevices(infra);
   $("router-detail-grid").replaceChildren(...[
     detailSection("router.collectors", "Collectors", [
       detailRow("UniFi", sourceHealth(infra, "unifi")),
@@ -2538,11 +2626,15 @@ function detailRow(label, value) {
 
 function detailSection(id, title, children) {
   const childNodes = children.filter(Boolean);
-  return visibleMonitor(id, node("section", { class: "detail-section monitor-shell" },
+  // A section with nothing in it still carries information — it says the
+  // collector returned no data — but it does not deserve a panel. Empty
+  // sections collapse to one quiet line so several of them cannot turn into a
+  // row of identical empty boxes.
+  return visibleMonitor(id, node("section", { class: `detail-section monitor-shell${childNodes.length ? "" : " is-empty"}` },
     node("h3", { text: title }),
     childNodes.length
       ? node("div", { class: "detail-list" }, childNodes)
-      : node("p", { class: "detail-empty", text: "Nothing reported by this collector." }),
+      : node("p", { class: "detail-empty", text: "Not reported." }),
   ));
 }
 

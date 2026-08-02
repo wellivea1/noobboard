@@ -432,8 +432,7 @@ the LLM useful before making it powerful.**
 
 ## Workstream E — Close the diagnose→act→verify loops
 
-**Status:** `in-progress` (E1 shipped: `noobboard_app_logs` and
-`noobboard_app_history` tools, Docker exit-code parsing)
+**Status:** `in-progress` (E1 and E2 shipped; E3 UniFi actions next)
 
 Source: `docs/capability-review.md` (2026-08-01), which audited what the app can
 detect, explain, repair and verify for each service and device it touches. Read
@@ -452,6 +451,7 @@ model diagnoses without access to logs or history.
   that reaches LLM context. Default admin tool budget raised 2 → 4 because the
   workflow is now status → logs → history. See `docs/llm-policy.md` for the
   constraints on the logs tool.
+<<<<<<< HEAD
 - **E2 — Diagnose what is already collected.** CPU/memory/VM/share telemetry is
   fetched every poll and read by zero rules and zero UI. Add rules for memory
   pressure, full shares, per-disk temperature and status, and restart-loop
@@ -475,6 +475,36 @@ model diagnoses without access to logs or history.
   is no baseline for the first ~10 minutes after one. A persisted metric series
   would fix that and enable the multi-day baselines the review originally
   imagined; not built here.
+=======
+- **E2 — Diagnose what is already collected.** ✅ **Done.** `memory_pressure`
+  and `array_capacity_high` rules; restart-loop detection via
+  `annotateRestartLoops`, which counts history events before the rules run and
+  reports `app_restart_loop` with evidence warning against restarting again; the
+  remaining telemetry surfaced on the Server page under Host and Workloads.
+  Per-disk temperature/status turned out to be **already covered** in the Unraid
+  adapter rather than missing — see the correction in the capability review.
+  Per-share capacity is not possible from the current query and "VM stopped" has
+  no baseline to judge against; both are recorded as deliberate omissions.
+- **E3 — Close the UniFi loop.** ⚠️ **Half done, deliberately.**
+  - ✅ **Device restart shipped.** `POST /api/admin/unifi/devices/{id}/restart`,
+    admin-only, CSRF-checked, rate-limited on the shared repair budget, audited
+    before and after, and verified by re-polling. Eligibility — offline and not
+    a gateway — is enforced in the adapter and re-checked against live data
+    inside the mutation, so the list the admin saw cannot go stale into a
+    restart. `ask_admin_to_restart_unifi_device` lets the model recommend it;
+    the model cannot execute it.
+  - ❌ **PoE port power-cycle not shipped.** The constraint written into this
+    workstream — exclude the NoobBoard host's and the NAS's own ports — cannot
+    be satisfied with the data currently fetched: `deviceOverview` carries no
+    port topology, so there is no way to know which port to exclude. Shipping it
+    blind could cut the NAS or the dashboard host off the network.
+    **Prerequisite: extend the read side to resolve device↔port↔client topology,
+    then revisit.** Recorded rather than quietly dropped — the constraint doing
+    its job is the reason this half is missing.
+- **E4 — Make "slow" detectable.** Probes are binary, so the most common real
+  complaint is outside what the app can see. Add latency/loss with history and
+  baseline-relative rules, not fixed thresholds.
+>>>>>>> origin/main
 - **E5 — Monitor the monitor.** Nothing checks NoobBoard's own host: free disk
   on the unbounded `history.jsonl` path, last successful poll age, service
   state. A stalled poller currently looks identical to "everything is fine".
