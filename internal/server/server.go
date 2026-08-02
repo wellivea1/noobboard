@@ -111,7 +111,8 @@ const (
 	actionReviewReferenceBytes     = 18 * 1024
 	actionReviewReferenceFileBytes = 8 * 1024
 
-	arrayStartActionID = "ask_admin_to_start_array"
+	arrayStartActionID   = "ask_admin_to_start_array"
+	unifiRestartActionID = "ask_admin_to_restart_unifi_device"
 	arrayTargetID      = "unraid_array"
 )
 
@@ -182,6 +183,8 @@ func (a *App) AdminRouter() http.Handler {
 	mux.HandleFunc("POST /api/admin/settings/integrations", a.requireAdmin(a.updateIntegrationSettings))
 	mux.HandleFunc("GET /api/admin/settings/notifications", a.requireAdmin(a.getNotificationSettings))
 	mux.HandleFunc("POST /api/admin/settings/notifications", a.requireAdmin(a.updateNotificationSettings))
+	mux.HandleFunc("GET /api/admin/unifi/devices/restartable", a.requireAdmin(a.unifiRestartableDevices))
+	mux.HandleFunc("POST /api/admin/unifi/devices/", a.requireAdmin(a.unifiRestartDevice))
 	mux.HandleFunc("GET /api/admin/repair-requests", a.requireAdmin(a.adminRepairRequests))
 	mux.HandleFunc("POST /api/admin/repair-requests/{id}/decision", a.requireAdmin(a.decideRepairRequest))
 	mux.HandleFunc("GET /site-config.js", a.siteConfig(siteModeAdmin))
@@ -2190,10 +2193,15 @@ var llmAgentActionRegistry = map[string]llmAgentActionDefinition{
 		Summary:    "The model identified that the Unraid array is stopped. NoobBoard can start the array from compact chat only after the signed LLM plan is used.",
 		Executable: true,
 	},
+	unifiRestartActionID: {
+		ID:      unifiRestartActionID,
+		Title:   "Restart offline network device",
+		Summary: "The model identified an offline UniFi device. NoobBoard can restart it from the Router page after an admin confirms; only offline, non-gateway devices are eligible.",
+	},
 	"ask_admin_to_check_unifi": {
 		ID:      "ask_admin_to_check_unifi",
 		Title:   "Network check recommendation",
-		Summary: "The model suggested checking router or network status. NoobBoard does not execute network repair actions.",
+		Summary: "The model suggested checking router or network status. NoobBoard executes no other network repair action.",
 	},
 	"ask_admin_to_check_storage": {
 		ID:      "ask_admin_to_check_storage",
@@ -5032,6 +5040,18 @@ func (c unavailableUniFiClient) Status(context.Context) (models.InfrastructureSt
 	return models.InfrastructureStatus{}, errors.New(string(c))
 }
 
+func (c unavailableUniFiClient) RestartableDevices(context.Context) ([]unifi.RestartableDevice, error) {
+	return nil, errors.New(string(c))
+}
+
+func (c unavailableUniFiClient) RestartDevice(context.Context, string) (unifi.DeviceControlResult, error) {
+	return unifi.DeviceControlResult{}, errors.New(string(c))
+}
+
+func (c unavailableUniFiClient) DeviceOnline(context.Context, string) (bool, error) {
+	return false, errors.New(string(c))
+}
+
 func (a *App) defaultRole() models.Role {
 	a.settingsMu.RLock()
 	defer a.settingsMu.RUnlock()
@@ -5765,4 +5785,140 @@ func randomToken() (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(buf), nil
+}
+
+// --- UniFi device control ----------------------------------------------------
+
+// unifiRestartableDevices lists the devices an admin may restart. The safety
+// rule lives in the adapter so the list the UI offers and the check the mutation
+// runs cannot drift apart.
+func (a *App) unifiRestartableDevices(w http.ResponseWriter, r *http.Request) {
+	devices, err := a.deps.Collectors.UniFi.RestartableDevices(r.Context())
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	if devices == nil {
+		devices = []unifi.RestartableDevice{}
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"devices": devices,
+		"note":    "Only offline, non-gateway devices can be restarted. Restarting a device that is still passing traffic could drop the NAS or this dashboard.",
+	})
+}
+
+// unifiRestartDevice is the first mutating network action in NoobBoard. It adds
+// a write surface, not a trust level: same CSRF + admin gate, same rate limit,
+// same audit-then-execute-then-verify shape as the Docker and array paths.
+func (a *App) unifiRestartDevice(w http.ResponseWriter, r *http.Request) {
+	if err := requireCSRF(r); err != nil {
+		writeError(w, http.StatusForbidden, err)
+		return
+	}
+	deviceID := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/admin/unifi/devices/"), "/restart")
+	deviceID = strings.Trim(deviceID, "/")
+	if deviceID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("unifi device id is required"))
+		return
+	}
+	user := mustUser(r)
+	details := map[string]interface{}{"device_id": deviceID, "action": "restart"}
+
+	// Rate limited on the same budget as app repairs. A restart takes a device
+	// off the network for a minute or two; retrying it in a loop is never the
+	// right answer, and the cooldown is what stops a stuck caller doing that.
+	limit := a.reserveAgentRepair("unifi:"+deviceID, time.Now().UTC())
+	if !limit.Allowed {
+		details["reason"] = limit.Reason
+		details["retry_after_seconds"] = limit.RetryAfterSeconds
+		a.deps.Audit.Record(user.ID, "unifi.device.rate_limited", auditDetailsCopy(details))
+		writeError(w, http.StatusConflict, errors.New(limit.Message))
+		return
+	}
+
+	result, err := a.deps.Collectors.UniFi.RestartDevice(r.Context(), deviceID)
+	if err != nil {
+		details["error"] = err.Error()
+		if errors.Is(err, unifi.ErrDeviceNotRestartable) {
+			// Refused by the safety rule, not a transport failure. Distinct audit
+			// action and a 409 so the caller can tell "not allowed" from "broken".
+			a.deps.Audit.Record(user.ID, "unifi.device.refused", auditDetailsCopy(details))
+			writeError(w, http.StatusConflict, errors.New("that device is not eligible for restart: only offline, non-gateway devices can be restarted"))
+			return
+		}
+		a.deps.Audit.Record(user.ID, "unifi.device.action_failed", auditDetailsCopy(details))
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	details["device_name"] = result.DeviceName
+	a.deps.Audit.Record(user.ID, "unifi.device.action", auditDetailsCopy(details))
+	a.invalidateSnapshot()
+
+	outcome := a.verifyUniFiRestartOutcome(r.Context(), result)
+	verifyDetails := auditDetailsCopy(details)
+	verifyDetails["verified"] = outcome.Verified
+	verifyDetails["recovered"] = outcome.Recovered
+	if outcome.Verified {
+		a.deps.Audit.Record(user.ID, "unifi.device.verified", verifyDetails)
+	} else {
+		a.deps.Audit.Record(user.ID, "unifi.device.verify_failed", verifyDetails)
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"result":  result,
+		"outcome": outcome,
+	})
+}
+
+// verifyUniFiRestartOutcome re-polls UniFi after a restart.
+//
+// Two failure modes this must not confuse with success:
+//
+//   - UniFi itself unreachable. A restart can drop the API path, so an error
+//     here means "unknown", never "recovered".
+//   - The device still offline. A restart is not a repair: a device that was
+//     offline because it lost power comes back offline. Reporting that honestly
+//     is the point of verifying at all.
+func (a *App) verifyUniFiRestartOutcome(ctx context.Context, result unifi.DeviceControlResult) llmAgentRepairOutcomeView {
+	outcome := llmAgentRepairOutcomeView{
+		Action:       "unifi_restart_device",
+		TargetID:     result.DeviceID,
+		TargetLabel:  result.DeviceName,
+		BeforeStatus: models.StatusOffline,
+		AfterStatus:  models.StatusUnknown,
+		CheckedAt:    time.Now().UTC(),
+		Message:      "Restart was sent, but NoobBoard could not confirm the device came back yet.",
+	}
+	attempts := agentRepairVerificationAttempts
+	if attempts <= 0 || agentRepairVerificationDelay <= 0 {
+		attempts = 1
+	}
+	for attempt := 0; attempt < attempts; attempt++ {
+		if delay := agentRepairVerificationDelay; delay > 0 {
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				outcome.Message = "Restart was sent, but verification was cancelled before NoobBoard could re-check the device."
+				return outcome
+			case <-timer.C:
+			}
+		}
+		online, err := a.deps.Collectors.UniFi.DeviceOnline(ctx, result.DeviceID)
+		outcome.CheckedAt = time.Now().UTC()
+		if err != nil {
+			// Unreachable UniFi is unknown, not failure and not success.
+			outcome.Message = "Restart was sent, but NoobBoard could not re-check the device: " + err.Error()
+			continue
+		}
+		outcome.Verified = true
+		if online {
+			outcome.AfterStatus = models.StatusOnline
+			outcome.Recovered = true
+			outcome.Message = result.DeviceName + " came back online after the restart."
+			return outcome
+		}
+		outcome.AfterStatus = models.StatusOffline
+		outcome.Message = result.DeviceName + " is still offline after the restart. A restart does not fix a device that has lost power or its uplink."
+	}
+	return outcome
 }

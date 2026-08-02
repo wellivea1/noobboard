@@ -460,13 +460,22 @@ model diagnoses without access to logs or history.
   adapter rather than missing — see the correction in the capability review.
   Per-share capacity is not possible from the current query and "VM stopped" has
   no baseline to judge against; both are recorded as deliberate omissions.
-- **E3 — Close the UniFi loop.** The adapter is read-only although the
-  Integration API v1 exposes device `RESTART` and PoE port power-cycle — the
-  exact remedy for the offline-device and degraded-link conditions already
-  detected. New actions inherit the full existing gate (approval, reviewer,
-  replay protection, rate limit, audit, verification) and add no new trust
-  level. The port allowlist must exclude the NoobBoard host's and the NAS's own
-  ports unless explicitly named.
+- **E3 — Close the UniFi loop.** ⚠️ **Half done, deliberately.**
+  - ✅ **Device restart shipped.** `POST /api/admin/unifi/devices/{id}/restart`,
+    admin-only, CSRF-checked, rate-limited on the shared repair budget, audited
+    before and after, and verified by re-polling. Eligibility — offline and not
+    a gateway — is enforced in the adapter and re-checked against live data
+    inside the mutation, so the list the admin saw cannot go stale into a
+    restart. `ask_admin_to_restart_unifi_device` lets the model recommend it;
+    the model cannot execute it.
+  - ❌ **PoE port power-cycle not shipped.** The constraint written into this
+    workstream — exclude the NoobBoard host's and the NAS's own ports — cannot
+    be satisfied with the data currently fetched: `deviceOverview` carries no
+    port topology, so there is no way to know which port to exclude. Shipping it
+    blind could cut the NAS or the dashboard host off the network.
+    **Prerequisite: extend the read side to resolve device↔port↔client topology,
+    then revisit.** Recorded rather than quietly dropped — the constraint doing
+    its job is the reason this half is missing.
 - **E4 — Make "slow" detectable.** Probes are binary, so the most common real
   complaint is outside what the app can see. Add latency/loss with history and
   baseline-relative rules, not fixed thresholds.
