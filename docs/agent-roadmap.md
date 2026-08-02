@@ -430,6 +430,52 @@ the LLM useful before making it powerful.**
    after the audit/notification and approval-UI groundwork exists. It also benefits from the
    setup wizard (A) for provisioning provider credentials.
 
+## Workstream E — Close the diagnose→act→verify loops
+
+**Status:** `not-started`
+
+Source: `docs/capability-review.md` (2026-08-01), which audited what the app can
+detect, explain, repair and verify for each service and device it touches. Read
+that document before claiming a task here — it carries the evidence and the
+file references for every item below.
+
+The finding in one line: **only Docker containers complete the
+detect→diagnose→act→verify loop.** Everything else stops at diagnose, and the
+model diagnoses without access to logs or history.
+
+- **E1 — Give the model what a human looks at first.** `noobboard_app_logs` and
+  `noobboard_app_history` agent tools; parse the Docker exit code (137 = OOM)
+  that is already fetched and discarded. Read-only, no new integration. Largest
+  quality win available. The logs tool needs the closest redaction review of
+  anything here: container logs are the most likely place for a credential to
+  appear, and it must fail closed.
+- **E2 — Diagnose what is already collected.** CPU/memory/VM/share telemetry is
+  fetched every poll and read by zero rules and zero UI. Add rules for memory
+  pressure, full shares, per-disk temperature and status, and restart-loop
+  detection from history. Then show it or stop fetching it.
+- **E3 — Close the UniFi loop.** The adapter is read-only although the
+  Integration API v1 exposes device `RESTART` and PoE port power-cycle — the
+  exact remedy for the offline-device and degraded-link conditions already
+  detected. New actions inherit the full existing gate (approval, reviewer,
+  replay protection, rate limit, audit, verification) and add no new trust
+  level. The port allowlist must exclude the NoobBoard host's and the NAS's own
+  ports unless explicitly named.
+- **E4 — Make "slow" detectable.** Probes are binary, so the most common real
+  complaint is outside what the app can see. Add latency/loss with history and
+  baseline-relative rules, not fixed thresholds.
+- **E5 — Monitor the monitor.** Nothing checks NoobBoard's own host: free disk
+  on the unbounded `history.jsonl` path, last successful poll age, service
+  state. A stalled poller currently looks identical to "everything is fine".
+
+**Constraints:** E3 is the only workstream that adds a write surface; it does not
+add a trust level. Shell/SSH as an LLM tool, Unraid share/user mutations, and
+UniFi firewall/DNS changes are out of scope — see the "Deliberately not planned"
+section of the capability review for why.
+
+**Acceptance:** each item closes a named loop end to end, including verification
+after the action, and is covered by tests plus `scripts/visual-check.ps1` where
+it touches UI.
+
 ## References
 
 - **Product review (origin of the UX workflow and compact-UX guidance):** a multi-agent
@@ -439,5 +485,6 @@ the LLM useful before making it powerful.**
   the live screenshots + the constraints in Workstream B.)
 - OpenCode — providers, tools/permissions, agents, MCP: https://opencode.ai/docs/
 - Codex — approval modes, sandbox, login/auth: https://github.com/openai/codex
-- Existing internal notes: `docs/opencode-evaluation.md`, `docs/llm-policy.md`,
-  `docs/security.md`, `docs/architecture.md`, `docs/api-config.md`.
+- Existing internal notes: `docs/capability-review.md`, `docs/opencode-evaluation.md`,
+  `docs/llm-policy.md`, `docs/security.md`, `docs/architecture.md`, `docs/api-config.md`,
+  `docs/ui-standards.md`.
