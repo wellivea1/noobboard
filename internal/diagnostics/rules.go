@@ -166,7 +166,54 @@ func infrastructureFacts(infra models.InfrastructureStatus, now time.Time) []mod
 			add(fmt.Sprintf("storage_warning_%d", i+1), models.IncidentStorageWarning, models.SeverityHigh, "Storage warning requires admin attention.", []string{warning}, false)
 		}
 	}
+	// Capacity and memory were collected on every poll and read by nothing. A
+	// full array is one of the most common causes of containers failing to
+	// start on a home server, and it is silent until something breaks.
+	if unraidData && infra.UnraidAPIReachable && infra.ArrayCapacityTotalBytes > 0 && infra.ArrayCapacityUsedPct >= arrayNearlyFullPct {
+		severity := models.SeverityMedium
+		summary := "Storage array is nearly full."
+		if infra.ArrayCapacityUsedPct >= arrayCriticallyFullPct {
+			severity = models.SeverityHigh
+			summary = "Storage array is almost out of space."
+		}
+		add("array_capacity_high", models.IncidentStorageWarning, severity, summary,
+			[]string{fmt.Sprintf("array %.1f%% used, %s free", infra.ArrayCapacityUsedPct, humanBytes(infra.ArrayCapacityFreeBytes))}, false)
+	}
+	// Unraid counts cache as used, so a high number is not automatically a
+	// problem. The threshold is set where it stops being explainable by cache
+	// and the wording stays descriptive rather than diagnostic.
+	if unraidData && infra.UnraidAPIReachable && infra.UnraidMemoryTotalBytes > 0 && infra.UnraidMemoryUsedPct >= memoryPressurePct {
+		add("memory_pressure", models.IncidentMemoryPressure, models.SeverityMedium, "Server memory use is high.",
+			[]string{fmt.Sprintf("%.1f%% of %s in use", infra.UnraidMemoryUsedPct, humanBytes(infra.UnraidMemoryTotalBytes))}, false)
+	}
 	return facts
+}
+
+// RestartLoopWindow is how far back the server counts status changes when
+// deciding whether an app is flapping. Exported because the server does the
+// counting — the rule engine stays a pure function of the snapshot.
+const RestartLoopWindow = 30 * time.Minute
+
+const (
+	arrayNearlyFullPct     = 90
+	arrayCriticallyFullPct = 96
+	memoryPressurePct      = 92
+	// A container that changes state this many times inside the window is
+	// flapping rather than simply down.
+	restartLoopChanges = 4
+)
+
+func humanBytes(bytes int64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	div, exp := int64(unit), 0
+	for n := bytes / unit; n >= unit && exp < 4; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(bytes)/float64(div), "KMGTP"[exp])
 }
 
 func appFacts(infra models.InfrastructureStatus, apps []models.AppStatus, now time.Time) []models.IncidentFact {
@@ -184,9 +231,24 @@ func appFacts(infra models.InfrastructureStatus, apps []models.AppStatus, now ti
 			typ = models.IncidentAppDegraded
 			severity = models.SeverityLow
 		}
+		// A container that keeps changing state is a different problem from one
+		// that is simply down, and it needs the opposite response: restarting a
+		// crash loop restarts the loop. Reported as its own incident type so the
+		// recommendation can differ.
+		looping := app.RecentStatusChanges >= restartLoopChanges
+		if looping {
+			typ = models.IncidentAppRestartLoop
+			severity = models.SeverityHigh
+		}
 		evidence := []string{app.AdminSummary}
+		if looping {
+			evidence = append(evidence, fmt.Sprintf("%d status changes in the last %s; restarting again will not fix a crash loop", app.RecentStatusChanges, RestartLoopWindow))
+		}
 		if app.DockerState == models.DockerExited {
 			evidence = append(evidence, "container exited")
+		}
+		if detail := models.ExitDetail(app.DockerExitCode, app.DockerExitReason); detail != "" {
+			evidence = append(evidence, detail)
 		}
 		if app.DockerHealth == models.HealthUnhealthy {
 			evidence = append(evidence, "container unhealthy")
@@ -194,11 +256,15 @@ func appFacts(infra models.InfrastructureStatus, apps []models.AppStatus, now ti
 		if app.EndpointStatus == models.EndpointFailed && app.DockerState != models.DockerExited && hasEndpointProbe(app) {
 			evidence = append(evidence, endpointEvidence(app))
 		}
+		summary := app.ServerSummary
+		if looping {
+			summary = fmt.Sprintf("%s keeps stopping and starting.", app.DisplayName)
+		}
 		facts = append(facts, models.IncidentFact{
 			ID:               "app_" + app.AppID + "_" + string(app.CurrentStatus),
 			Type:             typ,
 			Severity:         severity,
-			Summary:          app.ServerSummary,
+			Summary:          summary,
 			Evidence:         evidence,
 			AffectedServices: []string{app.AppID},
 			CreatedAt:        now,

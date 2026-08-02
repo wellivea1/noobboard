@@ -99,6 +99,9 @@ const (
 	// Events handed to the agent history tool. Enough to show a repeating
 	// pattern, small enough that it does not dominate the request.
 	agentHistoryEventLimit = 60
+	// Enough events to recognise a flap; the rule only needs to know whether the
+	// count crosses a small threshold, not the exact number.
+	restartLoopQueryLimit = 20
 	agentApprovalPlanID         = "current_recommendation"
 
 	agentRepairPerAppCooldown      = time.Minute
@@ -305,6 +308,34 @@ func (a *App) refreshSnapshot(ctx context.Context, processNotifications bool) (m
 	return cloneSnapshot(snapshot), nil
 }
 
+// annotateRestartLoops counts recent status changes per app so the rule engine
+// can tell a flapping container from one that is simply down. The count is
+// computed here, where history lives, rather than inside the rules: keeping
+// Evaluate a pure function of the snapshot is what makes it testable without a
+// store.
+//
+// Best-effort by design. No history configured, or a query that fails, leaves
+// the count at zero and the app is diagnosed exactly as it was before — a
+// missing history must not turn into a missing incident.
+func (a *App) annotateRestartLoops(apps []models.AppStatus) {
+	if a.deps.History == nil || len(apps) == 0 {
+		return
+	}
+	since := time.Now().UTC().Add(-diagnostics.RestartLoopWindow)
+	for i := range apps {
+		events, err := a.deps.History.Query(db.HistoryFilter{
+			SubjectType: models.SubjectApp,
+			SubjectID:   apps[i].AppID,
+			Since:       since,
+			Limit:       restartLoopQueryLimit,
+		})
+		if err != nil {
+			continue
+		}
+		apps[i].RecentStatusChanges = len(events)
+	}
+}
+
 func (a *App) recordSnapshotHistory(snapshot models.Snapshot) error {
 	if a.deps.History == nil || a.historyRecorder == nil {
 		return nil
@@ -379,6 +410,7 @@ func (a *App) collectSnapshot(ctx context.Context, processNotifications bool) (m
 		apps[i].RecentLogs = append(apps[i].RecentLogs, unraidLogs...)
 	}
 	applyAppCatalog(apps, cfg.AppCatalog)
+	a.annotateRestartLoops(apps)
 	snapshot := models.Snapshot{
 		GeneratedAt:          time.Now().UTC(),
 		Infrastructure:       infra,

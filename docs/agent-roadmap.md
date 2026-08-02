@@ -432,8 +432,7 @@ the LLM useful before making it powerful.**
 
 ## Workstream E — Close the diagnose→act→verify loops
 
-**Status:** `in-progress` (E1 shipped: `noobboard_app_logs` and
-`noobboard_app_history` tools, Docker exit-code parsing)
+**Status:** `in-progress` (E1 and E2 shipped; E3 UniFi actions next)
 
 Source: `docs/capability-review.md` (2026-08-01), which audited what the app can
 detect, explain, repair and verify for each service and device it touches. Read
@@ -452,10 +451,15 @@ model diagnoses without access to logs or history.
   that reaches LLM context. Default admin tool budget raised 2 → 4 because the
   workflow is now status → logs → history. See `docs/llm-policy.md` for the
   constraints on the logs tool.
-- **E2 — Diagnose what is already collected.** CPU/memory/VM/share telemetry is
-  fetched every poll and read by zero rules and zero UI. Add rules for memory
-  pressure, full shares, per-disk temperature and status, and restart-loop
-  detection from history. Then show it or stop fetching it.
+- **E2 — Diagnose what is already collected.** ✅ **Done.** `memory_pressure`
+  and `array_capacity_high` rules; restart-loop detection via
+  `annotateRestartLoops`, which counts history events before the rules run and
+  reports `app_restart_loop` with evidence warning against restarting again; the
+  remaining telemetry surfaced on the Server page under Host and Workloads.
+  Per-disk temperature/status turned out to be **already covered** in the Unraid
+  adapter rather than missing — see the correction in the capability review.
+  Per-share capacity is not possible from the current query and "VM stopped" has
+  no baseline to judge against; both are recorded as deliberate omissions.
 - **E3 — Close the UniFi loop.** ⚠️ **Half done, deliberately.**
   - ✅ **Device restart shipped.** `POST /api/admin/unifi/devices/{id}/restart`,
     admin-only, CSRF-checked, rate-limited on the shared repair budget, audited
