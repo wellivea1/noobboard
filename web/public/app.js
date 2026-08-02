@@ -19,6 +19,7 @@ const state = {
   selectedUser: "",
   auditEntries: [],
   activityFilter: "all",
+  latencyRange: "24h",
   activitySearch: "",
   settingsSearch: "",
   repairRequests: [],
@@ -606,6 +607,14 @@ function node(tag, attrs = {}, ...children) {
 function svgNode(tag, attrs = {}, ...children) {
   const element = document.createElementNS("http://www.w3.org/2000/svg", tag);
   for (const [key, value] of Object.entries(attrs)) {
+    // Same "text" shorthand as node(). Without this the two helpers look alike
+    // and behave differently: {text: "0"} on an <svg:text> silently became an
+    // attribute, and axis labels rendered empty. SVG has no "text" attribute,
+    // so treating it as content is unambiguous.
+    if (key === "text") {
+      element.textContent = value === null || value === undefined ? "" : value;
+      continue;
+    }
     if (value !== false && value !== null && value !== undefined) {
       element.setAttribute(key, value === true ? "" : value);
     }
@@ -2493,6 +2502,160 @@ async function restartUniFiDevice(device, button) {
   }
 }
 
+/* ---------------------------------------------------------------------------
+   Response-time history.
+
+   Small multiples, one chart per probe, rather than four series on one plot:
+   these are the same measure but wildly different scales — a 2ms LAN hop and a
+   30ms WAN on one linear axis makes the LAN line a flat smudge. Each chart gets
+   its own y-scale, and the reader compares shapes rather than absolute values.
+
+   One series per chart means no legend is needed; the chart's own title names
+   it. The line is neutral ink, because in this product colour means state and a
+   latency reading is not a state. The only colour on the plot is the failure
+   band, which IS a state.
+
+   Every chart has a table twin (the Table toggle), so no value is reachable
+   only by hovering.
+   --------------------------------------------------------------------------- */
+async function renderLatencyHistory() {
+  const panel = $("latency-panel");
+  if (!panel || !state.snapshot) return;
+  const subjects = (state.snapshot.infrastructure?.probe_latencies || []).map((probe) => probe.subject);
+  if (!subjects.length) {
+    panel.hidden = true;
+    return;
+  }
+  try {
+    const range = state.latencyRange || "24h";
+    const series = await Promise.all(subjects.map(async (subject) => {
+      const data = await api("/api/infrastructure/latency?subject=" + encodeURIComponent(subject) + "&window=" + range);
+      return { subject, buckets: data.buckets || [] };
+    }));
+    const withData = series.filter((entry) => entry.buckets.length > 1);
+    panel.hidden = false;
+    if (!withData.length) {
+      $("latency-charts").replaceChildren(node("p", { class: "empty", text: "Not enough history yet. Response times are recorded every five minutes." }));
+      $("latency-table").replaceChildren();
+      return;
+    }
+    $("latency-charts").replaceChildren(...withData.map(renderLatencyChart));
+    $("latency-table").replaceChildren(renderLatencyTable(withData));
+  } catch (error) {
+    panel.hidden = false;
+    $("latency-charts").replaceChildren(node("div", { class: "empty", text: error.message }));
+  }
+}
+
+function renderLatencyChart(entry) {
+  const buckets = entry.buckets;
+  const width = 560;
+  const height = 132;
+  const padLeft = 46;
+  const padRight = 10;
+  const padTop = 10;
+  // The box has to include the x-axis band, or the card grows a nested
+  // scrollbar that crops the labels.
+  const padBottom = 22;
+  const plotWidth = width - padLeft - padRight;
+  const plotHeight = height - padTop - padBottom;
+
+  const withValues = buckets.filter((b) => b.median_ms > 0);
+  const peak = Math.max(...buckets.map((b) => b.max_ms || 0), 1);
+  // Round the top of the scale up so the axis lands on a readable number.
+  const step = peak <= 20 ? 5 : peak <= 100 ? 25 : peak <= 500 ? 100 : 250;
+  const top = Math.max(step, Math.ceil(peak / step) * step);
+  const first = new Date(buckets[0].at).getTime();
+  const last = new Date(buckets[buckets.length - 1].at).getTime();
+  const span = Math.max(1, last - first);
+  const x = (bucket) => padLeft + ((new Date(bucket.at).getTime() - first) / span) * plotWidth;
+  const y = (value) => padTop + plotHeight - (Math.min(value, top) / top) * plotHeight;
+  const typical = median(withValues.map((b) => b.median_ms));
+
+  const svg = svgNode("svg", {
+    class: "latency-chart",
+    viewBox: "0 0 " + width + " " + height,
+    preserveAspectRatio: "none",
+    role: "img",
+    "aria-label": probeLatencyLabel(entry.subject) + " response time over " + buckets.length + " five-minute periods, typically " + typical + " ms",
+  });
+
+  // Grid: solid hairlines, one shade off the surface. Never dashed — dashing
+  // reads as a threshold when it is only a grid.
+  for (let i = 0; i <= 2; i++) {
+    const value = (top / 2) * i;
+    svg.append(svgNode("line", { class: "latency-grid", x1: padLeft, x2: width - padRight, y1: y(value), y2: y(value) }));
+    svg.append(svgNode("text", { class: "latency-axis", x: padLeft - 8, y: y(value) + 3, "text-anchor": "end", text: String(value) }));
+  }
+
+  // Failure bands go down first so the line draws over them.
+  for (const bucket of buckets) {
+    if (!bucket.failures) continue;
+    svg.append(svgNode("rect", { class: "latency-failure", x: x(bucket) - 1.5, y: padTop, width: 3, height: plotHeight }));
+  }
+
+  // The min-max range is a soft band and the median is the line: a spike that
+  // lasted one poll vanishes from a median, and that spike is exactly what
+  // someone investigating "it was slow last night" came to find.
+  if (withValues.length > 1) {
+    const upper = withValues.map((b) => x(b) + "," + y(b.max_ms)).join(" ");
+    const lower = withValues.slice().reverse().map((b) => x(b) + "," + y(b.min_ms)).join(" ");
+    svg.append(svgNode("polygon", { class: "latency-range", points: upper + " " + lower }));
+    svg.append(svgNode("polyline", { class: "latency-line", points: withValues.map((b) => x(b) + "," + y(b.median_ms)).join(" ") }));
+  }
+
+  const latest = withValues[withValues.length - 1];
+  if (latest) {
+    svg.append(svgNode("circle", { class: "latency-latest", cx: x(latest), cy: y(latest.median_ms), r: 3 }));
+  }
+
+  return node("figure", { class: "latency-figure" },
+    node("figcaption", { class: "latency-caption" },
+      node("span", { class: "latency-title", text: probeLatencyLabel(entry.subject) }),
+      // Direct-label the endpoint only. A number on every point goes unread.
+      node("span", { class: "latency-current", text: latest ? latest.median_ms + " ms now · typically " + typical + " ms" : "no readings" }),
+    ),
+    svg,
+    node("div", { class: "latency-scale" },
+      node("span", { text: relativeTime(buckets[0].at) }),
+      node("span", { text: "now" }),
+    ),
+  );
+}
+
+function renderLatencyTable(series) {
+  return node("table", { class: "latency-table" },
+    node("thead", {}, node("tr", {},
+      node("th", { text: "Link" }),
+      node("th", { text: "Now" }),
+      node("th", { text: "Typical" }),
+      node("th", { text: "Best" }),
+      node("th", { text: "Worst" }),
+      node("th", { text: "Failed checks" }),
+    )),
+    node("tbody", {}, series.map((entry) => {
+      const withValues = entry.buckets.filter((b) => b.median_ms > 0);
+      const latest = withValues[withValues.length - 1];
+      const failures = entry.buckets.reduce((total, b) => total + (b.failures || 0), 0);
+      return node("tr", {},
+        node("td", { text: probeLatencyLabel(entry.subject) }),
+        node("td", { text: latest ? latest.median_ms + " ms" : "—" }),
+        node("td", { text: median(withValues.map((b) => b.median_ms)) + " ms" }),
+        node("td", { text: withValues.length ? Math.min(...withValues.map((b) => b.min_ms)) + " ms" : "—" }),
+        node("td", { text: withValues.length ? Math.max(...withValues.map((b) => b.max_ms)) + " ms" : "—" }),
+        node("td", { text: String(failures) }),
+      );
+    })),
+  );
+}
+
+function median(values) {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle] : Math.round((sorted[middle - 1] + sorted[middle]) / 2);
+}
+
 function renderRouterStatus(snapshot) {
   const infra = snapshot.infrastructure || {};
   const probesKnown = hasCollectorData(infra, "probes");
@@ -2506,6 +2669,7 @@ function renderRouterStatus(snapshot) {
   ];
   $("router-status-grid").replaceChildren(...rows.map(([id, label, value, note]) => statusListRow(id, label, value, note)).filter(Boolean));
   renderUniFiDevices(infra);
+  renderLatencyHistory();
   $("router-detail-grid").replaceChildren(...[
     detailSection("router.collectors", "Collectors", [
       detailRow("UniFi", sourceHealth(infra, "unifi")),
@@ -6027,6 +6191,21 @@ $("user-chat-input").addEventListener("keydown", (event) => submitOnEnter(event,
 $("user-notify-admin").addEventListener("click", () => notifyAdmin("A standard user reported a problem."));
 $("user-app-detail-back").addEventListener("click", closeCompactDetail);
 $("user-infra-detail-back").addEventListener("click", closeCompactDetail);
+$("latency-range").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-latency-range]");
+  if (!button) return;
+  state.latencyRange = button.dataset.latencyRange;
+  document.querySelectorAll("#latency-range button").forEach((entry) => {
+    entry.classList.toggle("active", entry === button);
+  });
+  renderLatencyHistory();
+});
+$("latency-table-toggle").addEventListener("click", (event) => {
+  const table = $("latency-table");
+  const showing = table.hidden;
+  table.hidden = !showing;
+  event.currentTarget.setAttribute("aria-pressed", String(showing));
+});
 $("activity-refresh").addEventListener("click", () => {
   loadAudit();
   loadRepairRequests();

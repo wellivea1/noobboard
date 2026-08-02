@@ -50,6 +50,7 @@ type Dependencies struct {
 	Collectors    Collectors
 	Store         db.Store
 	History       db.HistoryStore
+	Metrics       db.MetricStore
 	Users         *users.Registry
 	Audit         *audit.Auditor
 	Notifications *notifications.Manager
@@ -70,6 +71,10 @@ type App struct {
 	historyMu              sync.Mutex
 	probeMu                sync.Mutex
 	probeSamples           map[string][]probeSample
+	probeBucketAt          time.Time
+	probeBucketLatency     map[string][]int64
+	probeBucketFailures    map[string]int
+	lastMetricPrune        time.Time
 	historyRecorder        *statushistory.Recorder
 	lastHistoryPrune       time.Time
 	runtimeIntegrationsSet bool
@@ -110,6 +115,12 @@ const (
 	// week-long baseline would smooth away the outage being looked at.
 	probeWindowSamples      = 120
 	probeBaselineMinSamples = 20
+	// How far back to seed the in-memory window from persisted buckets.
+	probeSeedWindow  = 12 * time.Hour
+	maxLatencyWindow = 14 * 24 * time.Hour
+	// 14 days of 5-minute buckets for one subject, so a full-window request is
+	// never truncated in a way that silently shortens the chart.
+	maxLatencyBuckets = 4200
 
 	agentRepairPerAppCooldown      = time.Minute
 	agentRepairGlobalWindow        = time.Hour
@@ -219,6 +230,7 @@ func (a *App) registerSharedRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/apps/{id}/history", a.requireAuth(a.appHistory))
 	mux.HandleFunc("GET /api/apps/", a.requireAuth(a.appByID))
 	mux.HandleFunc("GET /api/infrastructure/history", a.requireAuth(a.infrastructureHistory))
+	mux.HandleFunc("GET /api/infrastructure/latency", a.requireAuth(a.latencySeries))
 	mux.HandleFunc("POST /api/user/diagnose", a.requireAuth(a.userDiagnose))
 	mux.HandleFunc("POST /api/user/notify-admin", a.requireAuth(a.notifyAdmin))
 	mux.HandleFunc("GET /api/user/repair-requests", a.requireAuth(a.userRepairRequests))
@@ -253,6 +265,9 @@ func (a *App) RunPoller(ctx context.Context, interval time.Duration) {
 	if interval < time.Second {
 		interval = time.Second
 	}
+	// Warm the latency baseline from persisted buckets before the first poll, so
+	// a restart does not leave the latency rules blind while the window refills.
+	a.seedProbeWindowFromMetrics()
 	_, _ = a.refreshSnapshot(ctx, true)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -421,6 +436,7 @@ func (a *App) collectSnapshot(ctx context.Context, processNotifications bool) (m
 	// function of the snapshot.
 	a.annotateRestartLoops(apps)
 	a.annotateProbeBaselines(&infra)
+	a.recordLatencyBucket(infra)
 	snapshot := models.Snapshot{
 		GeneratedAt:          time.Now().UTC(),
 		Infrastructure:       infra,
@@ -6006,4 +6022,131 @@ func (a *App) verifyUniFiRestartOutcome(ctx context.Context, result unifi.Device
 		outcome.Message = result.DeviceName + " is still offline after the restart. A restart does not fix a device that has lost power or its uplink."
 	}
 	return outcome
+}
+
+// --- persisted latency series ------------------------------------------------
+
+// recordLatencyBucket accumulates this poll's probe timings and flushes a
+// completed bucket to the metric store.
+//
+// Flushing on boundary crossing rather than on a timer means a NoobBoard that is
+// stopped mid-bucket loses at most one partial bucket, and one that runs for
+// months writes a predictable number of rows.
+func (a *App) recordLatencyBucket(infra models.InfrastructureStatus) {
+	if a.deps.Metrics == nil || len(infra.ProbeLatencies) == 0 {
+		return
+	}
+	now := time.Now().UTC()
+	bucketAt := db.BucketStart(now)
+
+	a.probeMu.Lock()
+	if a.probeBucketLatency == nil {
+		a.probeBucketLatency = map[string][]int64{}
+		a.probeBucketFailures = map[string]int{}
+		a.probeBucketAt = bucketAt
+	}
+	var completed []models.LatencyBucket
+	if !bucketAt.Equal(a.probeBucketAt) {
+		for subject, latencies := range a.probeBucketLatency {
+			completed = append(completed, db.SummariseLatency(subject, a.probeBucketAt, latencies, a.probeBucketFailures[subject]))
+		}
+		for subject := range a.probeBucketFailures {
+			if _, ok := a.probeBucketLatency[subject]; ok {
+				continue
+			}
+			// A subject that failed every sample in the bucket still deserves a
+			// row: an all-failure gap is the most interesting thing on the chart.
+			completed = append(completed, db.SummariseLatency(subject, a.probeBucketAt, nil, a.probeBucketFailures[subject]))
+		}
+		a.probeBucketLatency = map[string][]int64{}
+		a.probeBucketFailures = map[string]int{}
+		a.probeBucketAt = bucketAt
+	}
+	for _, probe := range infra.ProbeLatencies {
+		if probe.OK {
+			a.probeBucketLatency[probe.Subject] = append(a.probeBucketLatency[probe.Subject], probe.LatencyMS)
+			continue
+		}
+		a.probeBucketFailures[probe.Subject]++
+	}
+	shouldPrune := a.lastMetricPrune.IsZero() || now.Sub(a.lastMetricPrune) >= time.Hour
+	if shouldPrune {
+		a.lastMetricPrune = now
+	}
+	a.probeMu.Unlock()
+
+	if len(completed) > 0 {
+		_ = a.deps.Metrics.AppendLatency(completed)
+	}
+	if shouldPrune {
+		_ = a.deps.Metrics.PruneLatency(a.configSnapshot().Retention)
+	}
+}
+
+// seedProbeWindowFromMetrics warms the in-memory baseline window from persisted
+// buckets at startup.
+//
+// Without this a restart left every latency rule blind for ~10 minutes while the
+// window refilled — the limitation recorded when the window was added. A bucket
+// median is a reasonable stand-in for the samples it summarises, which is all the
+// baseline needs.
+func (a *App) seedProbeWindowFromMetrics() {
+	if a.deps.Metrics == nil {
+		return
+	}
+	buckets, err := a.deps.Metrics.QueryLatency(db.MetricFilter{Since: time.Now().UTC().Add(-probeSeedWindow)})
+	if err != nil || len(buckets) == 0 {
+		return
+	}
+	a.probeMu.Lock()
+	defer a.probeMu.Unlock()
+	if a.probeSamples == nil {
+		a.probeSamples = map[string][]probeSample{}
+	}
+	for _, bucket := range buckets {
+		if bucket.Samples == 0 {
+			continue
+		}
+		window := a.probeSamples[bucket.Subject]
+		if bucket.MedianMS > 0 {
+			window = append(window, probeSample{latencyMS: bucket.MedianMS, ok: true})
+		}
+		if bucket.Failures > 0 {
+			window = append(window, probeSample{ok: false})
+		}
+		if len(window) > probeWindowSamples {
+			window = window[len(window)-probeWindowSamples:]
+		}
+		a.probeSamples[bucket.Subject] = window
+	}
+}
+
+func (a *App) latencySeries(w http.ResponseWriter, r *http.Request) {
+	if a.deps.Metrics == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("latency history is not configured"))
+		return
+	}
+	subject := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("subject")))
+	window := parseHistoryWindow(r.URL.Query().Get("window"))
+	if window > maxLatencyWindow {
+		window = maxLatencyWindow
+	}
+	buckets, err := a.deps.Metrics.QueryLatency(db.MetricFilter{
+		Subject: subject,
+		Since:   time.Now().UTC().Add(-window),
+		Limit:   maxLatencyBuckets,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if buckets == nil {
+		buckets = []models.LatencyBucket{}
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"subject":        subject,
+		"window_seconds": int64(window.Seconds()),
+		"bucket_seconds": int64(db.LatencyBucketWindow.Seconds()),
+		"buckets":        buckets,
+	})
 }

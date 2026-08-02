@@ -189,6 +189,10 @@ func buildApp(cfg config.Config) (*server.App, error) {
 	if err != nil {
 		return nil, err
 	}
+	metricStore, err := db.OpenFileMetricStore(db.MetricsPathForDatabase(cfg.Database.Path))
+	if err != nil {
+		return nil, err
+	}
 	historyStore, err := db.OpenFileHistoryStore(db.HistoryPathForDatabase(cfg.Database.Path), cfg.Retention.MaxStatusEventsPerSubject)
 	if err != nil {
 		return nil, err
@@ -230,6 +234,7 @@ func buildApp(cfg config.Config) (*server.App, error) {
 		Collectors:    collectors,
 		Store:         store,
 		History:       historyStore,
+		Metrics:       metricStore,
 		Users:         registry,
 		Audit:         auditor,
 		Notifications: notifier,

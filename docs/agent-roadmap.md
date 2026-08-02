@@ -485,10 +485,11 @@ model diagnoses without access to logs or history.
   ≥20% failure rate while the probe is currently up, which is the intermittent
   case a snapshot can never see. A missing baseline suppresses the rule rather
   than firing it.
-  **Known limitation:** the window is in memory and resets on restart, so there
-  is no baseline for the first ~10 minutes after one. A persisted metric series
-  would fix that and enable the multi-day baselines the review originally
-  imagined; not built here.
+  **Multi-day history (follow-up, done).** Probe timings are downsampled into
+  5-minute buckets and persisted to `latency.jsonl` with 14-day retention, and
+  the in-memory window is seeded from them at startup — so the restart blind
+  spot that shipped with E4 is gone. `GET /api/infrastructure/latency` serves
+  the series and the Router page charts it.
 - **E5 — Monitor the monitor.** Nothing checks NoobBoard's own host: free disk
   on the unbounded `history.jsonl` path, last successful poll age, service
   state. A stalled poller currently looks identical to "everything is fine".

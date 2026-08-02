@@ -160,6 +160,7 @@ type RetentionConfig struct {
 	MaxIncidentAge            time.Duration
 	MaxStatusEventAge         time.Duration
 	MaxStatusEventsPerSubject int
+	MaxLatencyBucketAge       time.Duration
 }
 
 func Load(path string) (Config, error) {
@@ -258,6 +259,10 @@ func Defaults() Config {
 			MaxLogLinesPerSource:      200,
 			MaxIncidentAge:            30 * 24 * time.Hour,
 			MaxStatusEventAge:         90 * 24 * time.Hour,
+			// A fortnight of 5-minute buckets is ~4k rows per probe: enough to
+			// see a weekly pattern and a bad night, small enough to load and
+			// chart without paging.
+			MaxLatencyBucketAge: 14 * 24 * time.Hour,
 			MaxStatusEventsPerSubject: 500,
 		},
 	}

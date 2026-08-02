@@ -217,6 +217,23 @@
           </div>
           <div id="unifi-devices" class="unifi-devices"></div>
         </section>
+        <section id="latency-panel" class="panel" hidden>
+          <div class="section-head">
+            <div class="section-head-copy">
+              <h2>Response time history</h2>
+            </div>
+            <div class="toolbar-end">
+              <div id="latency-range" class="segmented" aria-label="History range">
+                <button type="button" data-latency-range="24h" class="active">24 hours</button>
+                <button type="button" data-latency-range="7d">7 days</button>
+                <button type="button" data-latency-range="14d">14 days</button>
+              </div>
+              <button id="latency-table-toggle" type="button" class="command" data-glyph="i" aria-pressed="false">Table</button>
+            </div>
+          </div>
+          <div id="latency-charts" class="latency-charts"></div>
+          <div id="latency-table" class="latency-table-wrap" hidden></div>
+        </section>
         <div id="router-detail-grid" class="detail-grid"></div>
       </section>
 

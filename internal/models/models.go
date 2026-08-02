@@ -253,6 +253,26 @@ type ProbeLatency struct {
 	FailureRate float64 `json:"failure_rate,omitempty"`
 }
 
+// LatencyBucket is one downsampled window of probe timings for one subject.
+//
+// Raw samples are not persisted: at a 30s poll that is ~11.5k rows per day per
+// probe, which is both a large file and a graph nobody can render. Bucketing to
+// a fixed window keeps a fortnight of history in a few thousand rows and is the
+// shape a multi-day chart wants anyway.
+//
+// Min and max are kept alongside the median because a spike that lasted one
+// poll disappears from a median and is exactly what someone investigating
+// "it was slow last night" is looking for.
+type LatencyBucket struct {
+	Subject  string    `json:"subject"`
+	At       time.Time `json:"at"`
+	MinMS    int64     `json:"min_ms"`
+	MedianMS int64     `json:"median_ms"`
+	MaxMS    int64     `json:"max_ms"`
+	Samples  int       `json:"samples"`
+	Failures int       `json:"failures"`
+}
+
 type SourceHealth struct {
 	Unraid string `json:"unraid"`
 	Docker string `json:"docker"`
