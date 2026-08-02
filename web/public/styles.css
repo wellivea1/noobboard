@@ -2432,6 +2432,37 @@ button.command.monitor-hide {
   display: grid;
 }
 
+/* Offline UniFi devices with a restart affordance. Same row treatment as every
+   other list: hairline between peers, control on the right edge. */
+.unifi-devices {
+  display: grid;
+}
+
+.unifi-device-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--control-height);
+  padding: var(--pad-row) 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.unifi-device-row:last-child {
+  border-bottom: 0;
+}
+
+.unifi-device-main {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.unifi-device-main span {
+  font-size: var(--text-meta);
+}
+
 /* The time column is fixed, not max-content: sized to its content it is 34px
    wide on a row from today and 76px on an older one, which shifts every
    indicator and title right by a different amount and destroys the column the

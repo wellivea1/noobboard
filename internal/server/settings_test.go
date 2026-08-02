@@ -4398,6 +4398,18 @@ func (failingUniFiCollector) Status(context.Context) (models.InfrastructureStatu
 	return models.InfrastructureStatus{}, errors.New("unifi unavailable")
 }
 
+func (failingUniFiCollector) RestartableDevices(context.Context) ([]unifi.RestartableDevice, error) {
+	return nil, errors.New("unifi unavailable")
+}
+
+func (failingUniFiCollector) RestartDevice(context.Context, string) (unifi.DeviceControlResult, error) {
+	return unifi.DeviceControlResult{}, errors.New("unifi unavailable")
+}
+
+func (failingUniFiCollector) DeviceOnline(context.Context, string) (bool, error) {
+	return false, errors.New("unifi unavailable")
+}
+
 type recordingLLMClient struct {
 	redactor       *privacy.Redactor
 	diagnosis      llm.Diagnosis

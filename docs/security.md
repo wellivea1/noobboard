@@ -42,6 +42,37 @@ Current controls:
 - General-user diagnosis auto-fix is a permanent saved setting plus a per-request chat toggle, not a transient gate. It requires `auto_repair:true`, `app_catalog.general_user_auto_repair_enabled=true`, and the same standard-user app-control global/per-app opt-in, visibility, blacklist, reviewer, and rate-limit gates. The model still cannot choose arbitrary commands; it can only return the fixed app-fix recommendation and target hint. The server chooses `start` for an opted-in stopped app and `restart` for an opted-in non-online running app; it never selects `stop` automatically.
 - The OpenAI ChatGPT connector login (browser and headless/device-code) uses OAuth 2.0 with PKCE (S256) and a single-use, time-limited `state`. The auth routes are admin-only and CSRF-protected. The browser-flow callback server binds to loopback (`localhost:1455`) only and is offered only when the admin page is opened on the host; LAN devices use the device-code flow. The OAuth issuer is a fixed endpoint, not a user-supplied URL.
 - API keys and ChatGPT tokens are write-only in the settings API: responses report only whether a value is set, never the value. They are never logged and are covered by the redaction blacklist (`*_KEY`, `*_TOKEN`, `AUTHORIZATION`). They are persisted in plaintext in the git-ignored runtime settings store, so treat that store (and its host) as sensitive.
+- UniFi device restart is the first mutating **network** action, and it adds a
+  write surface rather than a trust level: admin-only, CSRF and same-origin
+  checked, on the shared repair rate limit, audited before and after, and
+  verified by re-polling.
+
+  Its safety rule is narrow and enforced in the adapter, so the list the UI
+  offers and the check the mutation runs cannot drift apart. A device is
+  eligible only when it is **reported offline** and is **not a gateway**:
+
+  - *Offline only.* Restarting a device that is still passing traffic can drop
+    the NAS, the dashboard host, or the admin's own connection. A device UniFi
+    already reports offline is not carrying traffic, so a restart cannot make
+    connectivity worse than it already is.
+  - *Never a gateway.* A gateway reported offline may simply be unreachable from
+    the API while still routing. Restarting it would take down the WAN for
+    everyone, including whoever is reading the dashboard.
+
+  The eligibility check is re-run against live data inside `RestartDevice`, not
+  trusted from the caller: the list the admin saw may be seconds old, and a
+  device that came back online in the meantime must not be restarted.
+
+  Verification treats an unreachable UniFi as **unknown**, never as success — a
+  restart can drop the API path itself — and reports honestly when a device is
+  still offline afterwards, because a restart does not fix a device that has
+  lost power or its uplink.
+
+  **PoE port power-cycling is deliberately not implemented.** Deciding it is
+  safe requires knowing which switch port the NAS and the dashboard host are on,
+  and the device payload this adapter fetches carries no port topology. Shipping
+  it without that could cut the NAS or the dashboard host off the network. It
+  needs the read side extended first.
 - The login form does not ship a default password value in the HTML.
 
 Development bootstrap users:

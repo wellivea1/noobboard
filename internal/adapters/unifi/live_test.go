@@ -2,6 +2,7 @@ package unifi
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -350,4 +351,119 @@ func containsString(values []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+// deviceActionServer serves a site with one online gateway, one offline gateway,
+// one offline access point and one online access point, and records any action
+// POST it receives.
+func deviceActionServer(t *testing.T, onRestart func(deviceID string)) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/proxy/network/integration/v1/info":
+			_, _ = w.Write([]byte(`{"application":"network"}`))
+		case r.URL.Path == "/proxy/network/integration/v1/sites":
+			_, _ = w.Write([]byte(`{"data":[{"id":"site-1","internalReference":"default","name":"Home"}]}`))
+		case r.URL.Path == "/proxy/network/integration/v1/sites/site-1/devices":
+			_, _ = w.Write([]byte(`{"data":[
+				{"id":"gw-online","name":"Dream Machine","model":"UDM","state":"ONLINE","features":["gateway"]},
+				{"id":"gw-offline","name":"Backup Gateway","model":"UXG","state":"OFFLINE","features":["gateway"]},
+				{"id":"ap-offline","name":"Office AP","model":"U7","state":"OFFLINE","features":["wifi"]},
+				{"id":"ap-online","name":"Lounge AP","model":"U7","state":"ONLINE","features":["wifi"]}
+			]}`))
+		case strings.HasSuffix(r.URL.Path, "/actions") && r.Method == http.MethodPost:
+			var body map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if body["action"] != "RESTART" {
+				t.Fatalf("action body = %#v, want RESTART", body)
+			}
+			parts := strings.Split(strings.TrimSuffix(r.URL.Path, "/actions"), "/")
+			if onRestart != nil {
+				onRestart(parts[len(parts)-1])
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+}
+
+func TestRestartableDevicesOnlyOffersOfflineNonGateways(t *testing.T) {
+	// The safety rule in one test. Restarting a device that is still passing
+	// traffic can drop the NAS, the dashboard host or the admin's own
+	// connection; restarting a gateway takes down the WAN for everyone. Only a
+	// device that is already offline and is not a gateway is eligible.
+	server := deviceActionServer(t, nil)
+	defer server.Close()
+	client := NewLiveClient(server.URL, "test-key", "default", false)
+
+	devices, err := client.RestartableDevices(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(devices) != 1 {
+		t.Fatalf("restartable devices = %#v, want exactly the offline access point", devices)
+	}
+	if devices[0].ID != "ap-offline" {
+		t.Fatalf("restartable device = %q, want ap-offline", devices[0].ID)
+	}
+}
+
+func TestRestartDeviceRefusesEverythingOutsideTheRule(t *testing.T) {
+	var restarted []string
+	server := deviceActionServer(t, func(id string) { restarted = append(restarted, id) })
+	defer server.Close()
+	client := NewLiveClient(server.URL, "test-key", "default", false)
+
+	for _, id := range []string{"gw-online", "gw-offline", "ap-online", "does-not-exist"} {
+		if _, err := client.RestartDevice(t.Context(), id); !errors.Is(err, ErrDeviceNotRestartable) {
+			t.Fatalf("RestartDevice(%q) error = %v, want ErrDeviceNotRestartable", id, err)
+		}
+	}
+	if len(restarted) != 0 {
+		t.Fatalf("refused devices were still sent an action: %#v", restarted)
+	}
+}
+
+func TestRestartDeviceSendsRestartForAnEligibleDevice(t *testing.T) {
+	var restarted []string
+	server := deviceActionServer(t, func(id string) { restarted = append(restarted, id) })
+	defer server.Close()
+	client := NewLiveClient(server.URL, "test-key", "default", false)
+
+	result, err := client.RestartDevice(t.Context(), "ap-offline")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Accepted || result.DeviceID != "ap-offline" || result.DeviceName != "Office AP" {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(restarted) != 1 || restarted[0] != "ap-offline" {
+		t.Fatalf("restarted = %#v, want one call for ap-offline", restarted)
+	}
+}
+
+func TestDeviceOnlineDistinguishesOfflineFromUnreachable(t *testing.T) {
+	// Verification must never read an unreachable UniFi as a healthy device, so
+	// the bool is only meaningful when the error is nil.
+	server := deviceActionServer(t, nil)
+	client := NewLiveClient(server.URL, "test-key", "default", false)
+
+	online, err := client.DeviceOnline(t.Context(), "ap-online")
+	if err != nil || !online {
+		t.Fatalf("online device = %t/%v, want true/nil", online, err)
+	}
+	online, err = client.DeviceOnline(t.Context(), "ap-offline")
+	if err != nil || online {
+		t.Fatalf("offline device = %t/%v, want false/nil", online, err)
+	}
+
+	server.Close()
+	if _, err = client.DeviceOnline(t.Context(), "ap-offline"); err == nil {
+		t.Fatal("an unreachable UniFi returned no error; verification would read it as a healthy device")
+	}
 }

@@ -210,6 +210,13 @@
           <button type="button" class="command" data-glyph="?" data-tab-jump="diagnostics">Diagnose</button>
         </div>
         <div id="router-status-grid" class="status-grid"></div>
+        <section id="unifi-devices-panel" class="panel" hidden>
+          <div class="section-head">
+            <h2>Offline devices</h2>
+            <span id="unifi-devices-note" class="muted">Only offline, non-gateway devices can be restarted.</span>
+          </div>
+          <div id="unifi-devices" class="unifi-devices"></div>
+        </section>
         <div id="router-detail-grid" class="detail-grid"></div>
       </section>
 

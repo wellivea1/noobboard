@@ -27,7 +27,7 @@ single most useful framing for what to build next — not "add features" but
 | Docker containers | ✅ state, health, image, logs | ✅ rules + LLM tool | ✅ start / stop / restart | ✅ re-checks after |
 | Unraid array | ✅ state, capacity, disks, parity | ✅ 4 rules | ⚠️ start array only | ✅ re-checks after |
 | Unraid host (CPU/RAM/VM/shares) | ✅ collected | ❌ **no rule reads it** | ❌ | — |
-| UniFi network | ✅ WAN, devices, clients, link speed | ✅ 4 rules | ❌ **read-only adapter** | — |
+| UniFi network | ✅ WAN, devices, clients, link speed | ✅ 4 rules | ⚠️ restart offline devices (E3) | ✅ re-polls after |
 | Internet / DNS / router | ⚠️ binary up/down only | ✅ 3 rules | — (correctly upstream) | — |
 | NoobBoard's own host | ❌ **nothing** | ❌ | ❌ | — |
 
