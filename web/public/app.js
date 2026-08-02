@@ -2387,6 +2387,65 @@ function renderServerHealth(snapshot) {
   ].filter(Boolean));
 }
 
+/* Restartable UniFi devices.
+
+   Only fetched when UniFi is actually reporting an offline device, so the
+   normal case costs no extra request. The list comes from the server rather
+   than being derived here, so the affordance the admin sees and the check the
+   mutation runs are the same rule. */
+async function renderUniFiDevices(infra) {
+  const panel = $("unifi-devices-panel");
+  if (!panel) return;
+  if (!isAdmin() || !(infra.unifi_offline_device_count > 0)) {
+    panel.hidden = true;
+    return;
+  }
+  try {
+    const data = await api("/api/admin/unifi/devices/restartable");
+    const devices = data.devices || [];
+    panel.hidden = devices.length === 0;
+    $("unifi-devices").replaceChildren(...devices.map(renderUniFiDeviceRow));
+  } catch (error) {
+    panel.hidden = false;
+    $("unifi-devices").replaceChildren(node("div", { class: "empty", text: error.message }));
+  }
+}
+
+function renderUniFiDeviceRow(device) {
+  return node("article", { class: "unifi-device-row" },
+    statusIndicator("offline", "offline", "status-dot-only"),
+    node("div", { class: "unifi-device-main" },
+      node("strong", { text: device.name || device.id }),
+      node("span", { class: "muted", text: [device.model, device.state].filter(Boolean).join(" · ") }),
+    ),
+    node("button", {
+      type: "button",
+      class: "command",
+      "data-glyph": "r",
+      onclick: (event) => restartUniFiDevice(device, event.currentTarget),
+      text: "Restart",
+    }),
+  );
+}
+
+async function restartUniFiDevice(device, button) {
+  const label = device.name || device.id;
+  if (!confirm(`Restart ${label}? It will drop off the network for a minute or two.`)) return;
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = "Restarting";
+  try {
+    const data = await api(`/api/admin/unifi/devices/${encodeURIComponent(device.id)}/restart`, { method: "POST" });
+    const outcome = data.outcome || {};
+    showNotice(outcome.message || `${label} restart sent.`, outcome.recovered ? "success" : "info");
+    await refresh();
+  } catch (error) {
+    showNotice(error.message, "error");
+    button.disabled = false;
+    button.textContent = original;
+  }
+}
+
 function renderRouterStatus(snapshot) {
   const infra = snapshot.infrastructure || {};
   const probesKnown = hasCollectorData(infra, "probes");
@@ -2399,6 +2458,7 @@ function renderRouterStatus(snapshot) {
     ["router.nas-link-status", "NAS Link", linkStatus(infra), linkNote(infra)],
   ];
   $("router-status-grid").replaceChildren(...rows.map(([id, label, value, note]) => statusListRow(id, label, value, note)).filter(Boolean));
+  renderUniFiDevices(infra);
   $("router-detail-grid").replaceChildren(...[
     detailSection("router.collectors", "Collectors", [
       detailRow("UniFi", sourceHealth(infra, "unifi")),

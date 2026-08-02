@@ -1,6 +1,7 @@
 package unifi
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -605,4 +606,160 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// --- device actions ----------------------------------------------------------
+
+// DeviceControlResult reports what the UniFi API accepted. It deliberately does
+// not claim the device recovered — that is the verifier's job, after a re-poll.
+type DeviceControlResult struct {
+	DeviceID   string `json:"device_id"`
+	DeviceName string `json:"device_name"`
+	Action     string `json:"action"`
+	Accepted   bool   `json:"accepted"`
+}
+
+// RestartableDevice is a device the safety rule permits restarting, resolved
+// from the same list the status poll already fetches.
+type RestartableDevice struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Model   string `json:"model"`
+	State   string `json:"state"`
+	Gateway bool   `json:"gateway"`
+}
+
+// ErrDeviceNotRestartable is returned when a device exists but the safety rule
+// refuses it. Separate from "not found" so the caller can explain which it was.
+var ErrDeviceNotRestartable = errors.New("unifi device is not eligible for restart")
+
+// RestartableDevices lists devices the safety rule allows restarting.
+//
+// The rule is deliberately narrow: a device must be reported OFFLINE and must
+// not be a gateway.
+//
+//   - Offline only. Restarting a device that is currently passing traffic can
+//     drop the NAS, the dashboard host, or the admin's own connection. A device
+//     UniFi already reports as offline is not carrying traffic, so a restart
+//     cannot make connectivity worse than it already is. This also matches the
+//     condition NoobBoard actually detects (unifi_devices_offline).
+//   - Never a gateway. A gateway reported offline may simply be unreachable from
+//     the API while still routing; restarting it would take down the WAN for
+//     everyone, including whoever is reading the dashboard.
+//
+// Port-level PoE power-cycling is intentionally absent: deciding it is safe
+// requires knowing which port the NAS and the dashboard host are on, and the
+// device payload this adapter fetches does not carry port topology.
+func (c LiveClient) RestartableDevices(ctx context.Context) ([]RestartableDevice, error) {
+	if c.baseURL == "" || c.apiKey == "" {
+		return nil, errors.New("unifi base URL and API key are required")
+	}
+	site, warnings := c.site(ctx)
+	if site.ID == "" {
+		return nil, fmt.Errorf("unifi site could not be resolved: %s", strings.Join(warnings, "; "))
+	}
+	devices, _, err := c.devices(ctx, site.ID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]RestartableDevice, 0, len(devices))
+	for _, device := range devices {
+		if device.ID == "" || isUniFiOnline(device.State) || isGatewayDevice(device) {
+			continue
+		}
+		out = append(out, RestartableDevice{
+			ID:      device.ID,
+			Name:    firstNonEmpty(device.Name, device.Model, device.ID),
+			Model:   device.Model,
+			State:   device.State,
+			Gateway: false,
+		})
+	}
+	return out, nil
+}
+
+// RestartDevice restarts one UniFi device after re-checking the safety rule
+// against live data. The re-check is not redundant with the caller's: the
+// device list the caller saw may be seconds old, and a device that has come back
+// online in the meantime must not be restarted.
+func (c LiveClient) RestartDevice(ctx context.Context, deviceID string) (DeviceControlResult, error) {
+	deviceID = strings.TrimSpace(deviceID)
+	if deviceID == "" {
+		return DeviceControlResult{}, errors.New("unifi device id is required")
+	}
+	if c.baseURL == "" || c.apiKey == "" {
+		return DeviceControlResult{}, errors.New("unifi base URL and API key are required")
+	}
+	site, warnings := c.site(ctx)
+	if site.ID == "" {
+		return DeviceControlResult{}, fmt.Errorf("unifi site could not be resolved: %s", strings.Join(warnings, "; "))
+	}
+	eligible, err := c.RestartableDevices(ctx)
+	if err != nil {
+		return DeviceControlResult{}, err
+	}
+	var target RestartableDevice
+	for _, device := range eligible {
+		if strings.EqualFold(device.ID, deviceID) {
+			target = device
+			break
+		}
+	}
+	if target.ID == "" {
+		return DeviceControlResult{}, ErrDeviceNotRestartable
+	}
+	path := fmt.Sprintf("/proxy/network/integration/v1/sites/%s/devices/%s/actions", url.PathEscape(site.ID), url.PathEscape(target.ID))
+	if err := c.post(ctx, path, map[string]string{"action": "RESTART"}); err != nil {
+		return DeviceControlResult{}, err
+	}
+	return DeviceControlResult{
+		DeviceID:   target.ID,
+		DeviceName: target.Name,
+		Action:     "restart",
+		Accepted:   true,
+	}, nil
+}
+
+// DeviceOnline reports whether one device is currently online, for verification
+// after a restart. The bool is only meaningful when err is nil: a UniFi that has
+// become unreachable must not be read as "the device is fine".
+func (c LiveClient) DeviceOnline(ctx context.Context, deviceID string) (bool, error) {
+	site, warnings := c.site(ctx)
+	if site.ID == "" {
+		return false, fmt.Errorf("unifi site could not be resolved: %s", strings.Join(warnings, "; "))
+	}
+	devices, _, err := c.devices(ctx, site.ID)
+	if err != nil {
+		return false, err
+	}
+	for _, device := range devices {
+		if strings.EqualFold(device.ID, deviceID) {
+			return isUniFiOnline(device.State), nil
+		}
+	}
+	return false, fmt.Errorf("unifi device %s was not returned by the site device list", deviceID)
+}
+
+func (c LiveClient) post(ctx context.Context, path string, payload interface{}) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-API-KEY", c.apiKey)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return fmt.Errorf("unifi api returned %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+	}
+	return nil
 }

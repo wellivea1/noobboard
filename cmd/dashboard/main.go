@@ -305,6 +305,18 @@ func (c unavailableUniFiClient) Status(context.Context) (models.InfrastructureSt
 	return models.InfrastructureStatus{}, errors.New(string(c))
 }
 
+func (c unavailableUniFiClient) RestartableDevices(context.Context) ([]unifi.RestartableDevice, error) {
+	return nil, errors.New(string(c))
+}
+
+func (c unavailableUniFiClient) RestartDevice(context.Context, string) (unifi.DeviceControlResult, error) {
+	return unifi.DeviceControlResult{}, errors.New(string(c))
+}
+
+func (c unavailableUniFiClient) DeviceOnline(context.Context, string) (bool, error) {
+	return false, errors.New(string(c))
+}
+
 type unavailableProbeClient string
 
 func (c unavailableProbeClient) Status(context.Context) (models.InfrastructureStatus, error) {
