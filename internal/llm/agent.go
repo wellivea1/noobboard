@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/wellivea1/noobboard/internal/models"
@@ -16,6 +17,18 @@ const (
 	agentToolServerStatus  = "noobboard_server_status"
 	agentToolNetworkStatus = "noobboard_network_status"
 	agentToolAppStatus     = "noobboard_app_status"
+	agentToolAppLogs       = "noobboard_app_logs"
+	agentToolAppHistory    = "noobboard_app_history"
+)
+
+// Ceiling on log lines returned to the model, applied regardless of what it
+// asks for. Logs are the most likely place for a credential to appear, so the
+// budget is deliberately small: enough to see why something died, not enough to
+// stream a container's output into a provider.
+const (
+	agentLogLineCap     = 120
+	agentLogLineDefault = 60
+	agentHistoryCap     = 40
 )
 
 type agentTool struct {
@@ -157,11 +170,150 @@ func agentToolsForRequest(req Request, redactor *privacy.Redactor) map[string]ag
 					Message:   app.CurrentProbeResult.Message,
 					LatencyMS: app.CurrentProbeResult.LatencyMS,
 				},
+				"exit": exitReport(app),
 				"data_source": app.DataSource,
 			}, nil
 		},
 	})
+	if req.AppLogs != nil {
+		add(agentTool{
+			Name:        agentToolAppLogs,
+			Description: "Read the most recent redacted log lines for one visible app, to find out why it failed. This is read-only and returns at most " + fmt.Sprint(agentLogLineCap) + " lines.",
+			Parameters: map[string]interface{}{
+				"type":                 "object",
+				"additionalProperties": false,
+				"properties": map[string]interface{}{
+					"app_id_or_name": map[string]interface{}{
+						"type":        "string",
+						"description": "The app id, display name, or container name to read logs for.",
+					},
+					"limit": map[string]interface{}{
+						"type":        "integer",
+						"description": "How many recent lines to return, 1 to " + fmt.Sprint(agentLogLineCap) + ".",
+					},
+				},
+				"required": []string{"app_id_or_name", "limit"},
+			},
+			Execute: func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+				app, snapshotErr, ok := resolveAgentApp(ctx, statusSnapshot, args)
+				if snapshotErr != nil {
+					return nil, snapshotErr
+				}
+				if !ok {
+					return map[string]interface{}{"found": false, "query": agentAppQuery(args)}, nil
+				}
+				lines, err := req.AppLogs(ctx, app.AppID, agentLogLimit(args["limit"]))
+				if err != nil {
+					return nil, err
+				}
+				return map[string]interface{}{
+					"found":          true,
+					"app_id":         app.AppID,
+					"container_name": app.ContainerName,
+					"line_count":     len(lines),
+					"logs":           lines,
+					"note":           "Lines are redacted before they reach this tool. Never repeat a value that looks like a secret even if one appears here.",
+				}, nil
+			},
+		})
+	}
+	if req.AppHistory != nil {
+		add(agentTool{
+			Name:        agentToolAppHistory,
+			Description: "Read recent status transitions for one visible app, to tell a first-time failure apart from a repeating one. This is read-only.",
+			Parameters: map[string]interface{}{
+				"type":                 "object",
+				"additionalProperties": false,
+				"properties": map[string]interface{}{
+					"app_id_or_name": map[string]interface{}{
+						"type":        "string",
+						"description": "The app id, display name, or container name to read history for.",
+					},
+				},
+				"required": []string{"app_id_or_name"},
+			},
+			Execute: func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+				app, snapshotErr, ok := resolveAgentApp(ctx, statusSnapshot, args)
+				if snapshotErr != nil {
+					return nil, snapshotErr
+				}
+				if !ok {
+					return map[string]interface{}{"found": false, "query": agentAppQuery(args)}, nil
+				}
+				history, err := req.AppHistory(ctx, app.AppID)
+				if err != nil {
+					return nil, err
+				}
+				events := history.Events
+				if len(events) > agentHistoryCap {
+					events = events[len(events)-agentHistoryCap:]
+				}
+				return map[string]interface{}{
+					"found":           true,
+					"app_id":          app.AppID,
+					"display_name":    history.DisplayName,
+					"current_status":  history.Current,
+					"uptime_pct_24h":  history.UptimePct24h,
+					"event_count":     len(events),
+					"events":          events,
+					"note":            "Repeated offline/online transitions in a short window mean a restart loop. Restarting again will not fix that; say so instead of recommending it.",
+				}, nil
+			},
+		})
+	}
 	return tools
+}
+
+// Resolution always goes through the role-filtered snapshot, so a tool can only
+// ever name an app the requesting role is allowed to see.
+func resolveAgentApp(ctx context.Context, statusSnapshot func(context.Context) (models.Snapshot, error), args map[string]interface{}) (models.AppStatus, error, bool) {
+	name := agentAppQuery(args)
+	if name == "" {
+		return models.AppStatus{}, errors.New("app_id_or_name is required"), false
+	}
+	snapshot, err := statusSnapshot(ctx)
+	if err != nil {
+		return models.AppStatus{}, err, false
+	}
+	app, ok := findAgentApp(snapshot.Apps, name)
+	return app, nil, ok
+}
+
+func agentAppQuery(args map[string]interface{}) string {
+	return strings.TrimSpace(fmt.Sprint(args["app_id_or_name"]))
+}
+
+// The model's requested limit is a hint. The cap is not.
+func agentLogLimit(raw interface{}) int {
+	limit := agentLogLineDefault
+	switch value := raw.(type) {
+	case float64:
+		limit = int(value)
+	case int:
+		limit = value
+	case string:
+		if parsed, err := strconv.Atoi(strings.TrimSpace(value)); err == nil {
+			limit = parsed
+		}
+	}
+	if limit < 1 {
+		return 1
+	}
+	if limit > agentLogLineCap {
+		return agentLogLineCap
+	}
+	return limit
+}
+
+func exitReport(app models.AppStatus) map[string]interface{} {
+	if app.DockerExitCode == nil {
+		return nil
+	}
+	return map[string]interface{}{
+		"code":   *app.DockerExitCode,
+		"reason": app.DockerExitReason,
+		"detail": models.ExitDetail(app.DockerExitCode, app.DockerExitReason),
+	}
 }
 
 func allowedAgentTools(policy models.LLMPolicy) map[string]bool {
@@ -189,6 +341,8 @@ func allReadOnlyAgentToolNames() []string {
 		agentToolServerStatus,
 		agentToolNetworkStatus,
 		agentToolAppStatus,
+		agentToolAppLogs,
+		agentToolAppHistory,
 	}
 }
 

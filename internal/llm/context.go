@@ -29,7 +29,18 @@ type Request struct {
 	Question     string
 	ActorID      string
 	LiveSnapshot func(context.Context) (models.Snapshot, error)
-	ToolAudit    func(name string, ok bool, err string)
+	// AppLogs and AppHistory are the two things a human opens first when an app
+	// dies, and the model had neither. Both take an app id that the caller has
+	// already resolved against the role-filtered snapshot, so an app the role
+	// cannot see can never be reached through them. Both are nil unless the
+	// server wires them, and a nil fetcher means the tool is not offered rather
+	// than failing at call time.
+	//
+	// AppLogs must return redacted lines: the redaction lives on the server side
+	// where the Redactor does, and it is fail-closed there.
+	AppLogs    func(ctx context.Context, appID string, limit int) ([]models.LogLine, error)
+	AppHistory func(ctx context.Context, appID string) (models.StatusHistory, error)
+	ToolAudit  func(name string, ok bool, err string)
 }
 
 type Client interface {

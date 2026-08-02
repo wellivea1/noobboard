@@ -491,3 +491,74 @@ func (c stubDockerClient) ControlContainer(context.Context, models.AppStatus, Co
 func (c stubDockerClient) Logs(context.Context, models.AppStatus, LogOptions) ([]models.LogLine, error) {
 	return nil, c.err
 }
+
+func TestDockerExitParsesCodeAndReason(t *testing.T) {
+	// The code is already in the status string; before this it was discarded and
+	// an OOM kill, a deliberate stop and a crash all read as plain "offline".
+	tests := []struct {
+		name       string
+		status     string
+		wantCode   int
+		wantReason models.DockerExit
+		wantNil    bool
+	}{
+		{name: "clean stop", status: "Exited (0) 5 minutes ago", wantCode: 0, wantReason: models.ExitClean},
+		{name: "sigterm", status: "Exited (143) 2 hours ago", wantCode: 143, wantReason: models.ExitStopped},
+		{name: "sigkill", status: "Exited (137) 12 seconds ago", wantCode: 137, wantReason: models.ExitKilled},
+		{name: "application error", status: "Exited (1) 3 minutes ago", wantCode: 1, wantReason: models.ExitError},
+		{name: "case insensitive", status: "exited (2)", wantCode: 2, wantReason: models.ExitError},
+		{name: "running has no exit", status: "Up 3 hours (healthy)", wantNil: true},
+		{name: "empty", status: "", wantNil: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			code, reason := dockerExit(tt.status)
+			if tt.wantNil {
+				if code != nil || reason != "" {
+					t.Fatalf("dockerExit(%q) = %v/%q, want no exit detail", tt.status, code, reason)
+				}
+				return
+			}
+			if code == nil || *code != tt.wantCode || reason != tt.wantReason {
+				t.Fatalf("dockerExit(%q) = %v/%q, want %d/%q", tt.status, code, reason, tt.wantCode, tt.wantReason)
+			}
+		})
+	}
+}
+
+func TestExitDetailDoesNotAssertOOMAsFact(t *testing.T) {
+	// 137 is SIGKILL. The OOM killer is the usual cause on a home server, but a
+	// stop that timed out looks identical, so the wording must stay hedged —
+	// this is what the model reads.
+	code := 137
+	detail := models.ExitDetail(&code, models.ExitKilled)
+	if !strings.Contains(detail, "137") {
+		t.Fatalf("exit detail %q does not name the code", detail)
+	}
+	if !strings.Contains(detail, "commonly") {
+		t.Fatalf("exit detail %q states out-of-memory as fact; it must stay hedged", detail)
+	}
+}
+
+func TestAdminSummaryCarriesExitDetail(t *testing.T) {
+	// The admin summary is what reaches LLM context, so the interpretation has to
+	// survive into the sentence and not stop at a struct field.
+	apps := appsFromContainers([]dockerContainer{{
+		ID:     "abc",
+		Names:  stringList{"emby"},
+		State:  "exited",
+		Status: "Exited (137) 1 minute ago",
+	}})
+	if len(apps) != 1 {
+		t.Fatalf("apps = %d, want 1", len(apps))
+	}
+	if apps[0].DockerExitCode == nil || *apps[0].DockerExitCode != 137 {
+		t.Fatalf("exit code = %v, want 137", apps[0].DockerExitCode)
+	}
+	if apps[0].DockerExitReason != models.ExitKilled {
+		t.Fatalf("exit reason = %q, want %q", apps[0].DockerExitReason, models.ExitKilled)
+	}
+	if !strings.Contains(apps[0].AdminSummary, "exit 137") {
+		t.Fatalf("admin summary %q does not carry the exit detail", apps[0].AdminSummary)
+	}
+}

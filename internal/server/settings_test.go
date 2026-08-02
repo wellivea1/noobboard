@@ -2251,8 +2251,8 @@ func TestNormalizeLLMSettingsEnablesAdminToolsWhenAgentControlEnabled(t *testing
 	if !adminPolicy.AgentToolsEnabled {
 		t.Fatalf("admin tools were not enabled with agent control: %#v", adminPolicy)
 	}
-	if adminPolicy.AgentMaxToolCalls != 2 {
-		t.Fatalf("admin max tool calls = %d, want 2", adminPolicy.AgentMaxToolCalls)
+	if adminPolicy.AgentMaxToolCalls != 4 {
+		t.Fatalf("admin max tool calls = %d, want 4", adminPolicy.AgentMaxToolCalls)
 	}
 	if len(adminPolicy.AgentToolRules) == 0 {
 		t.Fatalf("admin tool allowlist was not restored: %#v", adminPolicy)
@@ -2353,11 +2353,23 @@ func TestLLMSettingsIncludesAgentReadinessMetadata(t *testing.T) {
 	if !response.AgentReadiness.AdminToolsEnabled || response.AgentReadiness.AdminToolCallLimit != 4 {
 		t.Fatalf("admin tool readiness = %#v", response.AgentReadiness)
 	}
+	// Asserted against the registry rather than a literal so adding a tool
+	// updates one list. The names are checked explicitly below because their
+	// presence is the guarantee that matters.
+	if len(response.AgentReadiness.ReadOnlyTools) != len(llm.ReadOnlyAgentToolNames()) {
+		t.Fatalf("read-only tool count = %d, want %d", len(response.AgentReadiness.ReadOnlyTools), len(llm.ReadOnlyAgentToolNames()))
+	}
+	advertised := map[string]bool{}
+	for _, tool := range response.AgentReadiness.ReadOnlyTools {
+		advertised[tool.Name] = true
+	}
+	for _, want := range []string{"noobboard_app_logs", "noobboard_app_history"} {
+		if !advertised[want] {
+			t.Fatalf("read-only tools %#v missing %s", response.AgentReadiness.ReadOnlyTools, want)
+		}
+	}
 	if response.AgentReadiness.RepairCooldown != time.Minute {
 		t.Fatalf("repair cooldown = %s, want 1m", response.AgentReadiness.RepairCooldown)
-	}
-	if len(response.AgentReadiness.ReadOnlyTools) != 4 {
-		t.Fatalf("read-only tool count = %d", len(response.AgentReadiness.ReadOnlyTools))
 	}
 	if len(response.AgentReadiness.ReviewModes) != 4 {
 		t.Fatalf("review mode count = %d", len(response.AgentReadiness.ReviewModes))

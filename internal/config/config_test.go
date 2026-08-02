@@ -25,8 +25,19 @@ func TestDefaultConfigValidation(t *testing.T) {
 		t.Fatalf("default OpenAI auth method = %q, want api_key", cfg.LLM.OpenAIAuthMethod)
 	}
 	adminPolicy := cfg.LLM.Policies["admin_requested"]
-	if !adminPolicy.AgentToolsEnabled || adminPolicy.AgentMaxToolCalls != 2 {
-		t.Fatalf("admin read-only tools default = enabled:%t max:%d, want enabled:true max:2", adminPolicy.AgentToolsEnabled, adminPolicy.AgentMaxToolCalls)
+	// 4, not 2: diagnosing one failed app is status -> logs -> history, and a
+	// budget of 2 cannot complete that.
+	if !adminPolicy.AgentToolsEnabled || adminPolicy.AgentMaxToolCalls != 4 {
+		t.Fatalf("admin read-only tools default = enabled:%t max:%d, want enabled:true max:4", adminPolicy.AgentToolsEnabled, adminPolicy.AgentMaxToolCalls)
+	}
+	allowed := map[string]string{}
+	for _, rule := range adminPolicy.AgentToolRules {
+		allowed[rule.Tool] = rule.Action
+	}
+	for _, tool := range []string{"noobboard_app_logs", "noobboard_app_history"} {
+		if allowed[tool] != "allow" {
+			t.Fatalf("default admin tool rules %#v do not allow %s", adminPolicy.AgentToolRules, tool)
+		}
 	}
 	if cfg.LLM.Policies["general_user_requested"].AgentToolsEnabled {
 		t.Fatal("general-user read-only tools should stay disabled by default")

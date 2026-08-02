@@ -1,6 +1,9 @@
 package models
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 type Role string
 
@@ -63,6 +66,41 @@ const (
 	HealthUnknown   DockerHealth = "unknown"
 )
 
+// How a container's last exit should be read. Restarting is the right response
+// to exactly one of these.
+type DockerExit string
+
+const (
+	// Exit 0: stopped cleanly, most often on purpose.
+	ExitClean DockerExit = "clean"
+	// Exit 143 (128+SIGTERM): asked to stop and complied.
+	ExitStopped DockerExit = "stopped"
+	// Exit 137 (128+SIGKILL): killed rather than asked. On a home server this
+	// is usually the out-of-memory killer, but a stop that timed out looks
+	// identical, so the wording downstream must not assert OOM as fact.
+	ExitKilled DockerExit = "killed"
+	// Any other non-zero code: the application itself failed.
+	ExitError DockerExit = "error"
+)
+
+// ExitDetail renders the parsed exit for a human or a model, without claiming
+// more than the code supports.
+func ExitDetail(code *int, reason DockerExit) string {
+	if code == nil {
+		return ""
+	}
+	switch reason {
+	case ExitClean:
+		return fmt.Sprintf("exit %d (clean stop)", *code)
+	case ExitStopped:
+		return fmt.Sprintf("exit %d (asked to stop and complied)", *code)
+	case ExitKilled:
+		return fmt.Sprintf("exit %d (killed, not asked to stop; commonly the out-of-memory killer, but a stop that timed out looks the same)", *code)
+	default:
+		return fmt.Sprintf("exit %d (the application itself failed)", *code)
+	}
+}
+
 func IsAppRestartCandidate(app AppStatus) bool {
 	switch app.CurrentStatus {
 	case StatusOffline, StatusDegraded:
@@ -96,6 +134,12 @@ type AppStatus struct {
 	ProbeType                   ProbeType      `json:"probe_type"`
 	DockerState                 DockerState    `json:"docker_state"`
 	DockerHealth                DockerHealth   `json:"docker_health"`
+	// Exit detail parsed out of the Docker status string. The code alone is
+	// ambiguous, so ExitReason carries the interpretation the diagnosis needs:
+	// a container killed by the OOM killer and one stopped on purpose both read
+	// as "offline" without it, and they need opposite responses.
+	DockerExitCode              *int           `json:"docker_exit_code,omitempty"`
+	DockerExitReason            DockerExit     `json:"docker_exit_reason,omitempty"`
 	EndpointStatus              EndpointStatus `json:"endpoint_status"`
 	LastSeenOnline              *time.Time     `json:"last_seen_online,omitempty"`
 	LastSeenOffline             *time.Time     `json:"last_seen_offline,omitempty"`

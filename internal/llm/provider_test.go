@@ -826,3 +826,132 @@ func TestAnthropicToolCallStillWinsOverStopReason(t *testing.T) {
 		t.Fatalf("diagnosisFromAnthropic returned %v, want the tool call to be accepted", err)
 	}
 }
+
+// --- agent log and history tools ---------------------------------------------
+
+func agentToolRequest(t *testing.T, apps []models.AppStatus) Request {
+	t.Helper()
+	req := sampleLLMRequest()
+	req.Policy.AgentToolsEnabled = true
+	req.Policy.AgentMaxToolCalls = 4
+	req.Policy.AgentToolRules = []models.LLMAgentToolRule{{Tool: "*", Action: "allow"}}
+	req.LiveSnapshot = func(context.Context) (models.Snapshot, error) {
+		return models.Snapshot{GeneratedAt: time.Now().UTC(), Apps: apps}, nil
+	}
+	return req
+}
+
+func visibleTestApp() models.AppStatus {
+	return models.AppStatus{
+		AppID:                 "emby",
+		DisplayName:           "Emby",
+		ContainerName:         "emby",
+		CurrentStatus:         models.StatusOffline,
+		DockerState:           models.DockerExited,
+		VisibleToGeneralUsers: true,
+		LLMVisibleAdmin:       true,
+		LLMVisibleGeneral:     true,
+	}
+}
+
+func TestAgentLogToolIsNotOfferedWithoutAFetcher(t *testing.T) {
+	// A nil fetcher must mean "tool absent", not "tool present and failing", so
+	// the model never plans around a capability the server did not wire.
+	req := agentToolRequest(t, []models.AppStatus{visibleTestApp()})
+	tools := agentToolsForRequest(req, privacy.NewRedactor(config.PrivacyConfig{}))
+	if _, ok := tools[agentToolAppLogs]; ok {
+		t.Fatal("log tool was offered with no AppLogs fetcher")
+	}
+	if _, ok := tools[agentToolAppHistory]; ok {
+		t.Fatal("history tool was offered with no AppHistory fetcher")
+	}
+}
+
+func TestAgentLogToolCapsLinesRegardlessOfRequest(t *testing.T) {
+	// The model's limit is a hint; the cap is not. Logs are the most likely
+	// place for a credential to surface, so the budget is enforced server-side.
+	var asked int
+	req := agentToolRequest(t, []models.AppStatus{visibleTestApp()})
+	req.AppLogs = func(_ context.Context, _ string, limit int) ([]models.LogLine, error) {
+		asked = limit
+		return []models.LogLine{{Line: "boom"}}, nil
+	}
+	tools := agentToolsForRequest(req, privacy.NewRedactor(config.PrivacyConfig{}))
+	tool, ok := tools[agentToolAppLogs]
+	if !ok {
+		t.Fatal("log tool was not offered")
+	}
+	if _, err := tool.Execute(context.Background(), map[string]interface{}{"app_id_or_name": "Emby", "limit": float64(100000)}); err != nil {
+		t.Fatal(err)
+	}
+	if asked != agentLogLineCap {
+		t.Fatalf("requested limit = %d, want the cap %d", asked, agentLogLineCap)
+	}
+	if _, err := tool.Execute(context.Background(), map[string]interface{}{"app_id_or_name": "Emby", "limit": float64(-5)}); err != nil {
+		t.Fatal(err)
+	}
+	if asked != 1 {
+		t.Fatalf("requested limit = %d, want 1 for a negative ask", asked)
+	}
+}
+
+func TestAgentLogToolRefusesAppsTheRoleCannotSee(t *testing.T) {
+	// Resolution goes through the role-filtered snapshot, so an app absent from
+	// it is unreachable even if the caller names it exactly. The fetcher must
+	// never be reached.
+	called := false
+	req := agentToolRequest(t, []models.AppStatus{visibleTestApp()})
+	req.AppLogs = func(context.Context, string, int) ([]models.LogLine, error) {
+		called = true
+		return nil, nil
+	}
+	tools := agentToolsForRequest(req, privacy.NewRedactor(config.PrivacyConfig{}))
+	result, err := tools[agentToolAppLogs].Execute(context.Background(), map[string]interface{}{"app_id_or_name": "secret-app", "limit": float64(10)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if called {
+		t.Fatal("log fetcher ran for an app outside the filtered snapshot")
+	}
+	payload, _ := result.(map[string]interface{})
+	if found, _ := payload["found"].(bool); found {
+		t.Fatalf("result = %#v, want found=false", payload)
+	}
+}
+
+func TestAgentHistoryToolTrimsToTheMostRecentEvents(t *testing.T) {
+	events := make([]models.StatusEvent, 0, agentHistoryCap+10)
+	for i := 0; i < agentHistoryCap+10; i++ {
+		events = append(events, models.StatusEvent{ID: fmt.Sprintf("e%d", i), SubjectID: "emby"})
+	}
+	req := agentToolRequest(t, []models.AppStatus{visibleTestApp()})
+	req.AppHistory = func(context.Context, string) (models.StatusHistory, error) {
+		return models.StatusHistory{DisplayName: "Emby", Current: models.StatusOffline, Events: events}, nil
+	}
+	tools := agentToolsForRequest(req, privacy.NewRedactor(config.PrivacyConfig{}))
+	result, err := tools[agentToolAppHistory].Execute(context.Background(), map[string]interface{}{"app_id_or_name": "emby"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := result.(map[string]interface{})
+	got, _ := payload["events"].([]models.StatusEvent)
+	if len(got) != agentHistoryCap {
+		t.Fatalf("event count = %d, want the cap %d", len(got), agentHistoryCap)
+	}
+	// Trimming keeps the newest, which is the end of the slice.
+	if got[len(got)-1].ID != events[len(events)-1].ID {
+		t.Fatalf("last event = %s, want the most recent %s", got[len(got)-1].ID, events[len(events)-1].ID)
+	}
+}
+
+func TestAgentToolsStayAdminOnly(t *testing.T) {
+	req := agentToolRequest(t, []models.AppStatus{visibleTestApp()})
+	req.AppLogs = func(context.Context, string, int) ([]models.LogLine, error) { return nil, nil }
+	req.AppHistory = func(context.Context, string) (models.StatusHistory, error) {
+		return models.StatusHistory{}, nil
+	}
+	req.Policy.RecipientRole = models.RoleGeneralUser
+	if tools := agentToolsForRequest(req, privacy.NewRedactor(config.PrivacyConfig{})); len(tools) != 0 {
+		t.Fatalf("general-user request was offered %d tools, want none", len(tools))
+	}
+}
