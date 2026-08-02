@@ -228,10 +228,29 @@ type InfrastructureStatus struct {
 	DockerServiceAvailable  bool         `json:"docker_service_available"`
 	DockerNetworkCount      int          `json:"docker_network_count,omitempty"`
 	DockerNetworkNames      []string     `json:"docker_network_names,omitempty"`
+	// Per-probe timing. Reachability alone cannot answer "the internet is slow",
+	// which is the most common real complaint on a home server; latency plus a
+	// baseline can. Baseline/SampleCount/FailureRate are filled by the server
+	// from its rolling window, not by the probe adapter.
+	ProbeLatencies          []ProbeLatency `json:"probe_latencies,omitempty"`
 	StorageWarnings         []string     `json:"storage_warnings,omitempty"`
 	ParityCheckState        string       `json:"parity_check_state,omitempty"`
 	LastCheckedAt           time.Time    `json:"last_checked_at"`
 	SourceHealth            SourceHealth `json:"source_health"`
+}
+
+type ProbeLatency struct {
+	Subject   string `json:"subject"`
+	OK        bool   `json:"ok"`
+	LatencyMS int64  `json:"latency_ms"`
+	// Median latency over the server's recent window, and how many samples it
+	// is drawn from. Zero means "not enough history yet" — a rule must not fire
+	// against a baseline it does not have.
+	BaselineMS  int64   `json:"baseline_ms,omitempty"`
+	SampleCount int     `json:"sample_count,omitempty"`
+	// Fraction of recent polls where this probe failed, 0..1. Named for what it
+	// measures: these are probe failures across polls, not ICMP packet loss.
+	FailureRate float64 `json:"failure_rate,omitempty"`
 }
 
 type SourceHealth struct {

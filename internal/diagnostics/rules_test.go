@@ -138,6 +138,20 @@ func TestUnraidUnreadNotificationsProduceAdminOnlyFact(t *testing.T) {
 	}
 }
 
+func probeSnapshot(readings ...models.ProbeLatency) models.Snapshot {
+	return models.Snapshot{
+		GeneratedAt: time.Now().UTC(),
+		Infrastructure: models.InfrastructureStatus{
+			NASReachable:       true,
+			UnraidAPIReachable: true,
+			UnraidArrayState:   "started",
+			UnraidArrayHealthy: true,
+			ProbeLatencies:     readings,
+			SourceHealth:       models.SourceHealth{Unraid: "ok", Probes: "ok"},
+		},
+	}
+}
+
 func healthyUnraidSnapshot() models.Snapshot {
 	return models.Snapshot{
 		GeneratedAt: time.Now().UTC(),
@@ -149,6 +163,63 @@ func healthyUnraidSnapshot() models.Snapshot {
 			DockerServiceAvailable: true,
 			SourceHealth:           models.SourceHealth{Unraid: "ok", Docker: "ok", UniFi: "ok", Probes: "ok"},
 		},
+	}
+}
+
+func hasFact(result Result, id string) bool {
+	for _, fact := range result.Facts {
+		if fact.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func TestSlowRuleComparesAgainstTheLinksOwnBaseline(t *testing.T) {
+	// The point of the rule: 200ms is normal on some connections and terrible on
+	// others, so the threshold has to be the link's own history.
+	engine := NewRuleEngine()
+
+	fast := models.ProbeLatency{Subject: "internet", OK: true, LatencyMS: 210, BaselineMS: 200, SampleCount: 60}
+	if hasFact(engine.Evaluate(probeSnapshot(fast)), "probe_slow_internet") {
+		t.Fatal("fired at 210ms on a link whose usual latency is 200ms")
+	}
+
+	slow := models.ProbeLatency{Subject: "internet", OK: true, LatencyMS: 900, BaselineMS: 200, SampleCount: 60}
+	if !hasFact(engine.Evaluate(probeSnapshot(slow)), "probe_slow_internet") {
+		t.Fatal("did not fire at 900ms against a 200ms baseline")
+	}
+
+	// Same absolute latency, different link: 210ms is a fault on a 2ms LAN hop
+	// only if the baseline says so, and the floor keeps tiny baselines quiet.
+	lan := models.ProbeLatency{Subject: "router", OK: true, LatencyMS: 210, BaselineMS: 2, SampleCount: 60}
+	if hasFact(engine.Evaluate(probeSnapshot(lan)), "probe_slow_router") {
+		t.Fatal("fired against a sub-floor baseline where the ratio is meaningless")
+	}
+}
+
+func TestSlowRuleStaysSilentWithoutEnoughHistory(t *testing.T) {
+	// A freshly restarted NoobBoard has no window. It must not judge a link it
+	// has barely measured, and a zero baseline means "unknown", not "0ms".
+	engine := NewRuleEngine()
+	cold := models.ProbeLatency{Subject: "internet", OK: true, LatencyMS: 5000, BaselineMS: 0, SampleCount: 3}
+	if hasFact(engine.Evaluate(probeSnapshot(cold)), "probe_slow_internet") {
+		t.Fatal("fired with no baseline; a missing baseline must suppress the rule")
+	}
+}
+
+func TestFlakyRuleFiresWhileTheProbeIsCurrentlyUp(t *testing.T) {
+	// Intermittent failure is invisible to a snapshot: the probe is reachable
+	// right now. Only the failure rate across the window can see it.
+	engine := NewRuleEngine()
+	flaky := models.ProbeLatency{Subject: "internet", OK: true, LatencyMS: 30, BaselineMS: 30, SampleCount: 60, FailureRate: 0.35}
+	if !hasFact(engine.Evaluate(probeSnapshot(flaky)), "probe_flaky_internet") {
+		t.Fatal("did not fire for a probe failing 35% of recent checks")
+	}
+
+	steady := models.ProbeLatency{Subject: "internet", OK: true, LatencyMS: 30, BaselineMS: 30, SampleCount: 60, FailureRate: 0.01}
+	if hasFact(engine.Evaluate(probeSnapshot(steady)), "probe_flaky_internet") {
+		t.Fatal("fired for a probe that is essentially reliable")
 	}
 }
 

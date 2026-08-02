@@ -2415,6 +2415,25 @@ function renderServerHealth(snapshot) {
   ].filter(Boolean));
 }
 
+/* Response times, with each link measured against its own recent median rather
+   than a fixed number — 200ms is normal on some connections and terrible on
+   others. "Usual" is omitted until there are enough samples to mean anything. */
+function probeLatencyRows(infra) {
+  const readings = infra.probe_latencies || [];
+  return readings.map((probe) => {
+    const parts = [`${probe.latency_ms} ms`];
+    if (probe.baseline_ms) parts.push(`usual ${probe.baseline_ms} ms`);
+    if (probe.failure_rate >= 0.05) parts.push(`${Math.round(probe.failure_rate * 100)}% of recent checks failed`);
+    if (!probe.ok) parts.push("failing now");
+    return detailRow(probeLatencyLabel(probe.subject), parts.join(" · "));
+  });
+}
+
+function probeLatencyLabel(subject) {
+  const labels = { internet: "Internet", dns: "DNS", router: "Router", nas: "Server" };
+  return labels[subject] || subject;
+}
+
 /* Restartable UniFi devices.
 
    Only fetched when UniFi is actually reporting an offline device, so the
@@ -2501,6 +2520,7 @@ function renderRouterStatus(snapshot) {
       detailRow("WANs", Number.isFinite(Number(infra.unifi_wan_count)) ? `${infra.unifi_wan_count}` : null),
       detailRow("Warnings", infra.unifi_warnings?.length ? infra.unifi_warnings.join("; ") : null),
     ]),
+    detailSection("router.timing", "Response times", probeLatencyRows(infra)),
     detailSection("router.nas-link", "NAS Link", [
       detailRow("Expected", infra.expected_nas_link_mbps ? `${infra.expected_nas_link_mbps} Mbps` : null),
       detailRow("Negotiated", infra.nas_link_speed_mbps ? `${infra.nas_link_speed_mbps} Mbps` : null),

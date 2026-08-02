@@ -51,27 +51,42 @@ func (c LiveClient) Status(ctx context.Context) (models.InfrastructureStatus, er
 		SourceHealth:  models.SourceHealth{},
 	}
 	var parts []string
+	// Each probe is timed as well as tested. The timing costs nothing extra —
+	// it is the same request — and it is the only thing that can answer "is the
+	// internet slow", which reachability booleans never could.
+	record := func(subject string, ok bool, elapsed time.Duration) {
+		infra.ProbeLatencies = append(infra.ProbeLatencies, models.ProbeLatency{
+			Subject:   subject,
+			OK:        ok,
+			LatencyMS: elapsed.Milliseconds(),
+		})
+		parts = append(parts, healthPart(subject, ok))
+	}
 	if c.cfg.InternetURL != "" {
-		infra.InternetReachable = c.httpReachable(ctx, c.cfg.InternetURL)
-		parts = append(parts, healthPart("internet", infra.InternetReachable))
+		ok, elapsed := timed(func() bool { return c.httpReachable(ctx, c.cfg.InternetURL) })
+		infra.InternetReachable = ok
+		record(ProbeInternet, ok, elapsed)
 	} else {
 		parts = append(parts, "internet skipped")
 	}
 	if c.cfg.DNSHost != "" {
-		infra.DNSOK = c.dnsReachable(ctx, c.cfg.DNSHost)
-		parts = append(parts, healthPart("dns", infra.DNSOK))
+		ok, elapsed := timed(func() bool { return c.dnsReachable(ctx, c.cfg.DNSHost) })
+		infra.DNSOK = ok
+		record(ProbeDNS, ok, elapsed)
 	} else {
 		parts = append(parts, "dns skipped")
 	}
 	if c.cfg.RouterTarget != "" {
-		infra.RouterReachable = c.targetReachable(ctx, c.cfg.RouterTarget)
-		parts = append(parts, healthPart("router", infra.RouterReachable))
+		ok, elapsed := timed(func() bool { return c.targetReachable(ctx, c.cfg.RouterTarget) })
+		infra.RouterReachable = ok
+		record(ProbeRouter, ok, elapsed)
 	} else {
 		parts = append(parts, "router skipped")
 	}
 	if c.cfg.NASTarget != "" {
-		infra.NASReachable = c.targetReachable(ctx, c.cfg.NASTarget)
-		parts = append(parts, healthPart("nas", infra.NASReachable))
+		ok, elapsed := timed(func() bool { return c.targetReachable(ctx, c.cfg.NASTarget) })
+		infra.NASReachable = ok
+		record(ProbeNAS, ok, elapsed)
 	} else {
 		parts = append(parts, "nas skipped")
 	}
@@ -131,6 +146,21 @@ func (c LiveClient) tcpReachable(ctx context.Context, address string) bool {
 	}
 	_ = conn.Close()
 	return true
+}
+
+// Probe subject names. Shared with the server's rolling window and the rules,
+// so a rename cannot silently orphan a baseline.
+const (
+	ProbeInternet = "internet"
+	ProbeDNS      = "dns"
+	ProbeRouter   = "router"
+	ProbeNAS      = "nas"
+)
+
+func timed(check func() bool) (bool, time.Duration) {
+	start := time.Now()
+	ok := check()
+	return ok, time.Since(start)
 }
 
 func healthPart(name string, ok bool) string {

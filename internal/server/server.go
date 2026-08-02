@@ -68,6 +68,8 @@ type App struct {
 	cachedSnapshot         models.Snapshot
 	cachedSnapshotSet      bool
 	historyMu              sync.Mutex
+	probeMu                sync.Mutex
+	probeSamples           map[string][]probeSample
 	historyRecorder        *statushistory.Recorder
 	lastHistoryPrune       time.Time
 	runtimeIntegrationsSet bool
@@ -103,6 +105,11 @@ const (
 	// count crosses a small threshold, not the exact number.
 	restartLoopQueryLimit = 20
 	agentApprovalPlanID         = "current_recommendation"
+	// Rolling latency window. At the default poll interval this is roughly the
+	// last hour, which is the right span for "is it slow right now" — a
+	// week-long baseline would smooth away the outage being looked at.
+	probeWindowSamples      = 120
+	probeBaselineMinSamples = 20
 
 	agentRepairPerAppCooldown      = time.Minute
 	agentRepairGlobalWindow        = time.Hour
@@ -410,7 +417,10 @@ func (a *App) collectSnapshot(ctx context.Context, processNotifications bool) (m
 		apps[i].RecentLogs = append(apps[i].RecentLogs, unraidLogs...)
 	}
 	applyAppCatalog(apps, cfg.AppCatalog)
+	// Both annotations run before Evaluate so the rule engine stays a pure
+	// function of the snapshot.
 	a.annotateRestartLoops(apps)
+	a.annotateProbeBaselines(&infra)
 	snapshot := models.Snapshot{
 		GeneratedAt:          time.Now().UTC(),
 		Infrastructure:       infra,
@@ -5785,6 +5795,81 @@ func randomToken() (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(buf), nil
+}
+
+// --- probe latency baseline --------------------------------------------------
+
+// probeSample is one poll's reading for one probe subject.
+type probeSample struct {
+	latencyMS int64
+	ok        bool
+}
+
+// annotateProbeBaselines fills each probe reading with a baseline drawn from the
+// server's recent window, so the rules can ask "is this slow *for this link*"
+// rather than comparing against a fixed threshold. A 200ms baseline is normal on
+// some connections and terrible on others; only the link's own history says
+// which.
+//
+// The window is in memory and resets when NoobBoard restarts. That is a real
+// limitation — it means no baseline for the first few minutes after a restart —
+// but it is the honest version of what is available without a metrics store, and
+// a missing baseline suppresses the rule rather than firing it.
+func (a *App) annotateProbeBaselines(infra *models.InfrastructureStatus) {
+	if len(infra.ProbeLatencies) == 0 {
+		return
+	}
+	a.probeMu.Lock()
+	defer a.probeMu.Unlock()
+	if a.probeSamples == nil {
+		a.probeSamples = map[string][]probeSample{}
+	}
+	for i := range infra.ProbeLatencies {
+		reading := &infra.ProbeLatencies[i]
+		window := append(a.probeSamples[reading.Subject], probeSample{latencyMS: reading.LatencyMS, ok: reading.OK})
+		if len(window) > probeWindowSamples {
+			window = window[len(window)-probeWindowSamples:]
+		}
+		a.probeSamples[reading.Subject] = window
+		reading.SampleCount = len(window)
+		reading.FailureRate = probeFailureRate(window)
+		reading.BaselineMS = probeBaselineMS(window)
+	}
+}
+
+// probeBaselineMS is the median latency of successful samples. Median, not mean:
+// one 3-second timeout would drag a mean far enough to hide the next real spike.
+// Failed samples are excluded because a timeout measures the timeout, not the
+// link.
+func probeBaselineMS(window []probeSample) int64 {
+	values := make([]int64, 0, len(window))
+	for _, sample := range window {
+		if sample.ok {
+			values = append(values, sample.latencyMS)
+		}
+	}
+	if len(values) < probeBaselineMinSamples {
+		return 0
+	}
+	sort.Slice(values, func(i, j int) bool { return values[i] < values[j] })
+	middle := len(values) / 2
+	if len(values)%2 == 1 {
+		return values[middle]
+	}
+	return (values[middle-1] + values[middle]) / 2
+}
+
+func probeFailureRate(window []probeSample) float64 {
+	if len(window) == 0 {
+		return 0
+	}
+	failed := 0
+	for _, sample := range window {
+		if !sample.ok {
+			failed++
+		}
+	}
+	return float64(failed) / float64(len(window))
 }
 
 // --- UniFi device control ----------------------------------------------------
