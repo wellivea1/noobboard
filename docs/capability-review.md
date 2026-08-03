@@ -162,9 +162,15 @@ baseline is normal on some links and terrible on others.
 Naming is deliberate: `FailureRate` counts *probe failures across polls*, not
 ICMP packet loss. The app does not send ICMP and should not claim to.
 
-**Known limitation:** the window is in memory and resets on restart, so there is
-no baseline for roughly the first ten minutes after one. A persisted metric
-series would remove that and allow multi-day baselines.
+Timings are downsampled into 5-minute buckets and persisted to `latency.jsonl`
+with 14-day retention. Raw per-poll samples are deliberately not stored: at a 30s
+poll that is ~11.5k rows per day per probe, which is both a large file and a
+graph nobody can render. Min and max are kept beside the median because a spike
+that lasted one poll disappears from a median and is exactly what someone
+investigating "it was slow last night" is looking for.
+
+The in-memory window is seeded from the persisted series at startup, so the
+restart blind spot that shipped with the first version is gone.
 
 ### NoobBoard's own host — unmonitored
 
@@ -183,7 +189,7 @@ fine".
 | Unraid GraphQL | array state/capacity/disks, parity, notifications, CPU, memory, version, VMs, shares, docker networks, `StartArray` | per-disk SMART detail, parity check start/cancel, share free-space thresholds, plugin/update state |
 | Unraid Docker GraphQL | container list (`id/names/state/status/autoStart/image/labels/webUiUrl/templatePath`), start/stop/restart, logs | exit-code parsing from the `status` string already fetched; per-container stats |
 | UniFi Integration v1 | `/info`, `/sites`, `/devices`, `/clients`, `/wans` | **device `RESTART` action**, **PoE port power-cycle**, statistics endpoints |
-| Probes | HTTP GET, DNS lookup, TCP dial, per-probe timing | jitter, ICMP loss, traceroute-style hop isolation |
+| Probes | HTTP GET, DNS lookup, TCP dial, per-probe timing, 14-day bucketed history | jitter, ICMP loss, traceroute-style hop isolation |
 | NoobBoard host | — | nothing collected at all |
 
 The pattern: **the read side is well covered and the write side is nearly

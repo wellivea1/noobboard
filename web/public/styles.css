@@ -2449,6 +2449,130 @@ button.command.monitor-hide {
   display: grid;
 }
 
+/* ---------------------------------------------------------------------------
+   Response-time charts.
+
+   Small multiples: one chart per link, each with its own y-scale, because a 2ms
+   LAN hop and a 30ms WAN on one axis makes the LAN line a flat smudge. One
+   series per chart, so no legend — the caption names it.
+
+   The line is neutral ink. Colour in this product means state, and a latency
+   reading is not a state; the only hue on the plot is the failure band.
+   --------------------------------------------------------------------------- */
+.latency-charts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: var(--space-4);
+}
+
+.latency-figure {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  min-width: 0;
+}
+
+.latency-caption {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.latency-title {
+  font-size: var(--text-body);
+  font-weight: var(--weight-strong);
+}
+
+.latency-current {
+  color: var(--ink-3);
+  font-size: var(--text-meta);
+  font-variant-numeric: tabular-nums;
+}
+
+.latency-chart {
+  width: 100%;
+  height: 132px;
+  overflow: visible;
+}
+
+/* Solid hairlines, one shade off the surface. Dashed gridlines read as a
+   threshold when they are only a grid. */
+.latency-grid {
+  stroke: var(--line-soft);
+  stroke-width: 1;
+}
+
+.latency-axis {
+  fill: var(--ink-3);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.latency-range {
+  fill: var(--ink-3);
+  opacity: 0.16;
+}
+
+.latency-line {
+  fill: none;
+  stroke: var(--ink-2);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.latency-latest {
+  fill: var(--ink-1);
+  stroke: var(--surface-raised);
+  stroke-width: 2;
+}
+
+/* The one hue on the plot, and it is a state: checks that failed. */
+.latency-failure {
+  fill: var(--status-bad);
+  opacity: 0.55;
+}
+
+.latency-scale {
+  display: flex;
+  justify-content: space-between;
+  color: var(--ink-3);
+  font-size: var(--text-micro);
+}
+
+.latency-table-wrap {
+  overflow-x: auto;
+}
+
+.latency-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-meta);
+  font-variant-numeric: tabular-nums;
+}
+
+.latency-table th,
+.latency-table td {
+  padding: var(--pad-row) var(--space-3) var(--pad-row) 0;
+  border-bottom: 1px solid var(--line-soft);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.latency-table th {
+  color: var(--ink-3);
+  font-size: var(--text-micro);
+  font-weight: var(--weight-strong);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+}
+
+.latency-table tr:last-child td {
+  border-bottom: 0;
+}
+
 /* Offline UniFi devices with a restart affordance. Same row treatment as every
    other list: hairline between peers, control on the right edge. */
 .unifi-devices {

@@ -425,6 +425,31 @@ working around a failure.
 
 ---
 
+## 9a. Charts
+
+Charts follow the same rules as everything else, plus these. The full method is
+the `dataviz` skill; what is binding here is how it lands in this product.
+
+- **Colour still means state.** A data line is neutral ink (`--ink-2`), not a
+  hue. The only hue on a plot is a status band — on the latency charts, failed
+  checks. A series is never coloured for identity when neutral will do.
+- **Small multiples over shared axes.** Latency for four links is one measure at
+  four scales; on one linear axis the 2ms LAN hop is a flat smudge. One chart
+  per subject, each with its own y-scale. Never a dual-axis plot.
+- **One series per chart needs no legend** — the caption names it.
+- **Direct-label the endpoint only.** A number on every point goes unread.
+- **Grid and axes are solid hairlines.** Dashed gridlines read as a threshold
+  when they are only a grid.
+- **Every chart has a table twin.** No value may be reachable only by hovering.
+- **Size the box to include the axis band**, or the card grows a nested
+  scrollbar that crops the labels.
+- **`tabular-nums` on axis ticks and table cells**, where numbers align
+  vertically — not on a standalone figure.
+- **Charts are inline SVG built with `svgNode`.** No chart library: the CSP
+  forbids external scripts, and the tokens are already the design system.
+
+---
+
 ## 10. Checklist for new UI
 
 1. Does this page answer one question, and is the answer first?
