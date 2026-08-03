@@ -305,6 +305,7 @@
               <button type="button" data-settings-section="llm">LLM</button>
               <button type="button" data-settings-section="integrations">Integrations</button>
               <button type="button" data-settings-section="notifications">Notifications</button>
+              <button type="button" data-settings-section="data">Data</button>
               <button type="button" data-settings-section="advanced">Advanced</button>
             </nav>
             <div class="toolbar-end">
@@ -324,6 +325,14 @@
               <div id="role-settings" class="role-settings"></div>
             </section>
             <div id="settings-grid" class="settings-grid"></div>
+            <section class="panel settings-section" data-settings-section="data">
+              <div class="section-head">
+                <h2>Data and logs</h2>
+                <button id="data-refresh" type="button" class="command" data-glyph="&#8635;">Reload</button>
+              </div>
+              <p class="muted">Recorded history that diagnoses read from. Clearing is immediate and cannot be undone; each clear is written to the audit trail.</p>
+              <div id="data-settings" class="data-settings"></div>
+            </section>
             <section class="panel settings-section settings-advanced" data-settings-section="advanced">
               <div class="section-head">
                 <h2>Advanced</h2>

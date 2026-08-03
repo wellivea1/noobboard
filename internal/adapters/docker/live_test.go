@@ -350,7 +350,10 @@ func TestUnraidDockerLogsUseGraphQLVariablesAndParseLines(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(body.Query, "logs(id: $id)") || !strings.Contains(body.Query, "$id: PrefixedID!") {
+		// Matches both the structured query (which also passes $tail) and the
+		// scalar fallback. What matters is that the id travels as a typed
+		// variable rather than being interpolated into the query text.
+		if !strings.Contains(body.Query, "logs(id: $id") || !strings.Contains(body.Query, "$id: PrefixedID!") {
 			t.Fatalf("log query did not use docker PrefixedID variable: %s", body.Query)
 		}
 		if body.Variables["id"] != "container:Emby" {
@@ -400,11 +403,55 @@ func TestUnraidDockerLogsFallbackAcrossFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if calls != 2 {
+	// Three, not two: the documented structured shape is attempted first, then
+	// the scalar probe walks "lines" and reaches "logs".
+	if calls != 3 {
 		t.Fatalf("calls = %d", calls)
 	}
 	if len(lines) != 2 || lines[0].Line != "alpha" || lines[1].Line != "beta" {
 		t.Fatalf("unexpected logs: %#v", lines)
+	}
+}
+
+// Unraid publishes DockerContainerLogs.lines as [DockerContainerLogLine!]!, so
+// selecting it as a scalar fails validation and every log request errors. This
+// pins the shape that actually works against a live Unraid.
+func TestUnraidDockerLogsUsesStructuredLineSelection(t *testing.T) {
+	var queries []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Query     string                 `json:"query"`
+			Variables map[string]interface{} `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		queries = append(queries, body.Query)
+		if !strings.Contains(body.Query, "message") {
+			t.Fatalf("first query did not select log line subfields: %s", body.Query)
+		}
+		if tail, ok := body.Variables["tail"].(float64); !ok || int(tail) != 10 {
+			t.Fatalf("tail variable = %v, want 10", body.Variables["tail"])
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"docker":{"logs":{"lines":[{"timestamp":"2026-08-03T08:00:00Z","message":"alpha"},{"timestamp":"2026-08-03T08:00:01Z","message":"beta"}]}}}}`))
+	}))
+	defer server.Close()
+
+	client := NewUnraidLiveClient(server.URL, "test-key")
+	client.http = server.Client()
+	lines, err := client.Logs(t.Context(), models.AppStatus{AppID: "emby", ContainerID: "container:Emby"}, LogOptions{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(queries) != 1 {
+		t.Fatalf("structured query did not satisfy the request on its own: %d calls", len(queries))
+	}
+	if len(lines) != 2 || lines[0].Line != "alpha" || lines[1].Line != "beta" {
+		t.Fatalf("unexpected logs: %#v", lines)
+	}
+	if lines[0].Timestamp.IsZero() {
+		t.Fatal("structured log line lost its timestamp")
 	}
 }
 

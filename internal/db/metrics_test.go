@@ -108,3 +108,36 @@ func TestQueryLatencyLimitKeepsTheMostRecent(t *testing.T) {
 		t.Fatalf("last bucket = %d, want the newest (9)", got[len(got)-1].MedianMS)
 	}
 }
+
+func TestFileMetricStoreClearLatency(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "latency.jsonl")
+	store, err := OpenFileMetricStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if err := store.AppendLatency([]models.LatencyBucket{
+		{Subject: "router", At: BucketStart(now), Samples: 3, MedianMS: 2},
+		{Subject: "internet", At: BucketStart(now), Samples: 3, MedianMS: 30},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := store.ClearLatency("router")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 1 {
+		t.Fatalf("removed = %d, want 1", removed)
+	}
+	reopened, err := OpenFileMetricStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buckets, err := reopened.QueryLatency(MetricFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(buckets) != 1 || buckets[0].Subject != "internet" {
+		t.Fatalf("buckets after clear = %#v, want only internet", buckets)
+	}
+}

@@ -2343,9 +2343,23 @@ button.command.monitor-hide {
      parked on the right edge where they are in every console. */
   body.admin-view .app-card {
     grid-template-columns: minmax(200px, 0.85fr) minmax(0, 0.8fr) minmax(0, 1.1fr) auto;
-    grid-template-areas: "identity summary meta actions";
+    /* The detail disclosure is a second row spanning every column: its metrics
+       grid and log well need the card's full width, not the identity column. */
+    grid-template-areas:
+      "identity summary meta actions"
+      "detail   detail  detail actions";
     align-items: center;
     gap: var(--space-4);
+  }
+
+  body.admin-view .app-card > .app-detail {
+    grid-area: detail;
+  }
+
+  /* Actions stay with the identity row once the card can grow, or they drift to
+     the vertical middle of an expanded detail. */
+  body.admin-view .app-card > .app-row-actions {
+    align-self: start;
   }
 
   body.admin-view .app-card > header {
@@ -3058,6 +3072,218 @@ button.command.app-control:focus-visible {
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: min(38vw, 360px);
+}
+
+/* Data and logs. One store per block, count first, destructive action on the
+   right edge with every other action in the product. */
+.data-stack {
+  display: grid;
+  gap: 20px;
+}
+
+.data-store {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.data-store-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 6px;
+}
+
+.data-store-head h3 {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  color: var(--ink-3);
+  font-size: var(--text-micro);
+  font-weight: var(--weight-strong);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+}
+
+.data-store-head .command {
+  flex: 0 0 auto;
+}
+
+.data-store-total {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  margin: 0;
+  font-size: var(--text-meta);
+}
+
+.data-subject-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.data-subject {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: var(--control-height);
+  border-bottom: 1px solid var(--line-soft);
+  padding: 5px 0;
+}
+
+.data-subject:last-child {
+  border-bottom: 0;
+}
+
+.data-subject-copy {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 3px 10px;
+  min-width: 0;
+}
+
+.data-subject-copy small {
+  color: var(--muted);
+}
+
+.data-subject .command {
+  flex: 0 0 auto;
+}
+
+/* Admin app detail: an expandable row (§7), spanning the card so the metrics
+   grid is not squeezed into the identity column. */
+.app-detail {
+  grid-column: 1 / -1;
+  min-width: 0;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.app-detail-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: var(--text-meta);
+  font-weight: var(--weight-strong);
+  cursor: pointer;
+  list-style: none;
+}
+
+.app-detail-summary::-webkit-details-marker {
+  display: none;
+}
+
+.app-detail-summary::before {
+  content: "+";
+  display: inline-block;
+  width: 1em;
+  color: var(--ink-3);
+  font-weight: var(--weight-medium);
+}
+
+.app-detail[open] .app-detail-summary::before {
+  content: "\2212";
+}
+
+.app-detail-body {
+  padding-top: 10px;
+}
+
+.app-detail-stack {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.app-detail-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 10px 18px;
+}
+
+.app-detail-metric {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.app-detail-metric-label {
+  color: var(--ink-3);
+  font-size: var(--text-micro);
+  font-weight: var(--weight-strong);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+}
+
+.app-detail-metric-value {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
+}
+
+.app-detail-metric-value strong {
+  font-size: var(--text-body);
+  font-variant-numeric: tabular-nums;
+}
+
+.app-detail-metric-value small {
+  color: var(--muted);
+}
+
+.app-detail-section {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.app-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+/* Actions do not shrink (§7): the copy yields, the button keeps its label. */
+.app-detail-head h4 {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  color: var(--ink-3);
+  font-size: var(--text-micro);
+  font-weight: var(--weight-strong);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+}
+
+.app-detail-head .command {
+  flex: 0 0 auto;
+}
+
+/* Logs are the one place raw text is allowed to keep its own shape, so it gets
+   its own scroll container rather than widening the page. */
+.app-detail-log-lines {
+  max-height: 260px;
+  margin: 0;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  background: var(--surface-sunken);
+  color: var(--ink-2);
+  font-family: ui-monospace, "Cascadia Mono", "Segoe UI Mono", monospace;
+  font-size: var(--text-micro);
+  line-height: 1.45;
+  white-space: pre;
 }
 
 /* ---------------------------------------------------------------------------
