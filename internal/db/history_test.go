@@ -91,3 +91,73 @@ func statusEventForTest(id, appID string, from, to models.CurrentStatus, at time
 		At:          at,
 	}
 }
+
+// Clear is scoped by the same predicate Query filters on, so a per-app clear
+// must not touch an infrastructure subject that happens to share its id.
+func TestFileHistoryStoreClearIsScoped(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "history.jsonl")
+	store, err := OpenFileHistoryStore(path, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if err := store.Append([]models.StatusEvent{
+		{ID: "a", SubjectType: models.SubjectApp, SubjectID: "emby", At: now.Add(-time.Hour)},
+		{ID: "b", SubjectType: models.SubjectApp, SubjectID: "plex", At: now.Add(-time.Hour)},
+		{ID: "c", SubjectType: models.SubjectInfra, SubjectID: "emby", At: now.Add(-time.Hour)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := store.Clear(HistoryFilter{SubjectType: models.SubjectApp, SubjectID: "emby"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 1 {
+		t.Fatalf("removed = %d, want 1", removed)
+	}
+	// Reopening proves the deletion reached the file, not just the slice.
+	reopened, err := OpenFileHistoryStore(path, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := reopened.Query(HistoryFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("events after reopen = %d, want 2", len(events))
+	}
+	for _, event := range events {
+		if event.ID == "a" {
+			t.Fatal("cleared event survived a reopen")
+		}
+	}
+}
+
+func TestFileHistoryStoreClearAll(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "history.jsonl")
+	store, err := OpenFileHistoryStore(path, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Append([]models.StatusEvent{
+		{ID: "a", SubjectType: models.SubjectApp, SubjectID: "emby", At: time.Now().UTC()},
+		{ID: "b", SubjectType: models.SubjectInfra, SubjectID: "internet", At: time.Now().UTC()},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := store.Clear(HistoryFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 2 {
+		t.Fatalf("removed = %d, want 2", removed)
+	}
+	events, err := store.Query(HistoryFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("events after clear-all = %d, want 0", len(events))
+	}
+}

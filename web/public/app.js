@@ -2939,7 +2939,204 @@ function renderAppCard(app) {
       node("dt", { text: label }),
       node("dd", { title: value, text: value }),
     ))) : null,
+    state.user.role === "admin" ? renderAdminAppDetail(app) : null,
   );
+}
+
+/* ---------------------------------------------------------------------------
+   Admin app detail.
+
+   The compact surface had a per-app detail view — recent changes, last seen
+   online, seven-day uptime — and the admin surface had none. An admin looking
+   at the same app saw strictly less than the person they administer for, and
+   had no way at all to see the recorded history that the diagnosis rules read.
+
+   So this is the compact detail plus what only an admin may see: the transition
+   pairs rather than plain-language phrases, the restart-loop count the rules
+   actually key on, container logs, and the control to clear the record when it
+   has stopped describing reality.
+
+   Expandable row, per §7: the body must not repeat the summary, so status,
+   image and docker state are not restated here.
+   --------------------------------------------------------------------------- */
+function renderAdminAppDetail(app) {
+  const body = node("div", { class: "app-detail-body" },
+    node("p", { class: "muted", text: "Loading history..." }),
+  );
+  let loaded = false;
+  const details = node("details", { class: "app-detail" },
+    node("summary", { class: "app-detail-summary" }, "History and logs"),
+    body,
+  );
+  details.addEventListener("toggle", () => {
+    if (!details.open || loaded) return;
+    loaded = true;
+    loadAdminAppDetail(app, body);
+  });
+  return details;
+}
+
+async function loadAdminAppDetail(app, body) {
+  try {
+    const history = await api(`/api/apps/${encodeURIComponent(app.app_id)}/history?window=7d&limit=50`);
+    body.replaceChildren(renderAdminAppDetailBody(app, history, body));
+  } catch (error) {
+    body.replaceChildren(node("p", { class: "chat-error", text: error.message }));
+  }
+}
+
+function renderAdminAppDetailBody(app, history, body) {
+  const events = Array.isArray(history?.events) ? history.events : [];
+  const recent = recentEventCount(events, RESTART_LOOP_WINDOW_MS);
+  return node("div", { class: "app-detail-stack" },
+    node("div", { class: "app-detail-metrics" },
+      adminDetailMetric("Last working", relativeTime(history?.last_seen_online) || "Not recorded"),
+      adminDetailMetric("Uptime, 7 days", uptimePctText(history?.uptime_pct_7d)),
+      // Not "Recorded changes": that is the heading of the list right below, and
+      // two identical labels in one panel read as one repeated twice.
+      adminDetailMetric("Changes, 7 days", `${events.length}`),
+      // Named explicitly because this is the figure the restart-loop rule reads,
+      // and a run of operator-initiated stops inflates it just like a crash does.
+      adminDetailMetric("Counts as restart loop", `${recent}`, "in the last 30 min"),
+    ),
+    node("div", { class: "app-detail-section" },
+      node("div", { class: "app-detail-head" },
+        node("h4", { text: "Recorded changes" }),
+        node("button", {
+          type: "button",
+          class: "command ghost",
+          "data-glyph": "x",
+          onclick: (event) => clearAppHistory(app, event.currentTarget, body),
+          text: "Clear history",
+        }),
+      ),
+      renderAdminHistoryTimeline(events),
+    ),
+    renderAdminAppLogs(app),
+  );
+}
+
+/* A stat tile, not the compact surface's label-left row: four of those in a
+   grid squeeze every label against its value. Label above, figure below, unit
+   beside it. */
+function adminDetailMetric(label, value, unit) {
+  return node("div", { class: "app-detail-metric" },
+    node("span", { class: "app-detail-metric-label", text: label }),
+    node("span", { class: "app-detail-metric-value" },
+      node("strong", { text: value }),
+      unit ? node("small", { text: unit }) : null,
+    ),
+  );
+}
+
+// The compact surface says "Working 88.9% of the time." because its reader
+// wants a sentence. In a stat tile the sentence is the wrong shape.
+function uptimePctText(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "—";
+  const bounded = Math.max(0, Math.min(100, number));
+  return `${bounded >= 99.95 ? "100" : bounded.toFixed(1).replace(/\.0$/, "")}%`;
+}
+
+// The rules read a 30-minute window (diagnostics.RestartLoopWindow). Kept here
+// as one constant so the label and the count cannot drift apart.
+const RESTART_LOOP_WINDOW_MS = 30 * 60 * 1000;
+
+function recentEventCount(events, windowMS) {
+  const cutoff = Date.now() - windowMS;
+  return events.filter((event) => {
+    const at = Date.parse(event?.at || "");
+    return Number.isFinite(at) && at >= cutoff;
+  }).length;
+}
+
+// Admin phrasing is the transition itself. "Came back" is right for someone who
+// wants to know whether their show will play; an admin reading a timeline for a
+// pattern needs the pair.
+function renderAdminHistoryTimeline(events) {
+  if (!events.length) return node("p", { class: "muted", text: "No changes recorded." });
+  return node("ol", { class: "history-list" },
+    events.map((event) => {
+      const status = normalizeStatus(event.to);
+      return node("li", { class: `history-event ${status}` },
+        node("span", { class: "history-dot", "aria-hidden": "true" }),
+        node("span", { class: "history-copy" },
+          node("strong", { text: `${event.from || "unknown"} → ${event.to || "unknown"}` }),
+          node("small", { text: [relativeTime(event.at), event.note].filter(Boolean).join(" · ") }),
+        ),
+      );
+    }),
+  );
+}
+
+function renderAdminAppLogs(app) {
+  if (!isDockerApp(app)) return null;
+  const output = node("div", { class: "app-detail-logs-output" });
+  const load = async (button) => {
+    const original = button.textContent;
+    button.disabled = true;
+    button.textContent = "Loading";
+    try {
+      const result = await api(`/api/admin/apps/${encodeURIComponent(app.app_id)}/logs?limit=100`);
+      // The API returns log line objects, not strings. Keep the clock time in
+      // front of each line: a log without timestamps cannot be lined up against
+      // the status history directly above it.
+      const lines = (Array.isArray(result?.logs) ? result.logs : []).map(formatLogLine);
+      output.replaceChildren(
+        lines.length ? node("pre", { class: "app-detail-log-lines", text: lines.join("\n") })
+          : node("p", { class: "muted", text: "The container returned no log lines." }),
+        // Redaction is not a footnote: an admin comparing these lines against
+        // the container's own output needs to know why they differ.
+        result?.redacted ? node("p", { class: "muted", text: "Some values were redacted by the privacy blacklist." }) : null,
+      );
+    } catch (error) {
+      output.replaceChildren(node("p", { class: "chat-error", text: error.message }));
+    } finally {
+      button.disabled = false;
+      button.textContent = original;
+    }
+  };
+  return node("div", { class: "app-detail-section" },
+    node("div", { class: "app-detail-head" },
+      node("h4", { text: "Container logs" }),
+      node("button", {
+        type: "button",
+        class: "command",
+        "data-glyph": "r",
+        onclick: (event) => load(event.currentTarget),
+        text: "Load logs",
+      }),
+    ),
+    output,
+  );
+}
+
+function formatLogLine(entry) {
+  if (typeof entry === "string") return entry;
+  const text = String(entry?.line ?? entry?.message ?? "").trimEnd();
+  const at = Date.parse(entry?.timestamp || "");
+  if (!Number.isFinite(at)) return text;
+  return `${new Date(at).toLocaleTimeString([], { hour12: false })}  ${text}`;
+}
+
+async function clearAppHistory(app, button, body) {
+  const name = app.display_name || app.app_id;
+  if (!confirm(`Clear recorded status history for ${name}? Diagnoses stop seeing its past changes. This cannot be undone.`)) return;
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = "Clearing";
+  try {
+    const result = await api("/api/admin/data/clear", {
+      method: "POST",
+      body: JSON.stringify({ scope: "status_history", subject_type: "app", subject_id: app.app_id }),
+    });
+    showNotice(`Cleared ${result.removed} recorded change${result.removed === 1 ? "" : "s"} for ${name}.`);
+    await loadAdminAppDetail(app, body);
+  } catch (error) {
+    showNotice(error.message, "error");
+    button.disabled = false;
+    button.textContent = original;
+  }
 }
 
 function appSubtitle(app) {
@@ -4385,13 +4582,159 @@ async function reloadSettingsSection(section) {
   setSettingsSection(state.settingsSection);
 }
 
+/* ---------------------------------------------------------------------------
+   Data and logs.
+
+   Every recorded store an admin can see is one they can also clear. The reason
+   is concrete: the restart-loop rule counts status changes in a 30-minute
+   window, so a burst of operator-initiated stops reads as a crash loop and
+   keeps reading that way until the events age out. Retention handles the slow
+   case; this handles the case where the record itself is wrong now.
+
+   Counts lead, because "clear" with no number is a button you press blind.
+   --------------------------------------------------------------------------- */
+async function loadDataSettings() {
+  const host = $("data-settings");
+  if (!host) return;
+  host.replaceChildren(node("p", { class: "muted", text: "Loading..." }));
+  try {
+    const summary = await api("/api/admin/data/summary");
+    host.replaceChildren(renderDataSettings(summary));
+  } catch (error) {
+    host.replaceChildren(node("p", { class: "chat-error", text: error.message }));
+  }
+}
+
+function renderDataSettings(summary) {
+  return node("div", { class: "data-stack" },
+    renderDataStore({
+      title: "App and connection history",
+      available: summary.status_history_available,
+      unavailable: "Status history is not configured, so nothing is being recorded.",
+      total: `${summary.status_event_count} recorded change${summary.status_event_count === 1 ? "" : "s"}`,
+      note: `Diagnoses read the last ${humanDuration(summary.restart_loop_window)} of this to decide whether an app is in a restart loop.`,
+      rows: (summary.subjects || []).map((subject) => ({
+        label: subject.label || subject.subject_id,
+        kind: subject.subject_type,
+        detail: [
+          `${subject.event_count} change${subject.event_count === 1 ? "" : "s"}`,
+          subject.recent_event_count ? `${subject.recent_event_count} recent` : "",
+          subject.latest_at ? `last ${relativeTime(subject.latest_at)}` : "",
+        ].filter(Boolean).join(" · "),
+        // Recent churn is the thing worth noticing here, so it is the only
+        // state on the row.
+        tone: subject.recent_event_count >= 4 ? "state-warn" : "",
+        payload: { scope: "status_history", subject_type: subject.subject_type, subject_id: subject.subject_id },
+        confirm: `Clear recorded history for ${subject.label || subject.subject_id}?`,
+      })),
+      clearAll: {
+        label: "Clear all history",
+        payload: { scope: "status_history" },
+        confirm: "Clear every recorded status change for every app and connection?",
+      },
+    }),
+    renderDataStore({
+      title: "Response-time history",
+      available: summary.latency_available,
+      unavailable: "Response-time history is not configured.",
+      total: `${summary.latency_bucket_count} recorded period${summary.latency_bucket_count === 1 ? "" : "s"}`,
+      note: "Five-minute summaries behind the response-time charts.",
+      rows: (summary.latency_subjects || []).map((subject) => ({
+        label: probeLatencyLabel(subject.subject_id),
+        kind: "latency",
+        detail: `${subject.event_count} period${subject.event_count === 1 ? "" : "s"}`,
+        payload: { scope: "latency", subject_id: subject.subject_id },
+        confirm: `Clear response-time history for ${probeLatencyLabel(subject.subject_id)}?`,
+      })),
+      clearAll: {
+        label: "Clear all response times",
+        payload: { scope: "latency" },
+        confirm: "Clear every recorded response-time period?",
+      },
+    }),
+  );
+}
+
+// Go duration strings ("30m0s", "1h0m0s") are a wire format, not a sentence.
+function humanDuration(value) {
+  const text = String(value || "").trim();
+  const match = /^(?:(\d+)h)?(?:(\d+)m)?(?:([\d.]+)s)?$/.exec(text);
+  if (!match) return text || "30 minutes";
+  const parts = [];
+  const hours = Number(match[1] || 0);
+  const minutes = Number(match[2] || 0);
+  const seconds = Math.round(Number(match[3] || 0));
+  if (hours) parts.push(`${hours} hour${hours === 1 ? "" : "s"}`);
+  if (minutes) parts.push(`${minutes} minute${minutes === 1 ? "" : "s"}`);
+  if (seconds && !hours && !minutes) parts.push(`${seconds} second${seconds === 1 ? "" : "s"}`);
+  return parts.join(" ") || "30 minutes";
+}
+
+function renderDataStore(store) {
+  if (!store.available) {
+    return node("section", { class: "data-store" },
+      node("div", { class: "data-store-head" }, node("h3", { text: store.title })),
+      node("p", { class: "muted", text: store.unavailable }),
+    );
+  }
+  return node("section", { class: "data-store" },
+    node("div", { class: "data-store-head" },
+      node("h3", { text: store.title }),
+      node("button", {
+        type: "button",
+        class: "command ghost",
+        "data-glyph": "x",
+        onclick: (event) => clearRecordedData(store.clearAll.payload, store.clearAll.confirm, event.currentTarget),
+        text: store.clearAll.label,
+      }),
+    ),
+    node("p", { class: "data-store-total" },
+      node("strong", { text: store.total }),
+      node("span", { class: "muted", text: store.note }),
+    ),
+    store.rows.length ? node("ul", { class: "data-subject-list" },
+      store.rows.map((row) => node("li", { class: "data-subject" },
+        node("span", { class: "data-subject-copy" },
+          node("strong", { text: row.label }),
+          node("small", { text: row.detail }),
+        ),
+        row.tone ? node("span", { class: `settings-state-pill ${row.tone}`, text: "Churning" }) : null,
+        node("button", {
+          type: "button",
+          class: "command ghost",
+          "data-glyph": "x",
+          "aria-label": `Clear history for ${row.label}`,
+          onclick: (event) => clearRecordedData(row.payload, row.confirm, event.currentTarget),
+          text: "Clear",
+        }),
+      )),
+    ) : node("p", { class: "muted", text: "Nothing recorded yet." }),
+  );
+}
+
+async function clearRecordedData(payload, confirmText, button) {
+  if (!confirm(`${confirmText} This cannot be undone.`)) return;
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = "Clearing";
+  try {
+    const result = await api("/api/admin/data/clear", { method: "POST", body: JSON.stringify(payload) });
+    showNotice(`Cleared ${result.removed} record${result.removed === 1 ? "" : "s"}.`);
+    await loadDataSettings();
+  } catch (error) {
+    showNotice(error.message, "error");
+    button.disabled = false;
+    button.textContent = original;
+  }
+}
+
 function settingsHasUnsavedChanges() {
   if (state.roleDirty) return true;
   return !!document.querySelector("#settings-grid .settings-footer.is-dirty");
 }
 
 function setSettingsSection(section) {
-  const validSections = new Set(["roles", "advanced", ...SETTINGS_ENDPOINTS.map((item) => item.section)]);
+  const validSections = new Set(["roles", "data", "advanced", ...SETTINGS_ENDPOINTS.map((item) => item.section)]);
   state.settingsSection = validSections.has(section) ? section : "roles";
   document.querySelectorAll("#settings-menu [data-settings-section]").forEach((button) => {
     button.classList.toggle("active", button.dataset.settingsSection === state.settingsSection);
@@ -4399,6 +4742,9 @@ function setSettingsSection(section) {
   document.querySelectorAll("#tab-settings .settings-section").forEach((panel) => {
     panel.hidden = panel.dataset.settingsSection !== state.settingsSection;
   });
+  // Counts go stale the moment anything is cleared or recorded, so this section
+  // loads when it is opened rather than once at startup.
+  if (state.settingsSection === "data") loadDataSettings();
 }
 
 /* Settings search. Settings grew ~10x past what a single scrolling form can
@@ -6267,7 +6613,10 @@ $("settings-refresh").addEventListener("click", () => {
   if (settingsHasUnsavedChanges() && !confirm("Discard unsaved settings changes?")) return;
   state.roleDirty = false;
   loadSettings();
+  if (state.settingsSection === "data") loadDataSettings();
 });
+
+$("data-refresh")?.addEventListener("click", () => loadDataSettings());
 $("settings-menu").addEventListener("click", (event) => {
   const button = event.target.closest("[data-settings-section]");
   if (button) setSettingsSection(button.dataset.settingsSection);

@@ -25,6 +25,12 @@ type HistoryStore interface {
 	Append([]models.StatusEvent) error
 	Query(HistoryFilter) ([]models.StatusEvent, error)
 	Prune(config.RetentionConfig) error
+	// Clear deletes matching events and reports how many went. An empty filter
+	// clears everything. Retention prunes on age and volume; this is the manual
+	// escape hatch for when the recorded history itself is the problem — a burst
+	// of operator-initiated stops reads as a crash loop to the diagnosis rules
+	// long after the operator has moved on.
+	Clear(HistoryFilter) (int, error)
 }
 
 type FileHistoryStore struct {
@@ -135,6 +141,43 @@ func (s *FileHistoryStore) Query(filter HistoryFilter) ([]models.StatusEvent, er
 		}
 	}
 	return out, nil
+}
+
+func (s *FileHistoryStore) Clear(filter HistoryFilter) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	kept := make([]models.StatusEvent, 0, len(s.events))
+	for _, event := range s.events {
+		if matchesHistoryFilter(event, filter) {
+			continue
+		}
+		kept = append(kept, event)
+	}
+	removed := len(s.events) - len(kept)
+	if removed == 0 {
+		return 0, nil
+	}
+	if err := s.writeAllLocked(kept); err != nil {
+		return 0, err
+	}
+	s.events = kept
+	return removed, nil
+}
+
+// matchesHistoryFilter is the Clear side of Query's predicate. Since is read as
+// "at or after", so clearing is inclusive of the boundary event; an empty filter
+// matches everything.
+func matchesHistoryFilter(event models.StatusEvent, filter HistoryFilter) bool {
+	if filter.SubjectType != "" && event.SubjectType != filter.SubjectType {
+		return false
+	}
+	if filter.SubjectID != "" && !strings.EqualFold(event.SubjectID, filter.SubjectID) {
+		return false
+	}
+	if !filter.Since.IsZero() && event.At.Before(filter.Since) {
+		return false
+	}
+	return true
 }
 
 func (s *FileHistoryStore) Prune(retention config.RetentionConfig) error {

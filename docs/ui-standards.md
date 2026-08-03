@@ -488,6 +488,31 @@ in fixed slots, and each slot gets the shape its content already has.
 
 ---
 
+## 9c. The admin surface is a superset
+
+The compact surface had a per-app detail view — recent changes, last seen
+online, seven-day uptime — and the admin surface had none. An admin looking at
+the same app saw strictly less than the person they administer for.
+
+**Anything the compact surface shows about a subject, the admin surface shows
+too, plus what only an admin may see.** Not the same view twice: the admin
+version carries the raw form (status transition pairs, not "Came back"), the
+figures the system's own rules read, and the operator-only data — container
+logs, exit codes, the counts behind a diagnosis. The harness asserts this for
+apps; hold the same line for anything added later.
+
+Two corollaries:
+
+- **An endpoint the admin API already exposes should be reachable from the admin
+  UI.** Container logs existed as a route and an agent tool for months with no
+  button anywhere — which is also how a broken query went unnoticed.
+- **Anything the system records, an admin can inspect and clear.** Recorded
+  history feeds diagnoses, so when it stops describing reality it has to be
+  correctable from the dashboard, not by editing a file on disk. Show the count
+  before the clear, name what reads it, and audit the deletion.
+
+---
+
 ## 10. Checklist for new UI
 
 1. Does this page answer one question, and is the answer first?

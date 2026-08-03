@@ -147,20 +147,81 @@ func (c UnraidLiveClient) Logs(ctx context.Context, app models.AppStatus, opts L
 		return nil, errors.New("docker container id or name is required")
 	}
 	source := firstNonEmpty(app.ContainerName, app.DisplayName, app.AppID, targetID)
+	// Unraid returns logs as DockerContainerLogs.lines, a list of
+	// DockerContainerLogLine{timestamp, message}. Selecting `lines` as if it were
+	// a scalar fails validation ("must have a selection of subfields"), which is
+	// what the scalar probe below was doing for every candidate name — so every
+	// call failed, and the error surfaced was the last and least relevant one.
+	structured, err := c.fetchStructuredLogs(ctx, targetID, opts.Limit)
+	if err == nil {
+		return trimLogs(logLinesFromRaw(source, structured), opts.Limit), nil
+	}
+	structuredErr := err
+	// Older or differently-shaped schemas may expose a scalar instead. Keep
+	// probing those, but only after the documented shape has been tried.
 	var lastErr error
 	for _, field := range []string{"lines", "logs", "entries", "stdout", "stderr", "content", "text", "log"} {
-		raw, err := c.fetchLogField(ctx, targetID, field)
-		if err != nil {
-			lastErr = err
+		raw, fieldErr := c.fetchLogField(ctx, targetID, field)
+		if fieldErr != nil {
+			lastErr = fieldErr
 			continue
 		}
 		lines := logLinesFromRaw(source, raw)
 		return trimLogs(lines, opts.Limit), nil
 	}
+	if structuredErr != nil {
+		return nil, fmt.Errorf("unraid docker logs are unavailable: %w", structuredErr)
+	}
 	if lastErr != nil {
 		return nil, fmt.Errorf("unraid docker logs are unavailable: %w", lastErr)
 	}
 	return nil, errors.New("unraid docker logs are unavailable")
+}
+
+// fetchStructuredLogs asks for the shape Unraid actually publishes. tail is sent
+// so the server trims rather than shipping an entire container log to be cut
+// here.
+func (c UnraidLiveClient) fetchStructuredLogs(ctx context.Context, targetID string, limit int) (json.RawMessage, error) {
+	query := `query ContainerLogLines($id: PrefixedID!, $tail: Int) {
+  docker {
+    logs(id: $id, tail: $tail) {
+      lines {
+        timestamp
+        message
+      }
+    }
+  }
+}`
+	variables := map[string]interface{}{"id": targetID}
+	if limit > 0 {
+		variables["tail"] = limit
+	}
+	var out struct {
+		Data struct {
+			Docker struct {
+				Logs struct {
+					Lines json.RawMessage `json:"lines"`
+				} `json:"logs"`
+			} `json:"docker"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := c.graphqlVariables(ctx, query, variables, &out); err != nil {
+		return nil, err
+	}
+	if len(out.Errors) > 0 {
+		err := dockerGraphQLError{Message: out.Errors[0].Message}
+		if graphQLSchemaError(out.Errors[0].Message) {
+			return nil, markFallbackable(err)
+		}
+		return nil, err
+	}
+	if len(out.Data.Docker.Logs.Lines) == 0 {
+		return nil, errors.New("unraid docker logs returned no lines field")
+	}
+	return out.Data.Docker.Logs.Lines, nil
 }
 
 func (c UnraidLiveClient) fetchLogField(ctx context.Context, targetID, field string) (json.RawMessage, error) {

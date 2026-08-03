@@ -28,6 +28,9 @@ type MetricStore interface {
 	AppendLatency([]models.LatencyBucket) error
 	QueryLatency(MetricFilter) ([]models.LatencyBucket, error)
 	PruneLatency(config.RetentionConfig) error
+	// ClearLatency drops the series for one subject, or every series when the
+	// subject is empty, and reports how many buckets went.
+	ClearLatency(subject string) (int, error)
 }
 
 // FileMetricStore mirrors FileHistoryStore: a JSONL file, loaded once, kept in
@@ -140,6 +143,28 @@ func (s *FileMetricStore) QueryLatency(filter MetricFilter) ([]models.LatencyBuc
 		out = out[len(out)-filter.Limit:]
 	}
 	return out, nil
+}
+
+func (s *FileMetricStore) ClearLatency(subject string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	subject = strings.TrimSpace(subject)
+	kept := make([]models.LatencyBucket, 0, len(s.buckets))
+	for _, bucket := range s.buckets {
+		if subject == "" || strings.EqualFold(bucket.Subject, subject) {
+			continue
+		}
+		kept = append(kept, bucket)
+	}
+	removed := len(s.buckets) - len(kept)
+	if removed == 0 {
+		return 0, nil
+	}
+	s.buckets = kept
+	if err := s.rewriteLocked(); err != nil {
+		return 0, err
+	}
+	return removed, nil
 }
 
 func (s *FileMetricStore) PruneLatency(retention config.RetentionConfig) error {

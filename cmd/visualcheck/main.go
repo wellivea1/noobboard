@@ -80,6 +80,11 @@ type flags struct {
 	ServerHealthRowCount        int      `json:"serverHealthRowCount,omitempty"`
 	RouterStatusRowCount        int      `json:"routerStatusRowCount,omitempty"`
 	AppCardCount                int      `json:"appCardCount,omitempty"`
+	AppDetailCount              int      `json:"appDetailCount,omitempty"`
+	AppDetailBodyText           string   `json:"appDetailBodyText,omitempty"`
+	AppDetailClearVisible       bool     `json:"appDetailClearVisible,omitempty"`
+	DataStoreCount              int      `json:"dataStoreCount,omitempty"`
+	DataClearControlCount       int      `json:"dataClearControlCount,omitempty"`
 	AppLogoCount                int      `json:"appLogoCount,omitempty"`
 	IncidentCardCount           int      `json:"incidentCardCount,omitempty"`
 	DiagnosticPanelCount        int      `json:"diagnosticPanelCount,omitempty"`
@@ -968,6 +973,26 @@ func assertVisualFlags(overview, server, router, apps, activity, diagnostics, qu
 	if settings.SettingsMenuButtonCount < 8 {
 		failures = append(failures, "settings submenu did not render")
 	}
+	// Every recorded store an admin can see must also be clearable from here.
+	if settings.DataStoreCount < 2 {
+		failures = append(failures, "data and logs section did not render both stores")
+	}
+	if settings.DataClearControlCount < settings.DataStoreCount {
+		failures = append(failures, "a recorded data store rendered with no way to clear it")
+	}
+	// The admin surface must not show less per-app detail than the compact one.
+	if apps.AppDetailCount < apps.AppCardCount {
+		failures = append(failures, "admin app rows are missing the history and logs disclosure")
+	}
+	// Lowercased before matching: these labels are uppercased by CSS, so innerText
+	// returns them in caps.
+	detailBody := strings.ToLower(apps.AppDetailBodyText)
+	if !strings.Contains(detailBody, "changes, 7 days") || !strings.Contains(detailBody, "restart loop") {
+		failures = append(failures, "admin app detail did not show recorded history and the restart-loop count")
+	}
+	if !apps.AppDetailClearVisible {
+		failures = append(failures, "admin app detail did not offer a clear-history control")
+	}
 	if !settings.SettingsSearchNarrowed || !mobileSettings.SettingsSearchNarrowed {
 		failures = append(failures, "settings search did not narrow the section list")
 	}
@@ -1474,11 +1499,32 @@ const appsExpression = `(async () => {
   }
   const mobileAudit = await auditMobileShell();
   const buttonTextOverflow = hasButtonTextOverflow();
+  // The admin surface must not carry less per-app information than the compact
+  // one. Expand the first card and confirm the recorded history and its clear
+  // control are actually there.
+  let appDetailBodyText = '';
+  let appDetailClearVisible = false;
+  const firstDetail = document.querySelector('#apps .app-card .app-detail');
+  if (firstDetail) {
+    firstDetail.open = true;
+    firstDetail.dispatchEvent(new Event('toggle'));
+    const detailStarted = Date.now();
+    while (!document.querySelector('#apps .app-detail .app-detail-stack') && Date.now() - detailStarted < 4000) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const stack = document.querySelector('#apps .app-detail .app-detail-stack');
+    appDetailBodyText = stack ? stack.innerText : '';
+    const clear = document.querySelector('#apps .app-detail .app-detail-head .command');
+    appDetailClearVisible = !!clear && visibleElement(clear);
+  }
   return {
     pageTitle: document.querySelector('#page-title')?.textContent || '',
     pageSubtitle: document.querySelector('#summary')?.textContent || '',
     appCardCount: document.querySelectorAll('#apps .app-card').length,
     appLogoCount: document.querySelectorAll('#apps .app-logo').length,
+    appDetailCount: document.querySelectorAll('#apps .app-card .app-detail').length,
+    appDetailBodyText: appDetailBodyText,
+    appDetailClearVisible: appDetailClearVisible,
     detailSectionCount: document.querySelectorAll('.detail-section').length,
     bodyHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 2,
     buttonTextOverflow,
@@ -2303,11 +2349,26 @@ const settingsExpression = `(async () => {
     }
     window.confirm = originalConfirm;
   }
+  // Data and logs is loaded on open, so open it before counting.
+  document.querySelector('#settings-menu [data-settings-section="data"]')?.click();
+  const dataStarted = Date.now();
+  while (!document.querySelector('#data-settings .data-store') && Date.now() - dataStarted < 5000) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  const dataStoreCount = document.querySelectorAll('#data-settings .data-store').length;
+  // Every store must offer a clear, whether or not it currently holds anything —
+  // the fixture scenario starts with no recorded history, so counting rows would
+  // only prove the fixture is empty.
+  const dataClearControlCount = document.querySelectorAll('#data-settings .data-store-head .command').length;
+  document.querySelector('#settings-menu [data-settings-section="llm"]')?.click();
+  await new Promise((resolve) => setTimeout(resolve, 80));
   const buttonTextOverflow = hasButtonTextOverflow();
   const mobileAudit = await auditMobileShell();
   return {
     pageTitle: document.querySelector('#page-title')?.textContent || '',
     pageSubtitle: document.querySelector('#summary')?.textContent || '',
+    dataStoreCount,
+    dataClearControlCount,
     settingsEditorCount: document.querySelectorAll('.settings-editor').length,
     settingsControlCount,
     settingsMenuButtonCount: document.querySelectorAll('#settings-menu [data-settings-section]').length,
