@@ -1481,6 +1481,80 @@ body.admin-view #summary {
   margin-bottom: 6px;
 }
 
+/* An answer is read top-down: verdict, cause, evidence, next step. Each part
+   gets its own shape so the eye can skip to the one it wants — the old block
+   was four paragraphs of identical grey text. */
+.chat-result {
+  display: grid;
+  gap: 10px;
+}
+
+.chat-verdict {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-confidence {
+  color: var(--muted);
+  font-size: var(--text-meta);
+}
+
+.chat-lead {
+  margin: 0;
+  color: var(--text);
+}
+
+/* One observation per line. Joined with semicolons these read as a single
+   run-on sentence, which is how four facts became unreadable. */
+.chat-evidence {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chat-evidence li {
+  position: relative;
+  padding-left: 14px;
+  color: var(--muted);
+  font-size: var(--text-meta);
+  line-height: var(--leading-normal);
+}
+
+.chat-evidence li::before {
+  content: "";
+  position: absolute;
+  top: 0.62em;
+  left: 3px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--ink-3);
+}
+
+.chat-next {
+  display: flex;
+  gap: 8px;
+  margin: 0;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+  color: var(--text);
+  font-size: var(--text-meta);
+  line-height: var(--leading-normal);
+}
+
+.chat-next-label {
+  flex: none;
+  padding-top: 0.12em;
+  color: var(--ink-3);
+  font-size: var(--text-micro);
+  font-weight: var(--weight-strong);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+}
+
 .chat-unavailable {
   color: var(--muted);
 }
@@ -1716,27 +1790,6 @@ body.admin-view #summary {
   gap: 16px;
 }
 
-.agent-approval-request {
-  display: grid;
-  gap: 6px;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-md);
-  padding: 12px;
-  background: var(--surface-alt);
-}
-
-.agent-approval-request small {
-  color: var(--muted);
-  line-height: 1.35;
-}
-
-.agent-approval-direct-action {
-  justify-self: start;
-  color: var(--ink-1);
-  font-size: var(--text-meta);
-  font-weight: var(--weight-strong);
-}
-
 .agent-approval-cooldown {
   display: grid;
   gap: 3px;
@@ -1765,92 +1818,22 @@ body.admin-view #summary {
   background: var(--ok-bg);
 }
 
-.agent-approval-steps {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 6px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
+.agent-approval-dialog.is-running .agent-approval-actions {
+  opacity: 0.64;
 }
 
-.agent-approval-steps li {
-  min-height: 30px;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-md);
-  padding: 6px 8px;
+/* Two buttons on one row while they fit; the deny button never grows wider
+   than the action it declines. */
+.agent-approval-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.agent-approval-provenance {
   color: var(--muted);
   font-size: var(--text-meta);
-  font-weight: var(--weight-strong);
-  text-align: center;
-}
-
-.agent-approval-steps li.current,
-.agent-approval-dialog.is-running .agent-approval-steps li {
-  border-color: var(--accent-strong);
-  color: var(--text);
-  background: var(--surface-raised);
-}
-
-.agent-approval-dialog.is-running .agent-approval-options {
-  opacity: 0.64;
-}
-
-.agent-approval-options {
-  display: grid;
-  gap: 8px;
-  margin: 0;
-  padding: 0;
-  border: 0;
-}
-
-.agent-approval-options legend {
-  padding: 0 0 2px;
-}
-
-.agent-approval-option {
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
-  align-items: start;
-  gap: 10px;
-  min-height: var(--control-height);
-  padding: 10px 12px;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-md);
-  background: var(--surface-alt);
-  cursor: pointer;
-}
-
-.agent-approval-option.selected {
-  border-color: var(--accent-strong);
-  background: var(--surface-raised);
-}
-
-.agent-approval-option.disabled {
-  cursor: not-allowed;
-  opacity: 0.64;
-}
-
-.agent-approval-option input {
-  width: 18px;
-  height: 18px;
-  margin: 1px 0 0;
-  accent-color: var(--accent-strong);
-}
-
-.agent-approval-option-text {
-  display: grid;
-  gap: 3px;
-  min-width: 0;
-}
-
-.agent-approval-option-text small {
-  color: var(--muted);
   line-height: 1.35;
-}
-
-.agent-approval-option-reason {
-  color: var(--warn-text) !important;
 }
 
 .agent-approval-dialog .openai-auth-actions .command {

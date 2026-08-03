@@ -450,6 +450,44 @@ the `dataviz` skill; what is binding here is how it lands in this product.
 
 ---
 
+## 9b. Decisions and generated answers
+
+Two patterns that keep going wrong, written down so they stop.
+
+**A decision dialog is buttons, not a form.** If the user is choosing between a
+small fixed set of actions, each action is its own button and pressing it *is*
+the choice. Radio group plus a Submit button makes the user act twice for one
+decision, and a submit label that mutates with the selection means the button
+they are about to press says something different from what they read a moment
+ago.
+
+- **The button carries the operation and its target** — "Start EmbyServer", not
+  "Allow fix". A button label that needs the surrounding paragraph to be
+  actionable is not a label.
+- **The dialog title is the decision** — "Start EmbyServer?", not "Allow
+  automatic fix?". The user should not read three blocks to find out what is
+  being proposed and on what.
+- **The affirmative comes first**, matching every other action row.
+- **One sentence of consequence**, in the live region, naming what will run and
+  what will not. Not a progress stepper: a single click has no steps.
+- **A disabled action states why**, where the eye already is, not only in a
+  tooltip.
+
+**A generated answer is structured, not a paragraph stack.** Model output lands
+in fixed slots, and each slot gets the shape its content already has.
+
+- **Verdict, cause, evidence, next step — in that order.** One status pill for
+  the verdict (severity is a state), confidence as muted meta beside it.
+- **A list is a list.** Evidence renders as `<ul>`; joining discrete facts with
+  semicolons turns four observations into one run-on sentence nobody finishes.
+- **Constrain length at the schema, not the CSS.** A model told "at most two
+  sentences" writes two; a model truncated afterwards writes a wall of text that
+  gets cut mid-word. Keep a server-side word-boundary trim as the backstop for
+  providers that ignore the limit.
+- **Label the action line.** "NEXT" in micro caps beats a fourth grey paragraph.
+
+---
+
 ## 10. Checklist for new UI
 
 1. Does this page answer one question, and is the answer first?

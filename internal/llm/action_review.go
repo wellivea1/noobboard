@@ -16,8 +16,14 @@ type ActionReviewReference struct {
 }
 
 type ActionReviewRequest struct {
-	ActionID      string
-	ActionTitle   string
+	ActionID    string
+	ActionTitle string
+	// Operation is the concrete thing the server will run: start, stop or
+	// restart. Without it the reviewer only saw a recommendation id, and it
+	// refused correctly — "action_id suggests asking an admin to restart a
+	// container, while action_title says start recommendation" — because
+	// nothing in the prompt named an allowlisted operation.
+	Operation     string
 	TargetID      string
 	TargetLabel   string
 	CurrentStatus models.CurrentStatus
@@ -100,6 +106,12 @@ func BuildActionReviewPrompt(req ActionReviewRequest) string {
 			refs = b.String()
 		}
 	}
+	// A review with no concrete operation is not reviewable. Failing closed here
+	// beats sending a prompt that invites the reviewer to guess.
+	operation := strings.ToLower(strings.TrimSpace(req.Operation))
+	if operation == "" {
+		operation = "(none supplied - refuse this review)"
+	}
 	appSummary := compactActionReviewApps(req.Snapshot.Apps, req.TargetID)
 	infraSummary := compactActionReviewInfra(req.Snapshot.Infrastructure)
 	return fmt.Sprintf(`ACTION AUTO-REVIEW
@@ -107,21 +119,32 @@ func BuildActionReviewPrompt(req ActionReviewRequest) string {
 You are a separate reviewer model deciding whether NoobBoard may execute one proposed server-side repair.
 The LLM that diagnosed the issue cannot execute anything. The server will only run the fixed allowlisted action below if you allow it.
 
+What will run if you allow it:
+NoobBoard will execute exactly one Docker operation — "%s" — against the single target below. It cannot run anything else.
+The operation is already restricted to the server allowlist (start, stop, restart); you are not being asked to verify that.
+
+Your job is to decide whether that operation is *warranted* by the evidence:
+- Does the target's current state justify this operation?
+- Is the target unambiguous and present in the snapshot below?
+- Do the references (when relevant) forbid it?
+
 Rules:
-- Use the references as policy context when they are relevant.
-- Approve only if the action is a server-allowlisted app start, stop, or restart; target-specific; visible in the current snapshot; and consistent with the evidence.
+- Judge the operation named above. The recommendation_id and title are provenance only — they describe where the suggestion came from, not what will run, and their wording may differ from the operation.
+- Set allow=false if the evidence does not justify the operation, the target is unclear, or policy forbids it.
 - Do not invent extra actions, shell commands, Docker names, or infrastructure changes.
-- If the evidence is ambiguous, the target is unclear, or the action conflicts with policy, set allow=false.
 - Return only the JSON object required by the schema.
 
-Proposed action:
-- action_id: %s
-- action_title: %s
+Operation to review:
+- operation: %s
 - target_id: %s
 - target_label: %s
 - current_status: %s
 - actor_role: %s
 - via: %s
+
+Provenance (not the action):
+- recommendation_id: %s
+- recommendation_title: %s
 
 Current app evidence:
 %s
@@ -130,7 +153,7 @@ Infrastructure summary:
 %s
 
 References:
-%s`, req.ActionID, req.ActionTitle, req.TargetID, req.TargetLabel, req.CurrentStatus, req.ActorRole, req.Via, appSummary, infraSummary, refs)
+%s`, operation, operation, req.TargetID, req.TargetLabel, req.CurrentStatus, req.ActorRole, req.Via, req.ActionID, req.ActionTitle, appSummary, infraSummary, refs)
 }
 
 func compactActionReviewApps(apps []models.AppStatus, targetID string) string {
@@ -141,19 +164,37 @@ func compactActionReviewApps(apps []models.AppStatus, targetID string) string {
 		if !isTarget && app.CurrentStatus == models.StatusOnline {
 			continue
 		}
-		fmt.Fprintf(&b, "- app_id=%s name=%s status=%s visible=%t agent_repair_allowed=%t user_control_allowed=%t\n",
+		// The reviewer is asked whether the operation is *warranted*, so it needs
+		// the evidence, not just the status word. A live denial once read "no
+		// evidence is provided that a restart is needed" because this line
+		// carried no docker state, health, or exit detail.
+		marker := "-"
+		if isTarget {
+			marker = "*"
+		}
+		fmt.Fprintf(&b, "%s app_id=%s name=%s status=%s docker_state=%s health=%s visible=%t agent_repair_allowed=%t user_control_allowed=%t",
+			marker,
 			app.AppID,
 			firstNonEmpty(app.DisplayName, app.ContainerName, app.AppID),
 			app.CurrentStatus,
+			firstNonEmpty(string(app.DockerState), "unknown"),
+			firstNonEmpty(string(app.DockerHealth), "none"),
 			app.VisibleToGeneralUsers,
 			app.AgentRepairAllowed,
 			app.RestartAllowedGeneralUser,
 		)
+		if detail := models.ExitDetail(app.DockerExitCode, app.DockerExitReason); detail != "" {
+			fmt.Fprintf(&b, " last_exit=%q", detail)
+		}
+		if app.RecentStatusChanges > 0 {
+			fmt.Fprintf(&b, " recent_status_changes=%d", app.RecentStatusChanges)
+		}
+		b.WriteString("\n")
 	}
 	if strings.TrimSpace(b.String()) == "" {
 		return "(no relevant app evidence)"
 	}
-	return b.String()
+	return "Lines marked * are the target of the proposed operation.\n" + b.String()
 }
 
 func compactActionReviewInfra(infra models.InfrastructureStatus) string {

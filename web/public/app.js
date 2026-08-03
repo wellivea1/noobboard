@@ -3246,11 +3246,22 @@ async function runDiagnosis(question, output, options = {}) {
       const evidence = cleanChatList(result.evidence);
       const diagnosisText = firstChatText(result.diagnosis, result.general_user_summary, "No diagnosis returned.");
       const adminMessage = cleanChatText(result.admin_message);
+      // Read top-down: what it is, then why, then what to do. Evidence is a
+      // list because it is a list — joining it with semicolons made four
+      // separate observations look like one long sentence nobody finished.
       output.replaceChildren(
-        node("strong", { text: `${result.severity} confidence ${Math.round((result.confidence || 0) * 100)}%` }),
-        node("p", { text: diagnosisText }),
-        evidence.length ? node("p", { class: "muted", text: `Evidence: ${evidence.join("; ")}` }) : null,
-        adminMessage ? node("p", { class: "muted", text: adminMessage }) : null,
+        node("div", { class: "chat-verdict" },
+          node("span", { class: `settings-state-pill ${severityTone(result.severity)}`, text: severityLabel(result.severity) }),
+          node("span", { class: "chat-confidence", text: `${Math.round((result.confidence || 0) * 100)}% confident` }),
+        ),
+        node("p", { class: "chat-lead", text: diagnosisText }),
+        evidence.length ? node("ul", { class: "chat-evidence" },
+          evidence.map((item) => node("li", { text: item })),
+        ) : null,
+        adminMessage ? node("p", { class: "chat-next" },
+          node("span", { class: "chat-next-label", text: "Next" }),
+          node("span", { text: adminMessage }),
+        ) : null,
         result.agent_plan ? renderAgentPlanPrompt(result.agent_plan) : null,
       );
       maybeOpenAgentApprovalDialog(result.agent_plan);
@@ -3282,6 +3293,40 @@ async function runDiagnosis(question, output, options = {}) {
     if (options.busyKey) state.chatBusy[options.busyKey] = false;
     setChatControlsBusy(options.input, options.button, false);
     syncAutoRepairControls(state.snapshot);
+  }
+}
+
+// Severity is a state, so it gets the one pill. The raw enum word is not the
+// label — "medium" alone tells an admin nothing about whether to get up.
+function severityTone(severity) {
+  switch (String(severity || "").trim().toLowerCase()) {
+    case "critical":
+    case "high":
+      return "state-bad";
+    case "medium":
+    case "low":
+      return "state-warn";
+    case "none":
+      return "state-ok";
+    default:
+      return "state-muted";
+  }
+}
+
+function severityLabel(severity) {
+  switch (String(severity || "").trim().toLowerCase()) {
+    case "critical":
+      return "Critical";
+    case "high":
+      return "Needs attention";
+    case "medium":
+      return "Degraded";
+    case "low":
+      return "Minor";
+    case "none":
+      return "Healthy";
+    default:
+      return "Unclear";
   }
 }
 
@@ -3564,9 +3609,6 @@ function normalizeAgentApprovalOptions(plan) {
   ];
 }
 
-function initialAgentApprovalChoice(options) {
-  return (options.find((option) => option.enabled && option.selected) || options.find((option) => option.enabled) || options[0] || {}).id || "deny";
-}
 
 function agentPlanDirectAction(plan) {
   const action = String(plan?.direct_action || plan?.outcome?.action || "restart").trim().toLowerCase();
@@ -3591,9 +3633,12 @@ function openAgentApprovalDialog(plan) {
   const directAction = agentPlanDirectAction(plan);
   const actionLabel = userAppActionLabel(directAction);
   const actionVerb = actionLabel.toLowerCase();
-  let selectedChoice = initialAgentApprovalChoice(approvalOptions);
-  const optionRows = [];
+  // One decision, so one click. The radio group plus a "Submit choice" button
+  // made an admin pick twice to do one thing, and the second button's label
+  // changed under the cursor. Each choice is now its own button that says what
+  // it does to which app.
   const cooldownNode = renderAgentApprovalCooldown(plan);
+  const target = agentApprovalTargetName(plan);
   const closeButton = node("button", {
     type: "button",
     class: "command ghost",
@@ -3602,68 +3647,54 @@ function openAgentApprovalDialog(plan) {
     onclick: () => closeAgentApprovalDialog(),
     text: "Close",
   });
-  const submitButton = node("button", {
-    type: "button",
-    class: "primary command",
-    "data-glyph": "v",
-    onclick: () => submitAgentApproval(plan, selectedChoice, submitButton),
-    text: "Submit choice",
-  });
   const statusNode = node("p", {
     class: "openai-auth-status",
     "aria-live": "polite",
     "data-tone": plan.can_execute ? "info" : "bad",
-    text: plan.can_execute ? `Approval will ${actionVerb} the selected app once.` : "Fixes require admin app fixes and per-app opt-in.",
+    text: plan.can_execute
+      ? `NoobBoard will ${actionVerb} ${target} once, then check whether it recovered. Nothing else runs.`
+      : "Fixes require admin app fixes and per-app opt-in.",
   });
+  const choiceButtons = [];
+  const affirmative = approvalOptions.filter((option) => option.id !== "deny");
+  const primaryID = (affirmative.find((option) => option.enabled && option.selected) || affirmative.find((option) => option.enabled) || affirmative[0])?.id;
+  // Affirmative first, matching every other action row in the product. The
+  // server sends deny first because it is the safe default, not the reading
+  // order.
+  const orderedOptions = [...approvalOptions].sort((a, b) => (a.id === "deny" ? 1 : 0) - (b.id === "deny" ? 1 : 0));
+  const optionNodes = orderedOptions.map((option) => {
+    const isPrimary = option.id === primaryID;
+    const button = node("button", {
+      type: "button",
+      class: `command${isPrimary ? " primary" : " ghost"}`,
+      "data-glyph": option.id === "deny" ? "x" : "v",
+      "data-choice": option.id,
+      disabled: !option.enabled,
+      title: option.reason || option.description || "",
+      onclick: () => submitAgentApproval(plan, option.id, button),
+      text: agentApprovalButtonLabel(option, plan, target),
+    });
+    choiceButtons.push({ option, button });
+    return button;
+  });
+  // A disabled button with no explanation is a dead end. Surface the first
+  // blocking reason where the eye already is, under the buttons.
+  const blockedReason = approvalOptions.find((option) => option.id !== "deny" && !option.enabled && option.reason)?.reason || "";
   const updateSelection = () => {
-    const selectedOption = approvalOptions.find((option) => option.id === selectedChoice);
-    const enabled = !!selectedOption?.enabled;
-    submitButton.disabled = !enabled;
-    submitButton.textContent = selectedChoice === "deny" ? "Do not allow" : selectedOption?.label || "Submit choice";
-    for (const item of optionRows) {
-      item.row.classList.toggle("selected", item.option.id === selectedChoice);
-      item.row.classList.toggle("disabled", !item.option.enabled);
-      item.input.disabled = !item.option.enabled;
-      if (item.reasonNode) {
-        item.reasonNode.textContent = item.option.reason || "";
-        item.reasonNode.hidden = !item.option.reason;
-      }
+    for (const item of choiceButtons) {
+      item.button.disabled = !item.option.enabled;
+      item.button.title = item.option.reason || item.option.description || "";
+      item.button.textContent = agentApprovalButtonLabel(item.option, plan, target);
     }
-    if (selectedOption?.reason) {
+    const blocked = approvalOptions.find((option) => option.id !== "deny" && !option.enabled && option.reason);
+    if (blocked) {
       statusNode.dataset.tone = "bad";
-      statusNode.textContent = selectedOption.reason;
-    } else if (selectedChoice === "deny") {
+      statusNode.textContent = blocked.reason;
+    } else if (plan.can_execute) {
       statusNode.dataset.tone = "info";
-      statusNode.textContent = "No automatic fix will run.";
-    } else {
-      statusNode.dataset.tone = "info";
-      statusNode.textContent = `NoobBoard will ${actionVerb} this app once, then verify whether it recovered.`;
+      statusNode.textContent = `NoobBoard will ${actionVerb} ${target} once, then check whether it recovered. Nothing else runs.`;
     }
   };
-  const optionNodes = approvalOptions.map((option) => {
-    const input = node("input", {
-      type: "radio",
-      name: "agent-approval-choice",
-      value: option.id,
-      checked: option.id === selectedChoice,
-      disabled: !option.enabled,
-      onchange: () => {
-        selectedChoice = option.id;
-        updateSelection();
-      },
-    });
-    const reasonNode = node("small", { class: "agent-approval-option-reason", text: option.reason || "", hidden: !option.reason });
-    const row = node("label", { class: `agent-approval-option${option.enabled ? "" : " disabled"}${option.id === selectedChoice ? " selected" : ""}` },
-      input,
-      node("span", { class: "agent-approval-option-text" },
-        node("strong", { text: option.label || option.id }),
-        option.description ? node("small", { text: option.description }) : null,
-        reasonNode,
-      ),
-    );
-    optionRows.push({ option, row, input, reasonNode });
-    return row;
-  });
   const dialog = node("section", {
     class: "openai-auth-dialog agent-approval-dialog",
     role: "dialog",
@@ -3675,33 +3706,18 @@ function openAgentApprovalDialog(plan) {
         node("span", { class: "openai-auth-mark", "aria-hidden": "true", text: "AI" }),
         node("div", {},
           node("p", { class: "eyebrow", text: "Fix approval" }),
-          node("h2", { id: "agent-approval-title", text: "Allow automatic fix?" }),
+          // The title is the decision itself. "Allow automatic fix?" made the
+          // admin read three more blocks to find out which fix, on what.
+          node("h2", { id: "agent-approval-title", text: `${actionLabel} ${target}?` }),
         ),
       ),
       closeButton,
     ),
     node("div", { class: "openai-auth-content agent-approval-content" },
       node("p", { class: "openai-auth-copy", text: approvalSummary }),
-      node("div", { class: "agent-approval-request" },
-        node("span", { class: "openai-auth-label", text: "Requested fix" }),
-        node("strong", { text: requestedFix }),
-        node("span", { class: "agent-approval-direct-action", text: `${actionLabel} once` }),
-        agentPlanTargetText(plan) ? node("small", { text: agentPlanTargetText(plan) }) : null,
-      ),
       cooldownNode,
-      node("ol", { class: "agent-approval-steps", "aria-label": "Approval progress" },
-        node("li", { class: "current" }, "Review"),
-        node("li", {}, "Approve"),
-        node("li", {}, `${actionLabel} and verify`),
-      ),
-      node("fieldset", { class: "agent-approval-options" },
-        node("legend", { class: "openai-auth-label", text: "Approval choice" }),
-        optionNodes,
-      ),
-      node("div", { class: "openai-auth-actions" },
-        submitButton,
-        node("button", { type: "button", class: "command", "data-glyph": "x", onclick: () => closeAgentApprovalDialog(), text: "Close" }),
-      ),
+      node("div", { class: "openai-auth-actions agent-approval-actions" }, optionNodes),
+      blockedReason ? null : node("small", { class: "agent-approval-provenance", text: `From: ${requestedFix}` }),
     ),
     statusNode,
   );
@@ -3712,11 +3728,26 @@ function openAgentApprovalDialog(plan) {
   backdrop.addEventListener("keydown", handleAgentApprovalDialogKeydown);
   document.body.append(backdrop);
   document.body.classList.add("agent-approval-open");
-  state.agentApprovalDialog = { backdrop, dialog, previousFocus, statusNode, submitButton };
+  state.agentApprovalDialog = { backdrop, dialog, previousFocus, statusNode };
   updateSelection();
-  startAgentApprovalCooldownCountdown(plan, cooldownNode, approvalOptions, optionRows, updateSelection);
-  const selectedInput = optionRows.find((item) => item.option.id === selectedChoice && !item.input.disabled)?.input;
-  (selectedInput || closeButton).focus({ preventScroll: true });
+  startAgentApprovalCooldownCountdown(plan, cooldownNode, approvalOptions, updateSelection);
+  // Focus lands on the affirmative button, but nothing is pre-armed: Enter on a
+  // focused button is still a deliberate press, unlike a pre-selected radio.
+  const primaryButton = choiceButtons.find((item) => item.option.id === primaryID && item.option.enabled)?.button;
+  (primaryButton || closeButton).focus({ preventScroll: true });
+}
+
+// "Start EmbyServer" beats "Allow fix": the button says what it does and to
+// what, so the label alone is enough to act on.
+function agentApprovalButtonLabel(option, plan, target) {
+  if (option.id === "deny") return "Not now";
+  if (option.id === "allow_once") return `${userAppActionLabel(agentPlanDirectAction(plan))} ${target}`;
+  return option.label || option.id;
+}
+
+function agentApprovalTargetName(plan) {
+  const name = plan?.target?.label || plan?.target?.id || plan?.outcome?.target_label || plan?.outcome?.target_id || plan?.target?.query || "";
+  return String(name).trim() || "this app";
 }
 
 function renderAgentApprovalCooldown(plan) {
@@ -3731,7 +3762,7 @@ function renderAgentApprovalCooldown(plan) {
   );
 }
 
-function startAgentApprovalCooldownCountdown(plan, cooldownNode, approvalOptions, optionRows, updateSelection) {
+function startAgentApprovalCooldownCountdown(plan, cooldownNode, approvalOptions, updateSelection) {
   if (state.agentApprovalCooldownTimer) {
     window.clearInterval(state.agentApprovalCooldownTimer);
     state.agentApprovalCooldownTimer = null;
@@ -3763,11 +3794,6 @@ function startAgentApprovalCooldownCountdown(plan, cooldownNode, approvalOptions
       if (state.agentApprovalCooldownTimer) {
         window.clearInterval(state.agentApprovalCooldownTimer);
         state.agentApprovalCooldownTimer = null;
-      }
-    }
-    for (const item of optionRows) {
-      if (item.option.id === "allow_once") {
-        item.input.disabled = !item.option.enabled;
       }
     }
     updateSelection();
@@ -5266,6 +5292,9 @@ function renderLLMSettings(item, data) {
   const timeout = durationSecondsField("Timeout", settings.timeout || 45000000000);
   const agentControlEnabled = settingToggle("Allow admin-approved app fixes", !!settings.agent_control_enabled);
   const actionAutoReviewEnabled = settingToggle("Require reviewer before fixes", !!settings.action_auto_review_enabled);
+  // Defaults to on for existing installs, so read the resolved value the server
+  // sends rather than assuming false when the key is absent.
+  const agentRestartSuggestionEnabled = settingToggle("Suggest a restart when the model does not", settings.agent_restart_suggestion_enabled !== false);
   const actionAutoReviewModel = settingSelectField("Reviewer model", settings.action_auto_review_model || "same", actionReviewModelOptions(settings));
   const actionAutoReviewReasoning = settingSelectField("Reviewer reasoning", settings.action_auto_review_reasoning || "", [
     { value: "", label: "Provider default" },
@@ -5354,6 +5383,11 @@ function renderLLMSettings(item, data) {
       node("p", { class: "muted", text: "When enabled, NoobBoard asks the selected reviewer model to check the proposed fix against these local reference docs before any approved app action runs." }),
     ),
     node("section", { class: "settings-subsection" },
+      node("h4", { text: "Restart suggestions" }),
+      node("div", { class: "settings-toggle-grid" }, agentRestartSuggestionEnabled.element),
+      node("p", { class: "muted", text: "NoobBoard checks app status itself. When the model does not recommend a fix but exactly one repair-eligible app is down, it offers that restart anyway. Approval, the safety reviewer, and per-app opt-in still apply. Turn this off to show only what the model recommends." }),
+    ),
+    node("section", { class: "settings-subsection" },
       node("h4", { text: "Who can ask" }),
       node("div", { class: "settings-policy-list" }, policyEditors.map((editor) => editor.element)),
     ),
@@ -5377,6 +5411,7 @@ function renderLLMSettings(item, data) {
       action_auto_review_model: actionAutoReviewModel.input.value,
       action_auto_review_reasoning: actionAutoReviewReasoning.input.value,
       action_auto_review_reference_paths: actionAutoReviewReferences.values(),
+      agent_restart_suggestion_enabled: agentRestartSuggestionEnabled.input.checked,
       clear_openai_api_key: clearOpenAI.input.checked,
       clear_chatgpt_auth: clearChatGPT.input.checked,
       clear_anthropic_api_key: clearAnthropic.input.checked,

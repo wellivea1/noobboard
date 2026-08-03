@@ -40,13 +40,37 @@ func ValidateDiagnosis(data []byte) (Diagnosis, error) {
 
 func (d *Diagnosis) normalize() {
 	d.Diagnosis = cleanModelText(d.Diagnosis)
+	// Backstop for providers that ignore maxLength. Trimming on a word boundary
+	// keeps the tail readable instead of ending mid-word.
+	d.Diagnosis = truncateWords(d.Diagnosis, 320)
 	d.GeneralUserSummary = cleanModelText(d.GeneralUserSummary)
 	d.AdminMessage = cleanModelText(d.AdminMessage)
 	d.RecommendedActionID = cleanModelText(d.RecommendedActionID)
 	d.RecommendedTarget.Kind = cleanModelText(d.RecommendedTarget.Kind)
 	d.RecommendedTarget.IDOrName = cleanModelText(d.RecommendedTarget.IDOrName)
+	d.GeneralUserSummary = truncateWords(d.GeneralUserSummary, 200)
+	d.AdminMessage = truncateWords(d.AdminMessage, 240)
 	d.AffectedServices = cleanModelTextSlice(d.AffectedServices)
 	d.Evidence = cleanModelTextSlice(d.Evidence)
+	for i, item := range d.Evidence {
+		d.Evidence[i] = truncateWords(item, 120)
+	}
+	if len(d.Evidence) > 4 {
+		d.Evidence = d.Evidence[:4]
+	}
+}
+
+// truncateWords cuts at the last word boundary inside the limit so a long value
+// reads as a clipped sentence rather than a broken one.
+func truncateWords(value string, limit int) string {
+	if limit <= 0 || len(value) <= limit {
+		return value
+	}
+	cut := value[:limit]
+	if idx := strings.LastIndexAny(cut, " \t\n"); idx > limit/2 {
+		cut = cut[:idx]
+	}
+	return strings.TrimRight(strings.TrimSpace(cut), ".,;:") + "…"
 }
 
 func cleanModelText(value string) string {
@@ -139,13 +163,30 @@ func JSONSchema() map[string]interface{} {
 				"type":  "array",
 				"items": map[string]interface{}{"type": "string"},
 			},
-			"diagnosis": map[string]interface{}{"type": "string"},
-			"evidence": map[string]interface{}{
-				"type":  "array",
-				"items": map[string]interface{}{"type": "string"},
+			// Length caps are enforced here as well as in normalize(): a model that
+			// is told "two sentences" writes two sentences, whereas one that is only
+			// truncated afterwards writes a wall of text that gets cut mid-word.
+			"diagnosis": map[string]interface{}{
+				"type":        "string",
+				"maxLength":   320,
+				"description": "What is wrong and why, in at most two plain sentences. State the cause, not the reasoning that led to it. Do not repeat the evidence list or restate the status word.",
 			},
-			"general_user_summary": map[string]interface{}{"type": "string"},
-			"admin_message":        map[string]interface{}{"type": "string"},
+			"evidence": map[string]interface{}{
+				"type":        "array",
+				"maxItems":    4,
+				"description": "Up to four separate observations that support the diagnosis. Each is one short fact on its own, phrased 'signal: value' where possible (e.g. 'exit code: 137 OOMKilled'). Never a sentence of narrative, never a repeat of the diagnosis.",
+				"items":       map[string]interface{}{"type": "string", "maxLength": 120},
+			},
+			"general_user_summary": map[string]interface{}{
+				"type":        "string",
+				"maxLength":   200,
+				"description": "One sentence for a non-technical reader: what they will notice and whether it is being handled. No jargon, no app internals.",
+			},
+			"admin_message": map[string]interface{}{
+				"type":        "string",
+				"maxLength":   240,
+				"description": "What the admin should do next, in one or two sentences. Skip anything already covered by diagnosis or evidence. Do not describe your own capabilities or what you can and cannot execute — the interface already shows the admin which actions are available.",
+			},
 			"recommended_action_id": map[string]interface{}{
 				"type": "string",
 				"description": strings.Join([]string{

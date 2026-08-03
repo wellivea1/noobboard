@@ -116,7 +116,19 @@ type LLMConfig struct {
 	ActionAutoReviewModel          string                      `json:"action_auto_review_model,omitempty"`
 	ActionAutoReviewReasoning      string                      `json:"action_auto_review_reasoning,omitempty"`
 	ActionAutoReviewReferencePaths []string                    `json:"action_auto_review_reference_paths,omitempty"`
-	Policies                       map[string]models.LLMPolicy `json:"policies"`
+	// AgentRestartSuggestionEnabled controls NoobBoard's deterministic backstop:
+	// when the model does not recommend a fix but exactly one repair-eligible app
+	// is down, offer the restart anyway. A pointer, not a bool, so an existing
+	// settings file that predates the option keeps the old behaviour instead of
+	// decoding a missing key as "off".
+	AgentRestartSuggestionEnabled *bool                       `json:"agent_restart_suggestion_enabled,omitempty"`
+	Policies                      map[string]models.LLMPolicy `json:"policies"`
+}
+
+// RestartSuggestionEnabled reports whether the deterministic restart backstop
+// should run. Unset means enabled, which is how it behaved before the toggle.
+func (c LLMConfig) RestartSuggestionEnabled() bool {
+	return c.AgentRestartSuggestionEnabled == nil || *c.AgentRestartSuggestionEnabled
 }
 
 const (
@@ -1022,6 +1034,9 @@ func applyConfigKey(cfg *Config, section, key, value string) {
 		cfg.LLM.AnthropicModel = value
 	case "llm.action_auto_review_enabled":
 		cfg.LLM.ActionAutoReviewEnabled = parseBool(value)
+	case "llm.agent_restart_suggestion_enabled":
+		enabled := parseBool(value)
+		cfg.LLM.AgentRestartSuggestionEnabled = &enabled
 	case "llm.agent_control_enabled":
 		cfg.LLM.AgentControlEnabled = parseBool(value)
 	case "llm.agent_auto_repair_enabled":

@@ -2393,8 +2393,9 @@ const agentRepairExpression = `(async () => {
     }
     const dialog = document.querySelector('.agent-approval-dialog');
     dialogVisible = !!dialog && visibleElement(dialog);
-    document.querySelector('input[name="agent-approval-choice"][value="allow_once"]')?.click();
-    document.querySelector('.agent-approval-dialog .openai-auth-actions .primary')?.click();
+    // One click, not select-then-submit: the approval button carries the
+    // operation and its target, so pressing it IS the approval.
+    document.querySelector('.agent-approval-actions [data-choice="allow_once"]')?.click();
     await waitFor(() => document.querySelector('.agent-repair-progress.pending'));
     const progress = document.querySelector('.agent-repair-progress.pending');
     progressVisible = !!progress && visibleElement(progress);
