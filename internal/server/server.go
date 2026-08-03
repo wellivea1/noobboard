@@ -1613,7 +1613,7 @@ func (a *App) diagnose(w http.ResponseWriter, r *http.Request, mode llm.Mode, ro
 		if arraySuggested {
 			response.Diagnosis = planDiagnosis
 		}
-		planDiagnosis, suggested := adminRestartBackstopDiagnosis(planDiagnosis, full)
+		planDiagnosis, suggested := adminRestartBackstopDiagnosis(planDiagnosis, full, a.deps.Config.LLM.RestartSuggestionEnabled())
 		response.AgentPlan = a.llmAgentPlanResponse(planDiagnosis, full, mustUser(r).ID)
 		if arraySuggested {
 			markSuggestedArrayStartPlan(response.AgentPlan)
@@ -1632,7 +1632,7 @@ func (a *App) diagnose(w http.ResponseWriter, r *http.Request, mode llm.Mode, ro
 		if arraySuggested {
 			response.Diagnosis = planDiagnosis
 		}
-		planDiagnosis, suggested := generalUserRestartBackstopDiagnosis(planDiagnosis, filtered)
+		planDiagnosis, suggested := generalUserRestartBackstopDiagnosis(planDiagnosis, filtered, a.deps.Config.LLM.RestartSuggestionEnabled())
 		response.AgentPlan = a.llmUserRepairPlanResponse(planDiagnosis, filtered, mustUser(r).ID)
 		if arraySuggested {
 			markSuggestedArrayStartPlan(response.AgentPlan)
@@ -1987,7 +1987,10 @@ func (a *App) llmUserArrayStartPlanResponse(action llmAgentActionDefinition, kno
 	}
 }
 
-func adminRestartBackstopDiagnosis(diagnosis llm.Diagnosis, snapshot models.Snapshot) (llm.Diagnosis, bool) {
+func adminRestartBackstopDiagnosis(diagnosis llm.Diagnosis, snapshot models.Snapshot, enabled bool) (llm.Diagnosis, bool) {
+	if !enabled {
+		return diagnosis, false
+	}
 	if !canBackstopRestartAction(diagnosis.RecommendedActionID) {
 		return diagnosis, false
 	}
@@ -2007,7 +2010,10 @@ func arrayStartBackstopDiagnosis(diagnosis llm.Diagnosis, snapshot models.Snapsh
 	return arrayStartGuidedDiagnosis(diagnosis, snapshot.Infrastructure.UnraidArrayState), true
 }
 
-func generalUserRestartBackstopDiagnosis(diagnosis llm.Diagnosis, snapshot models.Snapshot) (llm.Diagnosis, bool) {
+func generalUserRestartBackstopDiagnosis(diagnosis llm.Diagnosis, snapshot models.Snapshot, enabled bool) (llm.Diagnosis, bool) {
+	if !enabled {
+		return diagnosis, false
+	}
 	if !canBackstopRestartAction(diagnosis.RecommendedActionID) {
 		return diagnosis, false
 	}
@@ -2380,9 +2386,16 @@ func (a *App) reviewAgentAction(ctx context.Context, actor users.User, snapshot 
 	}
 	filtered := privacy.FilterSnapshotForRole(snapshot, models.RoleAdmin, redactor)
 	refs := loadActionReviewReferences(cfg.ActionAutoReviewReferencePaths)
+	// Fail closed rather than asking the reviewer to judge an unnamed operation.
+	// This is what the prompt used to do implicitly, and the reviewer refused
+	// every time — correctly, but as an unexplained "auto-review did not allow".
+	if strings.TrimSpace(string(action.DockerAction)) == "" {
+		return llm.ActionReviewDecision{}, true, errors.New("no concrete app operation was resolved for this recommendation, so it cannot be safety reviewed")
+	}
 	request := llm.ActionReviewRequest{
 		ActionID:      action.ID,
 		ActionTitle:   action.Title,
+		Operation:     string(action.DockerAction),
 		TargetID:      app.AppID,
 		TargetLabel:   firstNonEmpty(app.DisplayName, app.ContainerName, app.AppID),
 		CurrentStatus: currentStatusOrUnknown(app.CurrentStatus),
@@ -4262,6 +4275,7 @@ type llmSettingsView struct {
 	ActionAutoReviewModel          string                      `json:"action_auto_review_model"`
 	ActionAutoReviewReasoning      string                      `json:"action_auto_review_reasoning"`
 	ActionAutoReviewReferencePaths []string                    `json:"action_auto_review_reference_paths"`
+	AgentRestartSuggestionEnabled  bool                        `json:"agent_restart_suggestion_enabled"`
 	Policies                       map[string]models.LLMPolicy `json:"policies"`
 	AgentReadiness                 llmAgentReadinessView       `json:"agent_readiness"`
 }
@@ -4404,6 +4418,7 @@ type llmSettingsUpdate struct {
 	ActionAutoReviewModel          *string                     `json:"action_auto_review_model"`
 	ActionAutoReviewReasoning      *string                     `json:"action_auto_review_reasoning"`
 	ActionAutoReviewReferencePaths []string                    `json:"action_auto_review_reference_paths"`
+	AgentRestartSuggestionEnabled  *bool                       `json:"agent_restart_suggestion_enabled"`
 	Policies                       map[string]models.LLMPolicy `json:"policies"`
 }
 
@@ -4474,6 +4489,7 @@ func llmSettingsResponse(cfg config.LLMConfig, sess session) llmSettingsView {
 		AgentAutoRepairEnabled:         cfg.AgentAutoRepairEnabled,
 		AgentArmDuration:               cfg.AgentArmDuration,
 		ActionAutoReviewEnabled:        cfg.ActionAutoReviewEnabled,
+		AgentRestartSuggestionEnabled:  cfg.RestartSuggestionEnabled(),
 		ActionAutoReviewModel:          firstNonEmpty(strings.TrimSpace(cfg.ActionAutoReviewModel), "same"),
 		ActionAutoReviewReasoning:      cfg.ActionAutoReviewReasoning,
 		ActionAutoReviewReferencePaths: append([]string(nil), cfg.ActionAutoReviewReferencePaths...),
@@ -4658,6 +4674,10 @@ func decodeLLMSettingsUpdate(r *http.Request, current config.LLMConfig) (config.
 		if update.AgentAutoRepairEnabled == nil {
 			settings.AgentAutoRepairEnabled = *update.ActionAutoReviewEnabled
 		}
+	}
+	if update.AgentRestartSuggestionEnabled != nil {
+		enabled := *update.AgentRestartSuggestionEnabled
+		settings.AgentRestartSuggestionEnabled = &enabled
 	}
 	if update.ActionAutoReviewModel != nil {
 		settings.ActionAutoReviewModel = *update.ActionAutoReviewModel

@@ -315,6 +315,85 @@ func TestAdminDiagnoseSuggestsRestartWhenModelMissesSingleEligibleDownApp(t *tes
 	}
 }
 
+// The deterministic backstop is a NoobBoard behaviour, not a model one, so an
+// admin who only wants to see what the model actually recommended can turn it
+// off. Same fixture as the test above, one setting flipped.
+func TestAdminDiagnoseSkipsRestartSuggestionWhenDisabled(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.Path = serverCacheTestPath(t, "diagnose-agent-restart-backstop-off")
+	cfg.FixtureDir = filepath.Join("..", "..", "fixtures")
+	cfg.LLM.Provider = "openai"
+	cfg.LLM.OpenAIAuthMethod = config.OpenAIAuthMethodAPIKey
+	cfg.LLM.OpenAIAPIKey = "sk-test-local"
+	cfg.LLM.AgentControlEnabled = true
+	disabled := false
+	cfg.LLM.AgentRestartSuggestionEnabled = &disabled
+	cfg.AppCatalog.AgentRepairAllowed = map[string]bool{"emby": true}
+
+	app := newTestApp(t, cfg)
+	app.deps.Collectors.Docker = &recordingDockerCollector{apps: []models.AppStatus{{
+		AppID:         "emby",
+		DisplayName:   "Emby",
+		ContainerID:   "container-emby",
+		ContainerName: "EmbyServer",
+		DockerState:   models.DockerExited,
+		CurrentStatus: models.StatusOffline,
+		Severity:      models.SeverityHigh,
+	}}}
+	app.settingsMu.Lock()
+	app.deps.LLM = &recordingLLMClient{
+		diagnosis: llm.Diagnosis{
+			Severity:            models.SeverityHigh,
+			Confidence:          0.81,
+			IncidentType:        models.IncidentAppDown,
+			AffectedServices:    []string{"Emby"},
+			Diagnosis:           "Emby is down.",
+			Evidence:            []string{"App is offline."},
+			GeneralUserSummary:  "Emby is not working.",
+			AdminMessage:        "Review Emby.",
+			RecommendedActionID: "none",
+			RecommendedTarget:   llm.ActionTarget{Kind: "none", IDOrName: ""},
+			ShouldNotifyAdmin:   true,
+		},
+	}
+	app.settingsMu.Unlock()
+
+	router := app.Router()
+	cookie, csrf := loginAdmin(t, router)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/diagnose", strings.NewReader(`{"question":"what is wrong?"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/admin/diagnose status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var response diagnosisResponse
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.AgentPlan != nil && response.AgentPlan.Title == "Suggested restart" {
+		t.Fatalf("restart suggestion was offered while disabled: %#v", response.AgentPlan)
+	}
+	if response.AgentPlan != nil && response.AgentPlan.RecommendedActionID == "ask_admin_to_restart_container" {
+		t.Fatalf("restart plan leaked through while suggestion is disabled: %#v", response.AgentPlan)
+	}
+}
+
+// A settings file written before the toggle existed has no key for it, and must
+// keep the behaviour it already had rather than silently losing the backstop.
+func TestRestartSuggestionDefaultsOnWhenUnset(t *testing.T) {
+	if !(config.LLMConfig{}).RestartSuggestionEnabled() {
+		t.Fatal("unset agent_restart_suggestion_enabled must resolve to enabled")
+	}
+	off := false
+	if (config.LLMConfig{AgentRestartSuggestionEnabled: &off}).RestartSuggestionEnabled() {
+		t.Fatal("explicit false must resolve to disabled")
+	}
+}
+
 func TestAdminDiagnoseDoesNotOpenApprovalForUnresolvedAppTarget(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Database.Path = serverCacheTestPath(t, "diagnose-agent-unresolved-target")
