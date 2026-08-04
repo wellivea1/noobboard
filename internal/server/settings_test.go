@@ -1356,15 +1356,13 @@ func TestAgentApprovalGlobalRateLimitBlocksDocker(t *testing.T) {
 	}
 	app.settingsMu.Unlock()
 	now := time.Now().UTC()
-	app.agentRepairMu.Lock()
-	app.agentRepairGlobal = []time.Time{
+	app.agentRepairs.seedGlobalForTest(
 		now.Add(-time.Minute),
-		now.Add(-2 * time.Minute),
-		now.Add(-3 * time.Minute),
-		now.Add(-4 * time.Minute),
-		now.Add(-5 * time.Minute),
-	}
-	app.agentRepairMu.Unlock()
+		now.Add(-2*time.Minute),
+		now.Add(-3*time.Minute),
+		now.Add(-4*time.Minute),
+		now.Add(-5*time.Minute),
+	)
 
 	router := app.Router()
 	cookie, csrf := loginAdmin(t, router)
