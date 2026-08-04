@@ -66,8 +66,8 @@ const (
 	HealthUnknown   DockerHealth = "unknown"
 )
 
-// How a container's last exit should be read. Restarting is the right response
-// to exactly one of these.
+// DockerExit is how a container's last exit should be read. Restarting is the
+// right response to exactly one of these.
 type DockerExit string
 
 const (
@@ -119,27 +119,27 @@ const (
 )
 
 type AppStatus struct {
-	AppID                       string         `json:"app_id"`
-	DisplayName                 string         `json:"display_name"`
-	ContainerID                 string         `json:"container_id,omitempty"`
-	ContainerName               string         `json:"container_name"`
-	Category                    string         `json:"category"`
-	IconURL                     string         `json:"icon_url,omitempty"`
-	IconSource                  string         `json:"icon_source,omitempty"`
-	ImageRef                    string         `json:"image_ref,omitempty"`
-	WebURL                      string         `json:"web_url,omitempty"`
-	TemplatePath                string         `json:"template_path,omitempty"`
-	DataSource                  string         `json:"data_source,omitempty"`
-	VisibleToGeneralUsers       bool           `json:"visible_to_general_users"`
-	ProbeType                   ProbeType      `json:"probe_type"`
-	DockerState                 DockerState    `json:"docker_state"`
-	DockerHealth                DockerHealth   `json:"docker_health"`
+	AppID                 string       `json:"app_id"`
+	DisplayName           string       `json:"display_name"`
+	ContainerID           string       `json:"container_id,omitempty"`
+	ContainerName         string       `json:"container_name"`
+	Category              string       `json:"category"`
+	IconURL               string       `json:"icon_url,omitempty"`
+	IconSource            string       `json:"icon_source,omitempty"`
+	ImageRef              string       `json:"image_ref,omitempty"`
+	WebURL                string       `json:"web_url,omitempty"`
+	TemplatePath          string       `json:"template_path,omitempty"`
+	DataSource            string       `json:"data_source,omitempty"`
+	VisibleToGeneralUsers bool         `json:"visible_to_general_users"`
+	ProbeType             ProbeType    `json:"probe_type"`
+	DockerState           DockerState  `json:"docker_state"`
+	DockerHealth          DockerHealth `json:"docker_health"`
 	// Exit detail parsed out of the Docker status string. The code alone is
 	// ambiguous, so ExitReason carries the interpretation the diagnosis needs:
 	// a container killed by the OOM killer and one stopped on purpose both read
 	// as "offline" without it, and they need opposite responses.
-	DockerExitCode              *int           `json:"docker_exit_code,omitempty"`
-	DockerExitReason            DockerExit     `json:"docker_exit_reason,omitempty"`
+	DockerExitCode   *int       `json:"docker_exit_code,omitempty"`
+	DockerExitReason DockerExit `json:"docker_exit_reason,omitempty"`
 	// Status transitions recorded for this app inside RestartLoopWindow.
 	// Populated from history before the rules run, so the rule engine stays a
 	// pure function of the snapshot.
@@ -183,60 +183,60 @@ type LogLine struct {
 }
 
 type InfrastructureStatus struct {
-	InternetReachable       bool         `json:"internet_reachable"`
-	DNSOK                   bool         `json:"dns_ok"`
-	RouterReachable         bool         `json:"router_reachable"`
-	UniFiWANUp              bool         `json:"unifi_wan_up"`
-	UniFiGatewayReachable   bool         `json:"unifi_gateway_reachable"`
-	UniFiSiteID             string       `json:"unifi_site_id,omitempty"`
-	UniFiSiteName           string       `json:"unifi_site_name,omitempty"`
-	UniFiDeviceCount        int          `json:"unifi_device_count,omitempty"`
-	UniFiOfflineDeviceCount int          `json:"unifi_offline_device_count,omitempty"`
-	UniFiClientCount        int          `json:"unifi_client_count,omitempty"`
-	UniFiFirmwareUpdates    int          `json:"unifi_firmware_updates,omitempty"`
-	UniFiWANCount           int          `json:"unifi_wan_count,omitempty"`
-	UniFiWarnings           []string     `json:"unifi_warnings,omitempty"`
-	NASReachable            bool         `json:"nas_reachable"`
-	NASLinkSpeedMbps        int          `json:"nas_link_speed_mbps"`
-	ExpectedNASLinkMbps     int          `json:"expected_nas_link_mbps"`
-	UnraidAPIReachable      bool         `json:"unraid_api_reachable"`
-	UnraidVersion           string       `json:"unraid_version,omitempty"`
-	UnraidUptimeSeconds     int64        `json:"unraid_uptime_seconds,omitempty"`
-	UnraidCPUBrand          string       `json:"unraid_cpu_brand,omitempty"`
-	UnraidCPUCores          int          `json:"unraid_cpu_cores,omitempty"`
-	UnraidCPUThreads        int          `json:"unraid_cpu_threads,omitempty"`
-	UnraidMemoryTotalBytes  int64        `json:"unraid_memory_total_bytes,omitempty"`
-	UnraidMemoryUsedBytes   int64        `json:"unraid_memory_used_bytes,omitempty"`
-	UnraidMemoryUsedPct     float64      `json:"unraid_memory_used_pct,omitempty"`
-	UnraidNotificationCount int          `json:"unraid_notification_count,omitempty"`
-	UnraidAlertCount        int          `json:"unraid_alert_count,omitempty"`
-	UnraidWarningCount      int          `json:"unraid_warning_count,omitempty"`
-	UnraidVMCount           int          `json:"unraid_vm_count,omitempty"`
-	UnraidVMRunningCount    int          `json:"unraid_vm_running_count,omitempty"`
-	UnraidVMStoppedCount    int          `json:"unraid_vm_stopped_count,omitempty"`
-	UnraidVMNames           []string     `json:"unraid_vm_names,omitempty"`
-	UnraidShareCount        int          `json:"unraid_share_count,omitempty"`
-	UnraidShareNames        []string     `json:"unraid_share_names,omitempty"`
-	UnraidArrayState        string       `json:"unraid_array_state"`
-	UnraidArrayHealthy      bool         `json:"unraid_array_healthy"`
-	ArrayDiskCount          int          `json:"array_disk_count,omitempty"`
-	ArrayDiskWarningCount   int          `json:"array_disk_warning_count,omitempty"`
-	ArrayCapacityTotalBytes int64        `json:"array_capacity_total_bytes,omitempty"`
-	ArrayCapacityUsedBytes  int64        `json:"array_capacity_used_bytes,omitempty"`
-	ArrayCapacityFreeBytes  int64        `json:"array_capacity_free_bytes,omitempty"`
-	ArrayCapacityUsedPct    float64      `json:"array_capacity_used_pct,omitempty"`
-	DockerServiceAvailable  bool         `json:"docker_service_available"`
-	DockerNetworkCount      int          `json:"docker_network_count,omitempty"`
-	DockerNetworkNames      []string     `json:"docker_network_names,omitempty"`
+	InternetReachable       bool     `json:"internet_reachable"`
+	DNSOK                   bool     `json:"dns_ok"`
+	RouterReachable         bool     `json:"router_reachable"`
+	UniFiWANUp              bool     `json:"unifi_wan_up"`
+	UniFiGatewayReachable   bool     `json:"unifi_gateway_reachable"`
+	UniFiSiteID             string   `json:"unifi_site_id,omitempty"`
+	UniFiSiteName           string   `json:"unifi_site_name,omitempty"`
+	UniFiDeviceCount        int      `json:"unifi_device_count,omitempty"`
+	UniFiOfflineDeviceCount int      `json:"unifi_offline_device_count,omitempty"`
+	UniFiClientCount        int      `json:"unifi_client_count,omitempty"`
+	UniFiFirmwareUpdates    int      `json:"unifi_firmware_updates,omitempty"`
+	UniFiWANCount           int      `json:"unifi_wan_count,omitempty"`
+	UniFiWarnings           []string `json:"unifi_warnings,omitempty"`
+	NASReachable            bool     `json:"nas_reachable"`
+	NASLinkSpeedMbps        int      `json:"nas_link_speed_mbps"`
+	ExpectedNASLinkMbps     int      `json:"expected_nas_link_mbps"`
+	UnraidAPIReachable      bool     `json:"unraid_api_reachable"`
+	UnraidVersion           string   `json:"unraid_version,omitempty"`
+	UnraidUptimeSeconds     int64    `json:"unraid_uptime_seconds,omitempty"`
+	UnraidCPUBrand          string   `json:"unraid_cpu_brand,omitempty"`
+	UnraidCPUCores          int      `json:"unraid_cpu_cores,omitempty"`
+	UnraidCPUThreads        int      `json:"unraid_cpu_threads,omitempty"`
+	UnraidMemoryTotalBytes  int64    `json:"unraid_memory_total_bytes,omitempty"`
+	UnraidMemoryUsedBytes   int64    `json:"unraid_memory_used_bytes,omitempty"`
+	UnraidMemoryUsedPct     float64  `json:"unraid_memory_used_pct,omitempty"`
+	UnraidNotificationCount int      `json:"unraid_notification_count,omitempty"`
+	UnraidAlertCount        int      `json:"unraid_alert_count,omitempty"`
+	UnraidWarningCount      int      `json:"unraid_warning_count,omitempty"`
+	UnraidVMCount           int      `json:"unraid_vm_count,omitempty"`
+	UnraidVMRunningCount    int      `json:"unraid_vm_running_count,omitempty"`
+	UnraidVMStoppedCount    int      `json:"unraid_vm_stopped_count,omitempty"`
+	UnraidVMNames           []string `json:"unraid_vm_names,omitempty"`
+	UnraidShareCount        int      `json:"unraid_share_count,omitempty"`
+	UnraidShareNames        []string `json:"unraid_share_names,omitempty"`
+	UnraidArrayState        string   `json:"unraid_array_state"`
+	UnraidArrayHealthy      bool     `json:"unraid_array_healthy"`
+	ArrayDiskCount          int      `json:"array_disk_count,omitempty"`
+	ArrayDiskWarningCount   int      `json:"array_disk_warning_count,omitempty"`
+	ArrayCapacityTotalBytes int64    `json:"array_capacity_total_bytes,omitempty"`
+	ArrayCapacityUsedBytes  int64    `json:"array_capacity_used_bytes,omitempty"`
+	ArrayCapacityFreeBytes  int64    `json:"array_capacity_free_bytes,omitempty"`
+	ArrayCapacityUsedPct    float64  `json:"array_capacity_used_pct,omitempty"`
+	DockerServiceAvailable  bool     `json:"docker_service_available"`
+	DockerNetworkCount      int      `json:"docker_network_count,omitempty"`
+	DockerNetworkNames      []string `json:"docker_network_names,omitempty"`
 	// Per-probe timing. Reachability alone cannot answer "the internet is slow",
 	// which is the most common real complaint on a home server; latency plus a
 	// baseline can. Baseline/SampleCount/FailureRate are filled by the server
 	// from its rolling window, not by the probe adapter.
-	ProbeLatencies          []ProbeLatency `json:"probe_latencies,omitempty"`
-	StorageWarnings         []string     `json:"storage_warnings,omitempty"`
-	ParityCheckState        string       `json:"parity_check_state,omitempty"`
-	LastCheckedAt           time.Time    `json:"last_checked_at"`
-	SourceHealth            SourceHealth `json:"source_health"`
+	ProbeLatencies   []ProbeLatency `json:"probe_latencies,omitempty"`
+	StorageWarnings  []string       `json:"storage_warnings,omitempty"`
+	ParityCheckState string         `json:"parity_check_state,omitempty"`
+	LastCheckedAt    time.Time      `json:"last_checked_at"`
+	SourceHealth     SourceHealth   `json:"source_health"`
 }
 
 type ProbeLatency struct {
@@ -246,8 +246,8 @@ type ProbeLatency struct {
 	// Median latency over the server's recent window, and how many samples it
 	// is drawn from. Zero means "not enough history yet" — a rule must not fire
 	// against a baseline it does not have.
-	BaselineMS  int64   `json:"baseline_ms,omitempty"`
-	SampleCount int     `json:"sample_count,omitempty"`
+	BaselineMS  int64 `json:"baseline_ms,omitempty"`
+	SampleCount int   `json:"sample_count,omitempty"`
 	// Fraction of recent polls where this probe failed, 0..1. Named for what it
 	// measures: these are probe failures across polls, not ICMP packet loss.
 	FailureRate float64 `json:"failure_rate,omitempty"`

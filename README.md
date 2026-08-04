@@ -86,7 +86,7 @@ without prompting), `-SetupAuth` (force bootstrap admin prompt), `-InstallDir <p
 Requires Go 1.25 or newer:
 
 ```powershell
-& 'C:\Program Files\Go\bin\go.exe' test ./...
+.\scripts\check.ps1
 & 'C:\Program Files\Go\bin\go.exe' build -o dist\noobboard.exe .\cmd\dashboard
 .\dist\noobboard.exe serve
 ```
@@ -165,12 +165,28 @@ $env:NOOBBOARD_FIXTURE_SCENARIO = 'single_container_exited'
 
 Fixtures live under `fixtures/incidents`.
 
+## Development checks
+
+One command runs every gate the project enforces — build, `go vet`, `gofmt`,
+`golangci-lint`, the full test suite, and a conflict-marker scan:
+
+```powershell
+.\scripts\check.ps1
+```
+
+Add `-Visual` for the browser regression harness after any UI change, `-Fix` to
+rewrite formatting instead of reporting it, and `-SkipLint` if golangci-lint is not
+installed. CI runs the same steps plus `go test -race` on Linux and a Windows build.
+
+`CONTRIBUTING.md` covers the standards behind these gates. `docs/architecture.md` is
+the map of the code.
+
 ## Visual QA
 
 Run the visual check before and after UI changes:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\visual-check.ps1
+.\scripts\check.ps1 -Visual
 ```
 
 The check starts an isolated fixture-backed dashboard, signs in with the development admin
@@ -232,22 +248,27 @@ reverse-proxy hardening checklist.
 ## Project Layout
 
 ```text
-install.ps1         Dependency check + build + service install
-cmd/dashboard       CLI entrypoint and server startup
-cmd/visualcheck     Local screenshot/DOM regression harness
-internal/adapters   Unraid, Docker, UniFi, probes, and fixtures
-internal/server     HTTP routing, auth, settings, and static app serving
+install.ps1          Dependency check + build + service install
+scripts/check.ps1    Every gate in one command
+cmd/dashboard        CLI entrypoint and server startup
+cmd/visualcheck      Local screenshot/DOM regression harness
+internal/adapters    Unraid, Docker, UniFi, probes, and fixtures
+internal/server      HTTP routing, auth, settings, and static app serving
 internal/diagnostics Incident and status rules
-web/public          Embedded PWA frontend
-docs                Architecture, API config, deployment, and security notes
-AGENTS.md           Orientation + don't-regress guardrails for contributors/agents
+web/public           Embedded PWA frontend (rebuild after editing)
+docs                 Architecture, API config, deployment, and security notes
+AGENTS.md            Orientation + don't-regress guardrails
+CONTRIBUTING.md      Workflow, standards, and how to change an invariant
+docs/architecture.md Package map, dependency direction, invariants
 docs/agent-roadmap.md  Planned workstreams and design notes
 ```
 
 ## Contributing / Roadmap
 
 Read `AGENTS.md` first for the app's purpose and the invariants that keep the two surfaces
-safe. Planned work and design decisions live in `docs/agent-roadmap.md`.
+safe, then `CONTRIBUTING.md` for the workflow and the standards the checks enforce.
+`docs/architecture.md` maps the packages and the dependency direction between them.
+Planned work and design decisions live in `docs/agent-roadmap.md`.
 
 ## License
 

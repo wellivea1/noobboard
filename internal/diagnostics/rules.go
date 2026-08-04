@@ -72,7 +72,7 @@ func normalizeApps(apps []models.AppStatus, now time.Time) []models.AppStatus {
 }
 
 func normalizedAppStatus(app models.AppStatus) models.CurrentStatus {
-	if app.VisibleToGeneralUsers == false && app.CurrentStatus == models.StatusHidden {
+	if !app.VisibleToGeneralUsers && app.CurrentStatus == models.StatusHidden {
 		return models.StatusHidden
 	}
 	if app.DockerState == models.DockerExited {

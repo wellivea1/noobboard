@@ -1,6 +1,7 @@
 package db
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -170,13 +171,13 @@ func TestPersistentSessionsPersistDeleteAndPrune(t *testing.T) {
 	if err := reopened.PrunePersistentSessions(now, 10); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := reopened.PersistentSessionByTokenHash("token-expired"); err != ErrNotFound {
+	if _, err := reopened.PersistentSessionByTokenHash("token-expired"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expired session lookup err = %v", err)
 	}
 	if err := reopened.DeletePersistentSession("token-active"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := reopened.PersistentSessionByTokenHash("token-active"); err != ErrNotFound {
+	if _, err := reopened.PersistentSessionByTokenHash("token-active"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("deleted session lookup err = %v", err)
 	}
 }

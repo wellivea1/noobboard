@@ -45,7 +45,7 @@ func HistoryPathForDatabase(databasePath string) string {
 }
 
 func OpenFileHistoryStore(path string, maxPerSubject int) (*FileHistoryStore, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return nil, err
 	}
 	store := &FileHistoryStore{path: path, maxPerSubject: maxPerSubject}
@@ -69,7 +69,7 @@ func (s *FileHistoryStore) load() error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	var events []models.StatusEvent
 	scanner := bufio.NewScanner(file)
 	buf := make([]byte, 0, 64*1024)

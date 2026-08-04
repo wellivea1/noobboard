@@ -36,9 +36,9 @@ func (c FixtureClient) Status(context.Context) (models.InfrastructureStatus, err
 	return snapshot.Infrastructure, nil
 }
 
-// Fixture control is refused rather than simulated. A fixture that reported a
-// successful restart would let demo data present as a real device action, which
-// the source-honesty rule exists to prevent.
+// RestartableDevices refuses fixture control rather than simulating it. A
+// fixture that reported a successful restart would let demo data present as a
+// real device action, which the source-honesty rule exists to prevent.
 func (c FixtureClient) RestartableDevices(ctx context.Context) ([]RestartableDevice, error) {
 	snapshot, err := fixture.LoadSnapshot(c.dir, c.scenario)
 	if err != nil {

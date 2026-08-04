@@ -1356,15 +1356,13 @@ func TestAgentApprovalGlobalRateLimitBlocksDocker(t *testing.T) {
 	}
 	app.settingsMu.Unlock()
 	now := time.Now().UTC()
-	app.agentRepairMu.Lock()
-	app.agentRepairGlobal = []time.Time{
+	app.agentRepairs.seedGlobalForTest(
 		now.Add(-time.Minute),
-		now.Add(-2 * time.Minute),
-		now.Add(-3 * time.Minute),
-		now.Add(-4 * time.Minute),
-		now.Add(-5 * time.Minute),
-	}
-	app.agentRepairMu.Unlock()
+		now.Add(-2*time.Minute),
+		now.Add(-3*time.Minute),
+		now.Add(-4*time.Minute),
+		now.Add(-5*time.Minute),
+	)
 
 	router := app.Router()
 	cookie, csrf := loginAdmin(t, router)
@@ -2851,11 +2849,11 @@ func TestUserDiagnoseOffersLLMOnlyArrayStartWhenArrayStoppedEvenWhenNASStatusHid
 	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
 		t.Fatal(err)
 	}
-	if response.Diagnosis.RecommendedActionID != arrayStartActionID || response.Diagnosis.IncidentType != models.IncidentArrayStopped {
+	if response.RecommendedActionID != arrayStartActionID || response.IncidentType != models.IncidentArrayStopped {
 		t.Fatalf("array diagnosis was not backstopped: %#v", response.Diagnosis)
 	}
-	if !strings.Contains(response.Diagnosis.GeneralUserSummary, "Contact the admin first") || !strings.Contains(response.Diagnosis.GeneralUserSummary, "unavailable or asleep") {
-		t.Fatalf("array guidance missing admin-first/asleep copy: %q", response.Diagnosis.GeneralUserSummary)
+	if !strings.Contains(response.GeneralUserSummary, "Contact the admin first") || !strings.Contains(response.GeneralUserSummary, "unavailable or asleep") {
+		t.Fatalf("array guidance missing admin-first/asleep copy: %q", response.GeneralUserSummary)
 	}
 	if response.AgentPlan == nil || response.AgentPlan.RecommendedActionID != arrayStartActionID || response.AgentPlan.ExecutionToken == "" {
 		t.Fatalf("array start plan missing token: %#v", response.AgentPlan)

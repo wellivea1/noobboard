@@ -47,7 +47,7 @@ func MetricsPathForDatabase(databasePath string) string {
 }
 
 func OpenFileMetricStore(path string) (*FileMetricStore, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return nil, err
 	}
 	store := &FileMetricStore{path: path}
@@ -68,7 +68,7 @@ func (s *FileMetricStore) load() error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	var buckets []models.LatencyBucket
@@ -106,18 +106,28 @@ func (s *FileMetricStore) AppendLatency(buckets []models.LatencyBucket) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
 	writer := bufio.NewWriter(file)
 	for _, bucket := range buckets {
 		data, err := json.Marshal(bucket)
 		if err != nil {
+			_ = file.Close()
 			return err
 		}
 		if _, err := writer.Write(append(data, '\n')); err != nil {
+			_ = file.Close()
 			return err
 		}
 	}
 	if err := writer.Flush(); err != nil {
+		_ = file.Close()
+		return err
+	}
+	// Close before the in-memory update, and report its error. A deferred close
+	// runs after the return value is fixed, so a failure here — a full disk, a
+	// dropped network share — was reported as success while the in-memory series
+	// gained buckets the file never received. FileHistoryStore.Append already
+	// did it this way; this one did not.
+	if err := file.Close(); err != nil {
 		return err
 	}
 	s.buckets = append(s.buckets, buckets...)
@@ -200,16 +210,16 @@ func (s *FileMetricStore) rewriteLocked() error {
 	for _, bucket := range s.buckets {
 		data, err := json.Marshal(bucket)
 		if err != nil {
-			file.Close()
+			_ = file.Close()
 			return err
 		}
 		if _, err := writer.Write(append(data, '\n')); err != nil {
-			file.Close()
+			_ = file.Close()
 			return err
 		}
 	}
 	if err := writer.Flush(); err != nil {
-		file.Close()
+		_ = file.Close()
 		return err
 	}
 	if err := file.Close(); err != nil {

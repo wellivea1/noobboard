@@ -97,25 +97,25 @@ type NotificationConfig struct {
 }
 
 type LLMConfig struct {
-	Enabled                        bool                        `json:"enabled"`
-	Provider                       string                      `json:"provider"`
-	OpenAIAuthMethod               string                      `json:"openai_auth_method"`
-	OpenAIAPIKey                   string                      `json:"openai_api_key,omitempty"`
-	OpenAIModel                    string                      `json:"openai_model"`
-	ChatGPTRefreshToken            string                      `json:"chatgpt_refresh_token,omitempty"`
-	ChatGPTAccessToken             string                      `json:"chatgpt_access_token,omitempty"`
-	ChatGPTTokenExpiresAt          time.Time                   `json:"chatgpt_token_expires_at,omitempty"`
-	ChatGPTAccountID               string                      `json:"chatgpt_account_id,omitempty"`
-	AnthropicAPIKey                string                      `json:"anthropic_api_key,omitempty"`
-	AnthropicModel                 string                      `json:"anthropic_model"`
-	Timeout                        time.Duration               `json:"timeout"`
-	AgentControlEnabled            bool                        `json:"agent_control_enabled"`
-	AgentAutoRepairEnabled         bool                        `json:"agent_auto_repair_enabled"`
-	AgentArmDuration               time.Duration               `json:"agent_arm_duration"`
-	ActionAutoReviewEnabled        bool                        `json:"action_auto_review_enabled"`
-	ActionAutoReviewModel          string                      `json:"action_auto_review_model,omitempty"`
-	ActionAutoReviewReasoning      string                      `json:"action_auto_review_reasoning,omitempty"`
-	ActionAutoReviewReferencePaths []string                    `json:"action_auto_review_reference_paths,omitempty"`
+	Enabled                        bool          `json:"enabled"`
+	Provider                       string        `json:"provider"`
+	OpenAIAuthMethod               string        `json:"openai_auth_method"`
+	OpenAIAPIKey                   string        `json:"openai_api_key,omitempty"`
+	OpenAIModel                    string        `json:"openai_model"`
+	ChatGPTRefreshToken            string        `json:"chatgpt_refresh_token,omitempty"`
+	ChatGPTAccessToken             string        `json:"chatgpt_access_token,omitempty"`
+	ChatGPTTokenExpiresAt          time.Time     `json:"chatgpt_token_expires_at,omitempty"`
+	ChatGPTAccountID               string        `json:"chatgpt_account_id,omitempty"`
+	AnthropicAPIKey                string        `json:"anthropic_api_key,omitempty"`
+	AnthropicModel                 string        `json:"anthropic_model"`
+	Timeout                        time.Duration `json:"timeout"`
+	AgentControlEnabled            bool          `json:"agent_control_enabled"`
+	AgentAutoRepairEnabled         bool          `json:"agent_auto_repair_enabled"`
+	AgentArmDuration               time.Duration `json:"agent_arm_duration"`
+	ActionAutoReviewEnabled        bool          `json:"action_auto_review_enabled"`
+	ActionAutoReviewModel          string        `json:"action_auto_review_model,omitempty"`
+	ActionAutoReviewReasoning      string        `json:"action_auto_review_reasoning,omitempty"`
+	ActionAutoReviewReferencePaths []string      `json:"action_auto_review_reference_paths,omitempty"`
 	// AgentRestartSuggestionEnabled controls NoobBoard's deterministic backstop:
 	// when the model does not recommend a fix but exactly one repair-eligible app
 	// is down, offer the restart anyway. A pointer, not a bool, so an existing
@@ -266,15 +266,15 @@ func Defaults() Config {
 			Interval: 30 * time.Second,
 		},
 		Retention: RetentionConfig{
-			MaxAuditEntries:           1000,
-			MaxNotificationHistory:    1000,
-			MaxLogLinesPerSource:      200,
-			MaxIncidentAge:            30 * 24 * time.Hour,
-			MaxStatusEventAge:         90 * 24 * time.Hour,
+			MaxAuditEntries:        1000,
+			MaxNotificationHistory: 1000,
+			MaxLogLinesPerSource:   200,
+			MaxIncidentAge:         30 * 24 * time.Hour,
+			MaxStatusEventAge:      90 * 24 * time.Hour,
 			// A fortnight of 5-minute buckets is ~4k rows per probe: enough to
 			// see a weekly pattern and a bad night, small enough to load and
 			// chart without paging.
-			MaxLatencyBucketAge: 14 * 24 * time.Hour,
+			MaxLatencyBucketAge:       14 * 24 * time.Hour,
 			MaxStatusEventsPerSubject: 500,
 		},
 	}
@@ -293,7 +293,7 @@ func defaultLLMPolicies() map[string]models.LLMPolicy {
 			MaxLogLines:           80,
 			FailClosedOnRedaction: true,
 			RecipientRole:         models.RoleAdmin,
-			AgentToolsEnabled: true,
+			AgentToolsEnabled:     true,
 			// Diagnosing one failed app is now status -> logs -> history, so a
 			// budget of 2 could not complete the workflow the log and history
 			// tools exist for. Still a hard cap, and every call is read-only,
@@ -885,7 +885,7 @@ func readSecretFile(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	var values []string
 	scanner := bufio.NewScanner(file)
@@ -940,7 +940,7 @@ func applySimpleConfigFile(cfg *Config, path string) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	scanner := bufio.NewScanner(file)
 	section := ""

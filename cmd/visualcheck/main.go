@@ -255,7 +255,7 @@ func run(opts options) (visualResult, error) {
 	if err != nil {
 		return result, err
 	}
-	defer serverLog.Close()
+	defer func() { _ = serverLog.Close() }()
 
 	server := exec.Command(binary, "serve", "-config", result.Artifacts["config"])
 	server.Dir = root
@@ -294,7 +294,7 @@ func run(opts options) (visualResult, error) {
 	if err != nil {
 		return result, err
 	}
-	defer edgeLog.Close()
+	defer func() { _ = edgeLog.Close() }()
 	edge := exec.Command(edgePath,
 		"--headless=new",
 		"--disable-gpu",
@@ -1340,7 +1340,7 @@ func resolveEdgePath(requested string) (string, error) {
 	if path, err := exec.LookPath("microsoft-edge"); err == nil {
 		return path, nil
 	}
-	return "", errors.New("Microsoft Edge executable was not found")
+	return "", errors.New("microsoft edge executable was not found")
 }
 
 func fileExists(path string) bool {

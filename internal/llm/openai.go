@@ -28,11 +28,9 @@ type ProviderError struct {
 }
 
 func (e *ProviderError) Error() string {
-	prefix := e.Label
+	prefix := e.Label + " stream error"
 	if e.StatusCode > 0 {
 		prefix = fmt.Sprintf("%s returned %d", e.Label, e.StatusCode)
-	} else {
-		prefix = e.Label + " stream error"
 	}
 	if e.Message != "" {
 		return fmt.Sprintf("%s: %s", prefix, e.Message)
@@ -114,10 +112,6 @@ func (c OpenAIClient) ReviewAction(ctx context.Context, req ActionReviewRequest)
 		return ActionReviewDecision{}, err
 	}
 	return actionReviewFromResponsesBody(respData)
-}
-
-func openAIResponsesBody(model, contextText string) ([]byte, error) {
-	return openAIResponsesBodyWithInput(model, BuildPrompt(contextText), []interface{}{}, openAIResponsesOptions{})
 }
 
 func openAIActionReviewBody(model, prompt string, opts openAIResponsesOptions) ([]byte, error) {

@@ -159,6 +159,10 @@ func anthropicStopReasonError(data []byte) error {
 		} `json:"stop_details"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
+		// This only inspects a response for a refusal. A body that will not parse
+		// carries no refusal to report, and the caller's own decode reports the
+		// parse failure with better context.
+		//nolint:nilerr // absence of a refusal, not a swallowed error
 		return nil
 	}
 	switch raw.StopReason {

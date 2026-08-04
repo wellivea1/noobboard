@@ -39,7 +39,15 @@ func WithNASLinkMonitoring(clientHint string, expectedMbps int) LiveOption {
 }
 
 func NewLiveClient(baseURL, apiKey, siteID string, insecureTLS bool, opts ...LiveOption) LiveClient {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
+	// http.DefaultTransport is documented as *http.Transport, but anything in the
+	// process can replace it. A bare assertion would panic the whole daemon at
+	// construction time; falling back to a fresh transport cannot.
+	transport, ok := http.DefaultTransport.(*http.Transport)
+	if ok {
+		transport = transport.Clone()
+	} else {
+		transport = &http.Transport{}
+	}
 	if insecureTLS {
 		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	}
@@ -65,6 +73,10 @@ func (c LiveClient) Status(ctx context.Context) (models.InfrastructureStatus, er
 		return models.InfrastructureStatus{}, errors.New("unifi base URL and API key are required")
 	}
 	if err := c.get(ctx, "/proxy/network/integration/v1/info", nil); err != nil {
+		// A collector failure is a status, not an error: the dashboard reports the
+		// controller as unreachable and names the cause in SourceHealth. Returning
+		// an error here would blank the whole infrastructure panel instead.
+		//nolint:nilerr // reported through SourceHealth by design
 		return models.InfrastructureStatus{
 			UniFiWANUp:            false,
 			UniFiGatewayReachable: false,
@@ -560,15 +572,6 @@ func (c LiveClient) get(ctx context.Context, path string, out interface{}) error
 		return nil
 	}
 	return json.Unmarshal(data, out)
-}
-
-func firstString(values map[string]interface{}, keys ...string) (string, bool) {
-	for _, key := range keys {
-		if value, ok := values[key].(string); ok && value != "" {
-			return value, true
-		}
-	}
-	return "", false
 }
 
 func siteMatches(site siteOverview, configured string) bool {

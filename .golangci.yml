@@ -1,0 +1,121 @@
+version: "2"
+
+# Linters are chosen for what has actually gone wrong in this codebase, not for
+# coverage. Anything that produced mostly noise here was dropped rather than
+# suppressed file by file — a gate carrying a hundred standing exceptions stops
+# being read.
+linters:
+  default: none
+  enable:
+    # The Go team's own vet suite: printf argument mismatches, lost struct tags,
+    # unreachable code, lock copying.
+    - govet
+    # Unchecked errors. This app talks to four flaky network services, and a
+    # dropped error there becomes a confidently wrong status page.
+    - errcheck
+    # Dead code plus the wider staticcheck suite (SA/S/ST/QF).
+    - staticcheck
+    - unused
+    # Assignments that never reach a read — usually a shadowed error or a
+    # forgotten return.
+    - ineffassign
+    - wastedassign
+    # Error handling shape: wrap with %w, compare with errors.Is, do not return
+    # nil after checking a non-nil error.
+    - errorlint
+    - nilerr
+    # Long-running-daemon hazards: leaked response bodies, loop-variable capture,
+    # make([]T, n) then append.
+    - bodyclose
+    - copyloopvar
+    - makezero
+    - unconvert
+    # Security scanner. Its findings here are about file paths and crypto, both
+    # of which this app genuinely handles.
+    - gosec
+
+  # Deliberately not enabled:
+  #   noctx        — 110 findings, all httptest.NewRequest in tests and one
+  #                  loopback listener. Zero were defects. The rule is aimed at
+  #                  clients that outlive a request; nothing here does.
+  #   govet/shadow — 89 findings, every one an `if err := f(); err != nil`
+  #                  inside a function that already has an err. That is the
+  #                  idiom, which is why vet leaves shadow off by default.
+  #   govet/fieldalignment — these structs are read by people far more often
+  #                  than they are allocated.
+  #   dupl, funlen, gocognit — the HTTP handlers are intentionally flat and
+  #                  similar; collapsing them would hurt the thing being read.
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: false
+      exclude-functions:
+        # Closing an HTTP response body cannot fail in a way the caller can act
+        # on — the response is already read, and the connection is the
+        # transport's problem. Every *file* close is checked, because a failed
+        # close on a write path loses data (see FileMetricStore.AppendLatency).
+        - (io.ReadCloser).Close
+        - (io.Closer).Close
+    gosec:
+      excludes:
+        # Duplicates errcheck.
+        - G104
+        # File path from a variable. Fires on the review-reference loader, which
+        # allow-lists paths in safeActionReviewReferencePath and is tested for
+        # traversal, and on the fixture loader, which only ever reads the
+        # fixtures directory shipped with the repository.
+        - G304
+        - G703
+        # Subprocess with variable arguments. Every site is an operator-supplied
+        # value on an operator-invoked path: `sc.exe` during Windows service
+        # install/uninstall, and the configured SSH command for the Unraid
+        # fallback collector. Neither is reachable from an HTTP request.
+        - G204
+        # Cookie attributes. The session cookies do set HttpOnly and SameSite;
+        # gosec flags them because Secure is read from auth.cookie_secure rather
+        # than being a literal true. It has to be configurable: NoobBoard is
+        # normally reached over plain HTTP on a LAN, where a Secure cookie would
+        # never be sent. See docs/security.md.
+        - G124
+        # TLS verification. unifi_insecure_tls defaults to true because UniFi
+        # gateways ship self-signed certificates and the client talks to a fixed
+        # private address. It is a documented setting an operator can turn off;
+        # it is not an unconditional bypass.
+        - G402
+    staticcheck:
+      checks:
+        - all
+        # Package comments on every package. Package relationships are
+        # documented in docs/architecture.md, one level up, where they are
+        # visible together.
+        - -ST1000
+        # Initialism casing. The wire format is snake_case JSON and the Go
+        # names track it deliberately.
+        - -ST1003
+
+  exclusions:
+    generated: lax
+    rules:
+      # Test setup may ignore errors on helpers and use weak randomness.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+      # The visual-check harness is a development tool that drives a local
+      # browser over CDP. It reads files by computed path and runs an
+      # executable by design.
+      - path: cmd/visualcheck/
+        linters:
+          - gosec
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+issues:
+  # Report everything. A capped linter quietly stops finding things once the
+  # backlog grows past the cap.
+  max-issues-per-linter: 0
+  max-same-issues: 0

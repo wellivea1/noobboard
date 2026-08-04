@@ -1,0 +1,27 @@
+# Line endings.
+#
+# Without this file the working tree follows each developer's core.autocrlf.
+# On Windows that is CRLF, and gofmt only accepts LF — so `gofmt -l ./...`
+# reported every Go file in the repository as unformatted and could never be
+# used as a check. Pinning the working tree to LF makes formatting mean the
+# same thing on every machine and in CI.
+#
+# Editors on Windows handle LF fine; the two exceptions below are file types
+# that are still parsed by CRLF-only tooling.
+* text=auto eol=lf
+
+# Batch files are read by cmd.exe, which requires CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary assets: never touched, never diffed as text.
+*.png binary
+*.ico binary
+*.exe binary
+*.woff binary
+*.woff2 binary
+
+# Generated or vendored files that should not clutter a diff or a language
+# breakdown.
+go.sum -diff linguist-generated
+fixtures/** linguist-vendored
