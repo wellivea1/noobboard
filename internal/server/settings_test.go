@@ -2851,11 +2851,11 @@ func TestUserDiagnoseOffersLLMOnlyArrayStartWhenArrayStoppedEvenWhenNASStatusHid
 	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
 		t.Fatal(err)
 	}
-	if response.Diagnosis.RecommendedActionID != arrayStartActionID || response.Diagnosis.IncidentType != models.IncidentArrayStopped {
+	if response.RecommendedActionID != arrayStartActionID || response.IncidentType != models.IncidentArrayStopped {
 		t.Fatalf("array diagnosis was not backstopped: %#v", response.Diagnosis)
 	}
-	if !strings.Contains(response.Diagnosis.GeneralUserSummary, "Contact the admin first") || !strings.Contains(response.Diagnosis.GeneralUserSummary, "unavailable or asleep") {
-		t.Fatalf("array guidance missing admin-first/asleep copy: %q", response.Diagnosis.GeneralUserSummary)
+	if !strings.Contains(response.GeneralUserSummary, "Contact the admin first") || !strings.Contains(response.GeneralUserSummary, "unavailable or asleep") {
+		t.Fatalf("array guidance missing admin-first/asleep copy: %q", response.GeneralUserSummary)
 	}
 	if response.AgentPlan == nil || response.AgentPlan.RecommendedActionID != arrayStartActionID || response.AgentPlan.ExecutionToken == "" {
 		t.Fatalf("array start plan missing token: %#v", response.AgentPlan)

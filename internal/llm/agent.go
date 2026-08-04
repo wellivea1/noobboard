@@ -170,7 +170,7 @@ func agentToolsForRequest(req Request, redactor *privacy.Redactor) map[string]ag
 					Message:   app.CurrentProbeResult.Message,
 					LatencyMS: app.CurrentProbeResult.LatencyMS,
 				},
-				"exit": exitReport(app),
+				"exit":        exitReport(app),
 				"data_source": app.DataSource,
 			}, nil
 		},
@@ -249,14 +249,14 @@ func agentToolsForRequest(req Request, redactor *privacy.Redactor) map[string]ag
 					events = events[len(events)-agentHistoryCap:]
 				}
 				return map[string]interface{}{
-					"found":           true,
-					"app_id":          app.AppID,
-					"display_name":    history.DisplayName,
-					"current_status":  history.Current,
-					"uptime_pct_24h":  history.UptimePct24h,
-					"event_count":     len(events),
-					"events":          events,
-					"note":            "Repeated offline/online transitions in a short window mean a restart loop. Restarting again will not fix that; say so instead of recommending it.",
+					"found":          true,
+					"app_id":         app.AppID,
+					"display_name":   history.DisplayName,
+					"current_status": history.Current,
+					"uptime_pct_24h": history.UptimePct24h,
+					"event_count":    len(events),
+					"events":         events,
+					"note":           "Repeated offline/online transitions in a short window mean a restart loop. Restarting again will not fix that; say so instead of recommending it.",
 				}, nil
 			},
 		})

@@ -120,7 +120,7 @@ func (c UnraidLiveClient) runStopStartRestart(ctx context.Context, targetID stri
 		startCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if _, startErr := c.runContainerMutation(startCtx, "StartContainer", "start", targetID); startErr != nil {
-			return ControlResult{}, fmt.Errorf("restart stopped container but request was cancelled before start completed: %w; start recovery failed: %v", ctx.Err(), startErr)
+			return ControlResult{}, fmt.Errorf("restart stopped container but request was cancelled before start completed: %w; start recovery failed: %w", ctx.Err(), startErr)
 		}
 		return ControlResult{}, fmt.Errorf("restart stopped container but request was cancelled before start completed; start recovery was attempted: %w", ctx.Err())
 	case <-timer.C:
@@ -132,7 +132,7 @@ func (c UnraidLiveClient) runStopStartRestart(ctx context.Context, targetID stri
 		if _, recoveryErr := c.runContainerMutation(recoveryCtx, "StartContainer", "start", targetID); recoveryErr == nil {
 			return ControlResult{}, fmt.Errorf("restart stopped container but start failed in the request context; recovery start was attempted: %w", err)
 		} else {
-			return ControlResult{}, fmt.Errorf("restart stopped container and start failed; container may still be stopped: %w; recovery start failed: %v", err, recoveryErr)
+			return ControlResult{}, fmt.Errorf("restart stopped container and start failed; container may still be stopped: %w; recovery start failed: %w", err, recoveryErr)
 		}
 	}
 	return result, err

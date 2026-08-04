@@ -109,7 +109,7 @@ const (
 	// Enough events to recognise a flap; the rule only needs to know whether the
 	// count crosses a small threshold, not the exact number.
 	restartLoopQueryLimit = 20
-	agentApprovalPlanID         = "current_recommendation"
+	agentApprovalPlanID   = "current_recommendation"
 	// Rolling latency window. At the default poll interval this is roughly the
 	// last hour, which is the right span for "is it slow right now" — a
 	// week-long baseline would smooth away the outage being looked at.
@@ -131,7 +131,7 @@ const (
 
 	arrayStartActionID   = "ask_admin_to_start_array"
 	unifiRestartActionID = "ask_admin_to_restart_unifi_device"
-	arrayTargetID      = "unraid_array"
+	arrayTargetID        = "unraid_array"
 )
 
 var agentRepairVerificationDelay = 5 * time.Second
@@ -611,7 +611,7 @@ func applyAppCatalog(apps []models.AppStatus, catalog config.AppCatalogConfig) {
 func repairAutomationInfo(cfg config.Config) models.RepairAutomationInfo {
 	adminAvailable := cfg.LLM.AgentControlEnabled && cfg.LLM.ActionAutoReviewEnabled
 	userAvailable := cfg.AppCatalog.GeneralUserRestartsEnabled && cfg.AppCatalog.GeneralUserAutoRepairEnabled
-	reason := ""
+	var reason string
 	switch {
 	case adminAvailable && userAvailable:
 		reason = "Auto-fix is available where the target app is opted in."

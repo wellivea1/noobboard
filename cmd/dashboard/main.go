@@ -321,9 +321,3 @@ func (c unavailableUniFiClient) RestartDevice(context.Context, string) (unifi.De
 func (c unavailableUniFiClient) DeviceOnline(context.Context, string) (bool, error) {
 	return false, errors.New(string(c))
 }
-
-type unavailableProbeClient string
-
-func (c unavailableProbeClient) Status(context.Context) (models.InfrastructureStatus, error) {
-	return models.InfrastructureStatus{}, errors.New(string(c))
-}
