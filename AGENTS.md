@@ -56,12 +56,21 @@ These invariants are easy to break and costly to walk back. Preserve them in any
 
 ## Before you push
 
+One command runs every gate — build, vet, gofmt, lint, tests, conflict markers:
+
 ```powershell
-& 'C:\Program Files\Go\bin\go.exe' test ./...
-& 'C:\Program Files\Go\bin\go.exe' build -o dist\noobboard.exe .\cmd\dashboard
-# After any UI change, also run the visual regression check:
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\visual-check.ps1
+.\scripts\check.ps1
 ```
+
+After any change under `web/public`, add the browser regression harness:
+
+```powershell
+.\scripts\check.ps1 -Visual
+```
+
+CI (`.github/workflows/ci.yml`) runs the same steps plus `go test -race` and a
+Windows build. `CONTRIBUTING.md` covers the standards these gates enforce and
+what to do when a linter or an invariant needs to change.
 
 ## Where things live
 
@@ -73,12 +82,22 @@ internal/server      HTTP routing, auth, settings, static serving (admin + compa
 internal/diagnostics Incident and status rules
 internal/llm         OpenAI/Anthropic clients, context builder, strict-JSON schema
 internal/privacy     Redaction and visibility filtering
-internal/{users,audit,notifications,config,db,models,service}
+internal/{users,audit,notifications,config,db,models,history,service}
 web/public           Embedded PWA frontend (index.html, app.js, styles.css)
 docs/                Architecture, policies, and the agent roadmap
 fixtures/            Deterministic demo/test telemetry
 ```
 
+`internal/server` is one package split by responsibility — `auth.go`,
+`status.go`, `apps.go`, `agent_plan.go`, `agent_repair.go`, `settings.go`,
+`runtime.go`, `probes.go`, and others. Each file opens with what belongs in it.
+`docs/architecture.md` has the full map and the dependency direction between
+packages.
+
+**`web/public` is embedded** (`//go:embed`), so a CSS or JS edit needs a rebuild
+before it shows up.
+
 For roadmap, design specs, and policy detail, see `docs/agent-roadmap.md`,
 `docs/architecture.md`, `docs/security.md`, and `docs/llm-policy.md`. For anything
-visual, start with `docs/ui-standards.md`.
+visual, start with `docs/ui-standards.md`. For how to work in the repo — gates,
+comment and test standards, changing an invariant — see `CONTRIBUTING.md`.
